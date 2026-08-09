@@ -1,0 +1,31 @@
+/**
+ * Shared fixtures for the dsh-mygo suites.
+ */
+
+import z from 'schemastery'
+import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
+
+/** A valid minimal plugin manifest; overrides replace whole fields. */
+export function fixturePlugin(overrides: Partial<PluginDefinition> = {}): PluginDefinition {
+  return {
+    id: 'fixture-plugin',
+    version: '1.0.0',
+    kinds: ['fixture'],
+    requires: [],
+    provides: [],
+    permissions: {
+      observe: [],
+      transform: [],
+      intercept: [],
+      position: 'derived',
+      claims: [],
+    },
+    stateful: false,
+    swapPolicy: 'immediate',
+    config: z.object({}),
+    hooks: {
+      activate: () => {},
+    },
+    ...overrides,
+  }
+}

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/why-not-zero-day.md
+why-not-zero-day.md: f4d917c2d35cf7c03bf97cf8822718e345177782
+why-not-zero-day.zh.md: 7a9d39fb5f7a30f77361051e01c564e309beb24e
