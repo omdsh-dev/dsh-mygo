@@ -116,7 +116,7 @@ export function managedListenerOptions(meta: ManagedListenerMetadata): EventOpti
  */
 export class DispatchMachine {
   private readonly ctx: Context
-  private readonly vocabulary: ReadonlyMap<string, EventDispatchMode>
+  private readonly vocabulary: Map<string, EventDispatchMode>
   private readonly scopeKeyOf: (thisArg: unknown) => string | undefined
   private readonly cpuBudgetMs: number
   private readonly onViolation: (violation: DispatchViolation) => void
@@ -139,7 +139,7 @@ export class DispatchMachine {
    */
   constructor(ctx: Context, options: DispatchMachineOptions = {}) {
     this.ctx = ctx
-    this.vocabulary = options.vocabulary ?? new Map(EVENT_VOCABULARY.map(entry => [entry.name, entry.mode]))
+    this.vocabulary = new Map(options.vocabulary ?? EVENT_VOCABULARY.map(entry => [entry.name, entry.mode]))
     this.scopeKeyOf = options.scopeKeyOf ?? (() => undefined)
     this.cpuBudgetMs = options.cpuBudgetMs ?? 100
     this.onViolation = options.onViolation ?? ((violation) => { ctx.logger.warn(violation.message) })
@@ -202,6 +202,35 @@ export class DispatchMachine {
       this.rebuild()
     }
     return disposer
+  }
+
+  /** Whether the event is in the dispatch vocabulary (harness or declared). */
+  knows(event: string): boolean {
+    return this.vocabulary.has(event)
+  }
+
+  /**
+   * Declare one plugin-contributed custom event (emit mode) and wire its
+   * real listeners; idempotent for already-known events.
+   * @param event - custom event name (validated at mount).
+   */
+  declareEvent(event: string): void {
+    if (this.vocabulary.has(event)) return
+    this.vocabulary.set(event, 'emit')
+    this.realDisposers.push(this.loose().on(event, this.makeRealListener(event, 'outermost'), { prepend: true, global: true }))
+    this.realDisposers.push(this.loose().on(event, this.makeRealListener(event, 'middle'), { global: true }))
+  }
+
+  /**
+   * Emit one managed event through the real Cordis context so the takeover
+   * listeners walk the managed chain (plus any raw host listeners).
+   * @param event - managed event name to emit.
+   * @param args - dispatch arguments for the event.
+   */
+  emit(event: string, ...args: unknown[]): void {
+    // The cordis emit signature is keyed on the declared Events map; managed
+    // custom events are string-typed by construction, so the seam is loose.
+    ;(this.ctx as unknown as { emit(name: string, ...rest: unknown[]): void }).emit(event, ...args)
   }
 
   /**

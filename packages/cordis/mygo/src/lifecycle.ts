@@ -8,7 +8,7 @@
  * @module @deepseek-ai/dsh-mygo/src/lifecycle
  */
 
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
 import type {
   InstallOptions,
   InstallOrigin,
@@ -16,17 +16,29 @@ import type {
   PluginDefinition,
   PluginEnv,
   PluginErrorCode,
+  PluginExecRequest,
+  PluginExecResult,
   PluginHandleInfo,
+  PluginHttpRouteSpec,
+  PluginCommandDefinition,
+  PluginCommandInvocation,
+  PluginModelRequest,
+  PluginModelResponse,
   PluginSource,
+  PluginSkillDefinition,
   PluginToolExecutionContext,
   PluginToolDefinition,
   PluginPromptSection,
+  RawCordisFunctionPlugin,
 } from '@deepseek-ai/dsh-mygo-api'
 import type { Context, Events } from 'cordis'
 import {
   claimEffect,
   createPluginFs,
+  createModelCall,
   createNetworkFetch,
+  createPluginVars,
+  createExecBoundary,
   createRateLimitedLogger,
   nodePluginIo,
   type PluginEffectQuota,
@@ -47,6 +59,7 @@ import type {
   PluginManagerConfig,
   PluginOperation,
   PluginOperationPlan,
+  PluginSupportCheck,
 } from './types.ts'
 import type { PluginLifecycleEventPayload } from './types.ts'
 import type { GenerationRecord, RegistryStore, StatusRecord } from './store.ts'
@@ -76,11 +89,36 @@ type StagedRegistration =
     readonly section: PluginPromptSection
   }
   | {
+    readonly kind: 'http-route'
+    readonly pluginId: string
+    readonly scope?: string
+    readonly spec: PluginHttpRouteSpec
+  }
+  | {
+    readonly kind: 'skill'
+    readonly pluginId: string
+    readonly scope?: string
+    readonly definition: PluginSkillDefinition
+  }
+  | {
+    readonly kind: 'command'
+    readonly pluginId: string
+    readonly scope?: string
+    readonly definition: PluginCommandDefinition
+  }
+  | {
     readonly kind: 'provide'
     readonly pluginId: string
     readonly scope?: string
     readonly capability: string
     readonly value: unknown
+  }
+  | {
+    readonly kind: 'effect'
+    readonly pluginId: string
+    readonly scope?: string
+    readonly disposer: () => void
+    readonly name?: string
   }
 
 /** Shared staging phase: registrations belong to activate only (§4-1). */
@@ -92,6 +130,12 @@ interface PhaseHolder {
 class StagingEnv implements PluginEnv {
   readonly logger: Logger
   readonly fs: PluginEnv['fs']
+  readonly vars: PluginEnv['vars']
+  readonly llm: PluginEnv['llm']
+  readonly exec: PluginEnv['exec']
+  readonly http: PluginEnv['http']
+  readonly skills: PluginEnv['skills']
+  readonly commands: PluginEnv['commands']
   readonly scopedTo: string | undefined
   private readonly owner: LifecycleEngine
   private readonly pluginId: string
@@ -111,6 +155,9 @@ class StagingEnv implements PluginEnv {
     phase: PhaseHolder,
     logger: Logger,
     fs: PluginEnv['fs'],
+    vars: PluginEnv['vars'],
+    llm: PluginEnv['llm'],
+    exec: PluginEnv['exec'],
     fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
     quotas: PluginEffectQuota,
   ) {
@@ -124,6 +171,48 @@ class StagingEnv implements PluginEnv {
     this.fetchImpl = fetchImpl
     this.logger = logger
     this.fs = fs
+    this.vars = vars
+    this.llm = llm
+    this.exec = exec
+    this.http = {
+      register: (spec: PluginHttpRouteSpec): (() => void) => {
+        this.assertRegistrable('register')
+        claimEffect(this.quotas, 'service', this.pluginId)
+        this.registrations.push({
+          kind: 'http-route',
+          pluginId: this.pluginId,
+          spec,
+          ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
+        })
+        return () => {}
+      },
+    }
+    this.skills = {
+      register: (definition: PluginSkillDefinition): (() => void) => {
+        this.assertRegistrable('register')
+        claimEffect(this.quotas, 'tool', this.pluginId)
+        this.registrations.push({
+          kind: 'skill',
+          pluginId: this.pluginId,
+          definition,
+          ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
+        })
+        return () => {}
+      },
+    }
+    this.commands = {
+      register: (definition: PluginCommandDefinition): (() => void) => {
+        this.assertRegistrable('register')
+        claimEffect(this.quotas, 'service', this.pluginId)
+        this.registrations.push({
+          kind: 'command',
+          pluginId: this.pluginId,
+          definition,
+          ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
+        })
+        return () => {}
+      },
+    }
   }
 
   on(event: string, listener: (...args: unknown[]) => unknown): () => void {
@@ -144,6 +233,25 @@ class StagingEnv implements PluginEnv {
     return () => {}
   }
 
+  emit(event: string, payload?: unknown): void {
+    this.owner.emitManaged(event, payload)
+  }
+
+  effect(disposer: () => void, name?: string): void {
+    this.assertRegistrable('effect')
+    this.registrations.push({
+      kind: 'effect',
+      pluginId: this.pluginId,
+      disposer,
+      ...(name === undefined ? {} : { name }),
+      ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
+    })
+  }
+
+  get host(): unknown {
+    return this.owner.rawHost()
+  }
+
   scope(agentId: string): PluginEnv {
     return new StagingEnv(
       this.owner,
@@ -154,6 +262,9 @@ class StagingEnv implements PluginEnv {
       this.phase,
       this.logger,
       this.fs,
+      this.vars,
+      this.llm,
+      this.exec,
       this.fetchImpl,
       this.quotas,
     )
@@ -169,6 +280,14 @@ class StagingEnv implements PluginEnv {
       ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
     })
     return () => {}
+  }
+
+  getTool(name: string): PluginToolDefinition | undefined {
+    return this.owner.managedTool(name)
+  }
+
+  listTools(): readonly PluginToolDefinition[] {
+    return this.owner.managedTools()
   }
 
   registerPromptSection(section: PluginPromptSection): () => void {
@@ -207,15 +326,24 @@ class StagingEnv implements PluginEnv {
 
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- T is the caller-chosen service type at each call site.
   get<T>(capability: string): T | undefined {
-    if (!this.manifest.requires.includes(capability)) return undefined
     const provided = this.owner.provideValue(capability)
     if (provided !== undefined) return provided as T
-    if (capability === 'sessionPersistence') return this.owner.sessionPersistenceProjection() as T | undefined
+    if (capability === 'sessionPersistence') return this.owner.sessionPersistenceProjection(this.pluginId) as T | undefined
+    const host = this.owner.hostValue(capability)
+    if (host !== undefined) return host as T
     return undefined
   }
 
   plugins(): readonly PluginHandleInfo[] {
     return this.owner.plugins()
+  }
+
+  async install(source: PluginSource, options: InstallOptions = {}): Promise<PluginHandleInfo> {
+    return this.owner.install(source, { ...options, origin: options.origin ?? 'runtime-api' })
+  }
+
+  async uninstall(id: string): Promise<void> {
+    return this.owner.uninstall(id)
   }
 
   updateConfig(patch: unknown): Promise<void> {
@@ -250,6 +378,9 @@ interface EngineGeneration {
   readonly tools: Map<string, PluginToolDefinition>
   /** Prompt sections held through the prompt-service publication table. */
   readonly promptSections: Map<string, PluginPromptSection>
+  readonly httpRoutes: Map<string, PluginHttpRouteSpec>
+  readonly skills: Map<string, PluginSkillDefinition>
+  readonly commands: Map<string, PluginCommandDefinition>
   /** Whether this generation's registrations are live on the machine. */
   readonly mounted: boolean
 }
@@ -269,9 +400,14 @@ interface ManagedRecord {
 /** Recovery outcome for one persisted row (§22.4). */
 export interface RecoveryRow {
   readonly id: string
-  readonly status: 'restored' | 'shadowed' | 'quarantined' | 'gc'
+  readonly status: 'restored' | 'shadowed' | 'quarantined' | 'gc' | 'ignored'
   readonly reason?: string
   readonly errorCode?: PluginErrorCode
+}
+
+/** Tool-name tombstone: a name an uninstalled plugin used to own. */
+interface ToolTombstone {
+  readonly pluginId: string
 }
 
 /** Boot recovery summary (§22.4). */
@@ -295,6 +431,24 @@ export interface ToolRegistryLike {
 export interface PromptServiceLike {
   /** Register one prompt section; returns its disposer. */
   section(section: unknown): () => void
+}
+
+/** Structural host HTTP server seam for `env.http` route publication. */
+export interface HttpServerLike {
+  /** Register one web route; returns its disposer. */
+  register(route: unknown): () => void
+}
+
+/** Structural host skills service seam for `env.skills` publication. */
+export interface SkillServiceLike {
+  /** Register one skill provider; returns its disposer. */
+  registerProvider(create: (control: unknown) => unknown): () => void
+}
+
+/** Structural host commands service seam for `env.commands` publication. */
+export interface CommandServiceLike {
+  /** Register one slash command; returns its disposer. */
+  register(definition: unknown): () => void
 }
 
 /** Read-only session-persistence projection (Proposal B, ruling question ②). */
@@ -321,7 +475,10 @@ export interface SessionPersistenceProjection {
  * @param service - the host sessionPersistence service.
  * @returns the projection object.
  */
-export function createSessionPersistenceProjection(service: unknown): SessionPersistenceProjection {
+export function createSessionPersistenceProjection(
+  service: unknown,
+  writeAllowed = false,
+): SessionPersistenceProjection {
   const host = service as Partial<SessionPersistenceProjection>
   const denied = (method: string): () => Promise<never> => () => {
     return Promise.reject(new Error(
@@ -339,8 +496,12 @@ export function createSessionPersistenceProjection(service: unknown): SessionPer
     load: forward(host.load, () => Promise.reject(new Error('sessionPersistence.load is unavailable'))),
     readFrom: forward(host.readFrom, () => Promise.resolve([])),
     prepare: forward(host.prepare, () => Promise.resolve(undefined)),
-    create: denied('create'),
-    append: denied('append'),
+    create: writeAllowed && host.create !== undefined
+      ? (...args) => host.create!(...args)
+      : denied('create'),
+    append: writeAllowed && host.append !== undefined
+      ? (...args) => host.append!(...args)
+      : denied('append'),
   }
 }
 
@@ -384,6 +545,24 @@ export interface LifecycleEngineOptions {
   readonly promptService?: PromptServiceLike
   /** Host sessionPersistence seam for the read-only projection (Proposal B). */
   readonly sessionPersistence?: unknown
+  /** Host model-completion seam for `env.llm`; absent denies every model call. */
+  readonly llm?: (request: PluginModelRequest) => Promise<PluginModelResponse>
+  /** Host subprocess seam for `env.exec`; absent denies every command. */
+  readonly exec?: (request: PluginExecRequest) => Promise<PluginExecResult>
+  /** Host HTTP server seam for `env.http` route publication; absent keeps routes manager-held. */
+  readonly httpServer?: HttpServerLike
+  /** Host skills service seam for `env.skills` publication; absent keeps skills manager-held. */
+  readonly skillService?: SkillServiceLike
+  /** Host commands service seam for `env.commands` publication; absent keeps commands manager-held. */
+  readonly commandService?: CommandServiceLike
+  /** Host provide seam for publishing manager-held provides into `ctx`; absent keeps provides manager-held. */
+  readonly hostProvide?: (name: string, value: unknown) => () => void
+  /**
+   * Host service resolver for declared `requires` that the manager does not
+   * itself hold. Declarations are the gate: `env.get` only forwards declared
+   * capabilities, and undeclared ones stay `undefined` (SEC:86).
+   */
+  readonly hostService?: (capability: string) => unknown
   /** Sqlite/snapshot/audit persistence facade (#17); absent = in-memory engine. */
   readonly persistence?: RegistryPersistence
   /** Clock for provenance timestamps and bounded waits. */
@@ -416,8 +595,16 @@ export class LifecycleEngine {
   readonly logger: Logger
   private readonly io: PluginIo
   private readonly fetchImpl: (url: string, init?: RequestInit) => Promise<Response>
+  private readonly llm: ((request: PluginModelRequest) => Promise<PluginModelResponse>) | undefined
+  private readonly exec: ((request: PluginExecRequest) => Promise<PluginExecResult>) | undefined
+  private readonly httpServerHost: HttpServerLike | undefined
+  private readonly skillServiceHost: SkillServiceLike | undefined
+  private readonly commandServiceHost: CommandServiceLike | undefined
+  private readonly hostProvideSeam: ((name: string, value: unknown) => () => void) | undefined
+  private readonly hostService: ((capability: string) => unknown) | undefined
   private readonly toolRegistry: ToolRegistryLike | undefined
   private readonly promptService: PromptServiceLike | undefined
+  private readonly toolTombstones = new Map<string, ToolTombstone>()
   private readonly sessionPersistence: unknown
   private readonly persistence: RegistryPersistence | undefined
   private readonly now: () => number
@@ -430,6 +617,14 @@ export class LifecycleEngine {
   private readonly toolRegistryDisposers = new Map<string, () => void>()
   private readonly promptSectionTable = new Map<string, { readonly pluginId: string; section: PluginPromptSection }>()
   private readonly promptSectionDisposers = new Map<string, () => void>()
+  private readonly httpRouteIndirections = new Map<string, { readonly pluginId: string; readonly spec: PluginHttpRouteSpec }>()
+  private readonly httpRouteDisposers = new Map<string, () => void>()
+  private readonly skillIndirections = new Map<string, { readonly pluginId: string; readonly definition: PluginSkillDefinition }>()
+  private readonly skillProviderDisposers = new Map<string, () => void>()
+  private readonly commandIndirections = new Map<string, { readonly pluginId: string; readonly definition: PluginCommandDefinition }>()
+  private readonly commandDisposers = new Map<string, () => void>()
+  private readonly hostProvideDisposers = new Map<string, () => void>()
+  private readonly hostProvideValues = new Map<string, unknown>()
   private readonly idleDisposers = new Map<string, () => void>()
   private readonly neutral = new Map<string, boolean>()
   private readonly logLimiters = new Map<string, Logger>()
@@ -454,6 +649,13 @@ export class LifecycleEngine {
     this.logger = options.logger ?? { error: () => {}, info: () => {}, warn: () => {}, debug: () => {} }
     this.io = options.io ?? nodePluginIo
     this.fetchImpl = options.fetchImpl ?? ((url, init) => globalThis.fetch(url, init))
+    this.llm = options.llm
+    this.exec = options.exec
+    this.httpServerHost = options.httpServer
+    this.skillServiceHost = options.skillService
+    this.commandServiceHost = options.commandService
+    this.hostProvideSeam = options.hostProvide
+    this.hostService = options.hostService
     this.toolRegistry = options.toolRegistry ?? (this.ctx.get('tools') as ToolRegistryLike | undefined)
     this.promptService = options.promptService ?? (this.ctx.get('systemPrompt') as PromptServiceLike | undefined)
     this.sessionPersistence = options.sessionPersistence ?? this.ctx.get('sessionPersistence')
@@ -502,6 +704,27 @@ export class LifecycleEngine {
    */
   async adoptStatic(definition: PluginDefinition, config: unknown): Promise<PluginHandleInfo> {
     this.validate(definition, 'static', { type: 'static' })
+    // A persisted uninstall tombstone keeps a static bundle row from being
+    // re-adopted on every boot until the operator clears it.
+    const tombstone = await this.store.readStatus(definition.id)
+    if (tombstone !== undefined && tombstone.status === 'uninstalled') {
+      this.logger.warn(`static plugin ${definition.id} skipped: uninstalled tombstone`)
+      for (const tool of tombstone.tools ?? []) {
+        this.toolTombstones.set(tool, { pluginId: definition.id })
+      }
+      return {
+        id: definition.id,
+        version: definition.version,
+        generation: 0,
+        origin: 'static',
+        status: 'uninstalled',
+        kinds: definition.kinds,
+        requires: definition.requires,
+        provides: definition.provides,
+        orderNeutral: true,
+        source: { type: 'static' },
+      }
+    }
     const existing = this.records.get(definition.id)
     if (existing !== undefined && existing.origin !== 'static') {
       existing.status = 'shadowed'
@@ -515,6 +738,10 @@ export class LifecycleEngine {
     this.replaceTables(definition.id, existing?.generations.at(-1) ?? null, generation)
     this.syncToolPublishState()
     this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
     if (existing !== undefined) {
       for (const old of existing.generations) {
         this.disposeGeneration(old)
@@ -536,6 +763,76 @@ export class LifecycleEngine {
   }
 
   /**
+   * Adopt a raw Cordis plugin (zero-intrusion surface): the manifest is
+   * auto-derived from the plugin's `name`/`inject`/`Config`/`apply` shape and
+   * the generation runs through the host-shaped transparent facade, so a
+   * stock dsh-external plugin mounts without any managed-plugin code.
+   * @param raw - the raw cordis plugin module (name/inject/Config/apply).
+   * @param config - deployment config validated against the raw Config schema.
+   * @param id - optional manager-side plugin id; defaults to the derived id.
+   * @returns the static plugin handle.
+   */
+  async adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo> {
+    const derived = fromCordisPlugin(raw)
+    const definition = id === undefined || id === derived.id
+      ? derived
+      : { ...derived, id }
+    return this.adoptStatic(definition, config)
+  }
+
+  /**
+   * Live-update an adopted raw plugin: derive the new manifest and run the
+   * HMR replace protocol so the running generation swaps without restarting
+   * the host or dropping sessions (capture → stage → swap → dispose).
+   * @param raw - the new raw Cordis plugin module.
+   * @param config - deployment config for the new generation.
+   * @param id - the existing manager-side plugin id (required).
+   * @returns the updated plugin handle.
+   */
+  async updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo> {
+    const derived = fromCordisPlugin(raw)
+    const definition = id === undefined || id === derived.id ? derived : { ...derived, id }
+    return this.withLock(id, 'replace', async () => {
+      this.requireRecord(id, 'replace')
+      return this.replaceWithDefinition(id, { type: 'static' }, definition, false, config)
+    })
+  }
+
+  /**
+   * Pre-mount support check: derive the managed manifest and verify every
+   * declared `requires` is satisfiable (manager-held surface, an existing
+   * provide, or a live host service). Pure — no records, tables, or routes
+   * are touched, so callers can gate mounting without side effects.
+   * @param raw - the raw Cordis plugin module.
+   * @param id - optional manager-side plugin id; defaults to the derived id.
+   * @returns `{ ok: true }` or `{ ok: false, reason }`.
+   */
+  async checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck> {
+    if (typeof raw !== 'function' && typeof (raw as { apply?: unknown }).apply !== 'function') {
+      return { ok: false, reason: '插件入口不是函数 / apply 对象 / 类构造器' }
+    }
+    let derived: PluginDefinition
+    try {
+      derived = fromCordisPlugin(raw)
+    } catch (error) {
+      return { ok: false, reason: `插件入口形状不合法：${error instanceof Error ? error.message : String(error)}` }
+    }
+    const definition = id === undefined || id === derived.id ? derived : { ...derived, id }
+    const managerHeld = new Set(['tools', 'systemPrompt', 'httpServer', 'skills', 'commands', 'sessionPersistence'])
+    const missing: string[] = []
+    for (const capability of definition.requires) {
+      if (managerHeld.has(capability)) continue
+      if (this.provideValue(capability) !== undefined) continue
+      if (this.hostValue(capability) !== undefined) continue
+      missing.push(capability)
+    }
+    if (missing.length > 0) {
+      return { ok: false, reason: `宿主缺少服务：${missing.join(', ')}` }
+    }
+    return { ok: true }
+  }
+
+  /**
    * Uninstall: idempotent for unknown ids; persist first (T3 rule 2).
    * @param id - plugin id to remove.
    */
@@ -547,10 +844,37 @@ export class LifecycleEngine {
       if (dependents.length > 0) throw fail('dependent-exists', { dependents }, id)
       const plan = planOperation({ op: 'uninstall', id }, this.planState())
       const displaced = plan.displaced
-      try {
-        await this.store.deletePlugin(id)
-      } catch (error) {
-        throw fail('persist-failed', { operation: 'uninstall', table: 'status' }, id, error)
+      // Static rows are never persisted as generations; persist the uninstall
+      // as a tombstone so the bundle row stays uninstalled across restarts.
+      if (record.origin === 'static') {
+        try {
+          const tombstone: StatusRecord = {
+            v: 1,
+            currentGen: 0,
+            previousGen: null,
+            status: 'uninstalled',
+            provenance: { origin: 'static', mountedAt: this.now() },
+          }
+          const tools = record.generations.at(-1)?.registrations
+            .filter((registration): registration is Extract<StagedRegistration, { readonly kind: 'tool' }> => registration.kind === 'tool')
+            .map(registration => registration.definition.name)
+          if (tools !== undefined && tools.length > 0) tombstone.tools = tools
+          await this.store.writeStatus(id, tombstone)
+        } catch (error) {
+          throw fail('persist-failed', { operation: 'uninstall', table: 'status' }, id, error)
+        }
+      }
+      for (const registration of record.generations.at(-1)?.registrations ?? []) {
+        if (registration.kind === 'tool') {
+          this.toolTombstones.set(registration.definition.name, { pluginId: id })
+        }
+      }
+      if (record.origin !== 'static') {
+        try {
+          await this.store.deletePlugin(id)
+        } catch (error) {
+          throw fail('persist-failed', { operation: 'uninstall', table: 'status' }, id, error)
+        }
       }
       try {
         await this.persistence?.snapshots.deleteAll(id)
@@ -585,12 +909,14 @@ export class LifecycleEngine {
       record.status = 'enabled'
       delete record.reason
       this.refreshOrders()
-      try {
-        await this.store.writeStatus(id, this.statusRecord(record))
-      } catch (error) {
-        record.status = 'disabled'
-        this.refreshOrders()
-        throw fail('persist-failed', { operation: 'enable', table: 'status' }, id, error)
+      if (record.origin !== 'static') {
+        try {
+          await this.store.writeStatus(id, this.statusRecord(record))
+        } catch (error) {
+          record.status = 'disabled'
+          this.refreshOrders()
+          throw fail('persist-failed', { operation: 'enable', table: 'status' }, id, error)
+        }
       }
       this.emit('plugin/enabled', this.eventPayload(id, this.manifestOf(record), this.generationNumber(record)))
     })
@@ -614,6 +940,9 @@ export class LifecycleEngine {
     this.applyRegistrations(staged)
     this.updateProvideTable(staged, record.id)
     this.updateToolTable(staged, record.id)
+    this.updateHttpRouteTable(staged, record.id)
+    this.updateSkillTable(staged, record.id)
+    this.updateCommandTable(staged, record.id)
     record.generations.push(staged)
     record.status = 'enabled'
     delete record.reason
@@ -654,13 +983,17 @@ export class LifecycleEngine {
       const record = this.requireRecord(id, 'disable')
       if (record.status === 'disabled') return
       if (record.status === 'shadowed') return
-      try {
-        await this.store.writeStatus(id, {
-          ...this.statusRecord(record, reason),
-          status: 'disabled',
-        })
-      } catch (error) {
-        throw fail('persist-failed', { operation: 'disable', table: 'status' }, id, error)
+      // Delete-class persist first for dynamic rows; static records never
+      // write a phantom status row into the registry.
+      if (record.origin !== 'static') {
+        try {
+          await this.store.writeStatus(id, {
+            ...this.statusRecord(record, reason),
+            status: 'disabled',
+          })
+        } catch (error) {
+          throw fail('persist-failed', { operation: 'disable', table: 'status' }, id, error)
+        }
       }
       record.status = 'disabled'
       if (reason === undefined) delete record.reason
@@ -799,6 +1132,16 @@ export class LifecycleEngine {
         rows.push({ id, status: 'gc', reason: 'orphan' })
         continue
       }
+      if (status.status === 'uninstalled') {
+        // Keep the tombstone row: it is the durable record that a bundle row
+        // stays uninstalled, and it carries the tool names for friendly
+        // unknown-tool attribution.
+        for (const tool of status.tools ?? []) {
+          this.toolTombstones.set(tool, { pluginId: id })
+        }
+        rows.push({ id, status: 'ignored', reason: 'uninstalled-tombstone' })
+        continue
+      }
       if (this.staticIds.has(id)) {
         await this.store.writeStatus(id, { ...status, status: 'shadowed', reason: 'shadowed' })
         await this.auditRecovery('shadow', id, 'shadowed')
@@ -908,6 +1251,9 @@ export class LifecycleEngine {
             provides: new Map(),
             tools: new Map(),
             promptSections: new Map(),
+            httpRoutes: new Map(),
+            skills: new Map(),
+            commands: new Map(),
             mounted: false,
           }]
           : []
@@ -990,6 +1336,15 @@ export class LifecycleEngine {
     this.toolRegistryDisposers.clear()
     for (const disposer of this.promptSectionDisposers.values()) disposer()
     this.promptSectionDisposers.clear()
+    for (const disposer of this.httpRouteDisposers.values()) disposer()
+    this.httpRouteDisposers.clear()
+    for (const disposer of this.skillProviderDisposers.values()) disposer()
+    this.skillProviderDisposers.clear()
+    for (const disposer of this.commandDisposers.values()) disposer()
+    this.commandDisposers.clear()
+    for (const disposer of this.hostProvideDisposers.values()) disposer()
+    this.hostProvideDisposers.clear()
+    this.hostProvideValues.clear()
     for (const record of this.records.values()) {
       for (const generation of record.generations) {
         for (const disposer of generation.disposers) disposer()
@@ -1013,13 +1368,35 @@ export class LifecycleEngine {
   }
 
   /**
-   * Read-only sessionPersistence projection, or `undefined` without the host seam (Proposal B).
+   * Write-enabled sessionPersistence projection, or `undefined` without the
+   * host seam (Proposal B).
    * @returns the manager-curated projection, or `undefined` when no seam exists.
    */
-  sessionPersistenceProjection(): SessionPersistenceProjection | undefined {
-    return this.sessionPersistence === undefined
-      ? undefined
-      : createSessionPersistenceProjection(this.sessionPersistence)
+  sessionPersistenceProjection(_pluginId: string): SessionPersistenceProjection | undefined {
+    if (this.sessionPersistence === undefined) return undefined
+    return createSessionPersistenceProjection(this.sessionPersistence, true)
+  }
+
+  /** Resolve one declared capability from the host when the manager does not hold it. */
+  hostValue(capability: string): unknown {
+    return this.hostService?.(capability)
+  }
+
+  /** Raw host context escape hatch for the zero-intrusion facade. */
+  rawHost(): unknown {
+    return this.ctx
+  }
+
+  /**
+   * Emit one plugin-declared custom event through the dispatch machine,
+   * materializing the event in the vocabulary when it first appears (exact
+   * declarations or `namespace/*` pattern members are both manifest-gated).
+   * @param event - custom event name to emit.
+   * @param payload - optional event payload.
+   */
+  emitManaged(event: string, payload?: unknown): void {
+    if (!this.dispatch.knows(event)) this.dispatch.declareEvent(event)
+    this.dispatch.emit(event, payload)
   }
 
   /** One rate-limited logger per plugin id (SEC:71), shared across generations. */
@@ -1051,19 +1428,10 @@ export class LifecycleEngine {
   }
 
   private validate(definition: PluginDefinition, origin: 'static' | InstallOrigin, source: PluginSource | { readonly type: 'static' }): void {
-    const ceiling = origin === 'model'
-      ? 'transform'
-      : origin === 'static'
-        ? 'claims'
-        : this.config.maxRuntimeApiPermissionLevel
     validateMount(definition, {
       source,
       origin,
-      channelCeiling: ceiling,
-      ...(this.config.grants?.[definition.id] === undefined ? {} : { grants: this.config.grants[definition.id] }),
       ...(this.config.protectedFields === undefined ? {} : { protectedFields: this.config.protectedFields }),
-      ...(this.config.development === undefined ? {} : { development: this.config.development }),
-      ...(this.config.trustedScopes === undefined ? {} : { trustedScopes: this.config.trustedScopes }),
       vocabulary: this.eventVocabulary,
     })
   }
@@ -1159,10 +1527,12 @@ export class LifecycleEngine {
     const registrations: StagedRegistration[] = []
     const phase: PhaseHolder = { phase: 'setup' }
     const quotas: PluginEffectQuota = { listeners: 0, tools: 0, services: 0 }
-    const grants = this.config.grants?.[definition.id]
     const logger = this.envLogger(definition.id)
-    const fs = createPluginFs(definition.id, grants, this.io)
-    const fetch = createNetworkFetch(definition.id, grants, this.fetchImpl)
+    const fs = createPluginFs(definition.id, this.io)
+    const vars = createPluginVars()
+    const llm = createModelCall(definition.id, this.llm)
+    const exec = createExecBoundary(definition.id, this.exec)
+    const fetch = createNetworkFetch(this.fetchImpl)
     const layers = previous === null ? ['*'] : ['*', ...this.existingScopes(definition.id)]
     const generation = this.nextGeneration
     this.nextGeneration += 1
@@ -1177,6 +1547,9 @@ export class LifecycleEngine {
           phase,
           logger,
           fs,
+          vars,
+          llm,
+          exec,
           fetch,
           quotas,
         )
@@ -1207,6 +1580,9 @@ export class LifecycleEngine {
       provides: new Map(),
       tools: new Map(),
       promptSections: new Map(),
+      httpRoutes: new Map(),
+      skills: new Map(),
+      commands: new Map(),
       mounted: true,
     }
   }
@@ -1241,9 +1617,16 @@ export class LifecycleEngine {
     this.applyRegistrations(generation)
     this.updateProvideTable(generation, id)
     this.updateToolTable(generation, id)
+    this.updateHttpRouteTable(generation, id)
+    this.updateSkillTable(generation, id)
+    this.updateCommandTable(generation, id)
     this.updatePromptSectionTable(generation, id)
     this.syncToolPublishState()
     this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
     this.records.set(id, {
       id,
       origin,
@@ -1354,6 +1737,10 @@ export class LifecycleEngine {
     this.replaceTables(id, incumbent ?? null, generation)
     this.syncToolPublishState()
     this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
     record.generations.push(generation)
     record.status = 'enabled'
     if (snapshot === undefined) delete record.snapshot
@@ -1458,8 +1845,21 @@ export class LifecycleEngine {
     for (const [name, entry] of this.promptSectionTable) {
       if (entry.pluginId === record.id) this.promptSectionTable.delete(name)
     }
+    for (const [key, entry] of this.httpRouteIndirections) {
+      if (entry.pluginId === record.id) this.httpRouteIndirections.delete(key)
+    }
+    for (const [name, entry] of this.skillIndirections) {
+      if (entry.pluginId === record.id) this.skillIndirections.delete(name)
+    }
+    for (const [name, entry] of this.commandIndirections) {
+      if (entry.pluginId === record.id) this.commandIndirections.delete(name)
+    }
     this.syncToolPublishState()
     this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
     this.idleDisposers.get(record.id)?.()
     this.idleDisposers.delete(record.id)
   }
@@ -1467,11 +1867,37 @@ export class LifecycleEngine {
   private disposeGeneration(generation: EngineGeneration): void {
     for (const disposer of generation.disposers) disposer()
     generation.disposers.length = 0
+    // Lifecycle sovereignty: the author hooks release resources the
+    // registrations do not own. Both are best-effort (async results are
+    // contained; failures only warn) so disposal never blocks the engine.
+    try {
+      const deactivated = generation.manifest.hooks.deactivate?.('shutdown')
+      if (deactivated !== undefined && typeof (deactivated as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(deactivated).catch((error: unknown) => {
+          this.logger.warn(`plugin ${generation.manifest.id} deactivate hook failed: ${String(error)}`)
+        })
+      }
+    } catch (error) {
+      this.logger.warn(`plugin ${generation.manifest.id} deactivate hook failed: ${String(error)}`)
+    }
+    try {
+      const disposed = generation.manifest.hooks.dispose?.()
+      if (disposed !== undefined && typeof (disposed as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(disposed).catch((error: unknown) => {
+          this.logger.warn(`plugin ${generation.manifest.id} dispose hook failed: ${String(error)}`)
+        })
+      }
+    } catch (error) {
+      this.logger.warn(`plugin ${generation.manifest.id} dispose hook failed: ${String(error)}`)
+    }
   }
 
   private applyRegistrations(generation: EngineGeneration): void {
     for (const registration of generation.registrations) {
       if (registration.kind === 'listener') {
+        if (!this.dispatch.knows(registration.event)) {
+          this.dispatch.declareEvent(registration.event)
+        }
         const disposer = this.dispatch.register(registration.event, {
           pluginId: registration.pluginId,
           mode: registration.mode,
@@ -1485,6 +1911,36 @@ export class LifecycleEngine {
         generation.provides.set(registration.capability, registration.value)
       } else if (registration.kind === 'prompt-section') {
         generation.promptSections.set(registration.section.name, registration.section)
+      } else if (registration.kind === 'http-route') {
+        const key = `${registration.spec.method}:${registration.spec.path}`
+        const existing = this.httpRouteIndirections.get(key)
+        if (existing !== undefined && existing.pluginId !== registration.pluginId) {
+          throw fail('staging-failed', {
+            stage: 'http-route',
+            cause: `http route ${key} is already registered by plugin ${existing.pluginId}`,
+          }, registration.pluginId)
+        }
+        generation.httpRoutes.set(key, registration.spec)
+      } else if (registration.kind === 'skill') {
+        const existing = this.skillIndirections.get(registration.definition.name)
+        if (existing !== undefined && existing.pluginId !== registration.pluginId) {
+          throw fail('staging-failed', {
+            stage: 'skill',
+            cause: `skill ${registration.definition.name} is already registered by plugin ${existing.pluginId}`,
+          }, registration.pluginId)
+        }
+        generation.skills.set(registration.definition.name, registration.definition)
+      } else if (registration.kind === 'command') {
+        const existing = this.commandIndirections.get(registration.definition.name)
+        if (existing !== undefined && existing.pluginId !== registration.pluginId) {
+          throw fail('staging-failed', {
+            stage: 'command',
+            cause: `command ${registration.definition.name} is already registered by plugin ${existing.pluginId}`,
+          }, registration.pluginId)
+        }
+        generation.commands.set(registration.definition.name, registration.definition)
+      } else if (registration.kind === 'effect') {
+        generation.disposers.push(registration.disposer)
       } else {
         // The registration union is closed: not a listener or provide is a tool.
         generation.tools.set(registration.definition.name, registration.definition)
@@ -1541,6 +1997,34 @@ export class LifecycleEngine {
     }
   }
 
+  /**
+   * Publish every manager-held provide into the host context. Values are
+   * re-provided only when they change identity; disposed publishes are
+   * removed with their owning record.
+   */
+  private syncProvideState(): void {
+    const seam = this.hostProvideSeam
+    if (seam === undefined) return
+    const wanted = new Set<string>()
+    for (const capability of this.provideTable.keys()) {
+      wanted.add(capability)
+    }
+    for (const [capability, disposer] of [...this.hostProvideDisposers]) {
+      if (wanted.has(capability)) continue
+      disposer()
+      this.hostProvideDisposers.delete(capability)
+      this.hostProvideValues.delete(capability)
+    }
+    for (const capability of wanted) {
+      const entry = this.provideTable.get(capability)
+      if (entry === undefined) continue
+      if (this.hostProvideDisposers.has(capability) && this.hostProvideValues.get(capability) === entry.value) continue
+      this.hostProvideDisposers.get(capability)?.()
+      this.hostProvideValues.set(capability, entry.value)
+      this.hostProvideDisposers.set(capability, seam(capability, entry.value))
+    }
+  }
+
   private updateToolTable(generation: EngineGeneration, id: string): void {
     for (const [name, definition] of generation.tools) {
       this.toolIndirections.set(name, { pluginId: id, definition })
@@ -1550,6 +2034,24 @@ export class LifecycleEngine {
   private updatePromptSectionTable(generation: EngineGeneration, id: string): void {
     for (const [name, section] of generation.promptSections) {
       this.promptSectionTable.set(name, { pluginId: id, section })
+    }
+  }
+
+  private updateHttpRouteTable(generation: EngineGeneration, id: string): void {
+    for (const [key, spec] of generation.httpRoutes) {
+      this.httpRouteIndirections.set(key, { pluginId: id, spec })
+    }
+  }
+
+  private updateSkillTable(generation: EngineGeneration, id: string): void {
+    for (const [name, definition] of generation.skills) {
+      this.skillIndirections.set(name, { pluginId: id, definition })
+    }
+  }
+
+  private updateCommandTable(generation: EngineGeneration, id: string): void {
+    for (const [name, definition] of generation.commands) {
+      this.commandIndirections.set(name, { pluginId: id, definition })
     }
   }
 
@@ -1594,6 +2096,213 @@ export class LifecycleEngine {
     for (const name of wanted) {
       if (this.promptSectionDisposers.has(name)) continue
       this.promptSectionDisposers.set(name, service.section(this.promptSectionView(name)))
+    }
+  }
+
+  /**
+   * Publish every live manager-held http route into the host httpServer
+   * service exactly once as a live view (the spec resolves through the
+   * current table entry), and dispose the published route of any key that is
+   * no longer live. Without a host server the routes stay manager-held.
+   */
+  private syncHttpRouteState(): void {
+    const host = this.httpServerHost
+    if (host === undefined) return
+    const wanted = new Set(this.httpRouteIndirections.keys())
+    for (const [key, disposer] of [...this.httpRouteDisposers]) {
+      if (wanted.has(key)) continue
+      disposer()
+      this.httpRouteDisposers.delete(key)
+    }
+    for (const key of wanted) {
+      if (this.httpRouteDisposers.has(key)) continue
+      this.httpRouteDisposers.set(key, host.register(this.httpRouteView(key)))
+    }
+  }
+
+  /** Live host-server view of one manager-held http route. */
+  private httpRouteView(key: string): unknown {
+    const current = (): PluginHttpRouteSpec => {
+      const entry = this.httpRouteIndirections.get(key)
+      if (entry === undefined) throw new Error(`managed http route ${key} is not live`)
+      return entry.spec
+    }
+    // Snapshot the registration-time shape: the host webserver's route
+    // disposer re-reads `route.path` when it runs, which happens AFTER the
+    // table entry was removed during teardown/replace. A stable snapshot
+    // keeps that disposer valid without re-resolving a gone indirection.
+    const snapshot = current()
+    return {
+      get kind(): 'exact' | 'prefix' {
+        return snapshot.kind ?? 'exact'
+      },
+      get path(): string {
+        return snapshot.path
+      },
+      handler: (req: unknown, res: unknown): void | Promise<void> => {
+        return this.dispatchHttpRoute(current(), req, res)
+      },
+    }
+  }
+
+  /** Bridge one managed route handler onto a node:http request/response pair. */
+  private async dispatchHttpRoute(spec: PluginHttpRouteSpec, req: unknown, res: unknown): Promise<void> {
+    const incoming = req as {
+      readonly method?: string
+      readonly url?: string
+      readonly headers?: Readonly<Record<string, string | string[] | undefined>>
+      on?(event: 'data', listener: (chunk: Buffer) => void): void
+      on?(event: 'end', listener: () => void): void
+    }
+    const outgoing = res as {
+      statusCode: number
+      setHeader(name: string, value: string): void
+      end(body: string | Buffer): void
+    }
+    const body = await new Promise<string>((resolve) => {
+      if (incoming.on === undefined) {
+        resolve('')
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      incoming.on('data', (chunk: Buffer) => {
+        size += chunk.length
+        if (size > 1_000_000) return
+        chunks.push(chunk)
+      })
+      incoming.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    })
+    const headers: Record<string, string> = {}
+    for (const [name, value] of Object.entries(incoming.headers ?? {})) {
+      if (typeof value === 'string') headers[name] = value
+    }
+    const managed = await spec.handler({
+      method: incoming.method ?? 'GET',
+      path: (incoming.url ?? '/').split('?')[0] ?? '/',
+      ...(incoming.url === undefined ? {} : { url: incoming.url }),
+      headers,
+      body,
+    })
+    outgoing.statusCode = managed.status
+    for (const [name, value] of Object.entries(managed.headers ?? {})) {
+      outgoing.setHeader(name, value)
+    }
+    const responseBody: string | Buffer = typeof managed.body === 'string'
+      ? managed.body
+      : managed.body === undefined
+        ? ''
+        : managed.body instanceof Uint8Array
+          ? Buffer.from(managed.body)
+          : JSON.stringify(managed.body)
+    const hasContentType = Object.keys(managed.headers ?? {}).some(name => name.toLowerCase() === 'content-type')
+    if (typeof managed.body === 'object' && managed.body !== undefined && !(managed.body instanceof Uint8Array) && !hasContentType) {
+      outgoing.setHeader('Content-Type', 'application/json')
+    }
+    outgoing.end(responseBody)
+  }
+
+  /**
+   * Publish every live manager-held skill into the host skills service as one
+   * provider per owning plugin, and dispose the provider of any plugin that
+   * no longer holds skills. Without a host service the skills stay
+   * manager-held.
+   */
+  private syncSkillState(): void {
+    const service = this.skillServiceHost
+    if (service === undefined) return
+    const owners = new Set<string>()
+    for (const entry of this.skillIndirections.values()) owners.add(entry.pluginId)
+    for (const [pluginId, disposer] of [...this.skillProviderDisposers]) {
+      if (owners.has(pluginId)) continue
+      disposer()
+      this.skillProviderDisposers.delete(pluginId)
+    }
+    for (const pluginId of owners) {
+      if (this.skillProviderDisposers.has(pluginId)) continue
+      this.skillProviderDisposers.set(pluginId, service.registerProvider(() => this.skillProviderView(pluginId)))
+    }
+  }
+
+  /** Live provider view over one plugin's manager-held skills. */
+  private skillProviderView(pluginId: string): unknown {
+    const providerName = `managed-${pluginId}`
+    return {
+      get name(): string {
+        return providerName
+      },
+      list: async () => {
+        const candidates: unknown[] = []
+        for (const [name, entry] of this.skillIndirections) {
+          if (entry.pluginId !== pluginId) continue
+          candidates.push({
+            name,
+            description: entry.definition.description,
+            ...(entry.definition.whenToUse === undefined ? {} : { whenToUse: entry.definition.whenToUse }),
+            invocation: { modelInvocable: true, userInvocable: true },
+            source: 'runtime',
+            provider: providerName,
+            rank: 0,
+            locator: name,
+          })
+        }
+        return candidates
+      },
+      get: async (candidate: { locator?: unknown }) => {
+        if (typeof candidate.locator !== 'string') return undefined
+        const entry = this.skillIndirections.get(candidate.locator)
+        if (entry === undefined || entry.pluginId !== pluginId) return undefined
+        return {
+          name: entry.definition.name,
+          description: entry.definition.description,
+          content: entry.definition.content,
+          ...(entry.definition.whenToUse === undefined ? {} : { whenToUse: entry.definition.whenToUse }),
+          invocation: { modelInvocable: true, userInvocable: true },
+          source: 'runtime',
+          provider: providerName,
+        }
+      },
+    }
+  }
+
+  /**
+   * Publish every live manager-held command into the host commands service
+   * exactly once as a live view, and dispose commands that are no longer
+   * live. Without a host service the commands stay manager-held.
+   */
+  private syncCommandState(): void {
+    const service = this.commandServiceHost
+    if (service === undefined) return
+    const wanted = new Set(this.commandIndirections.keys())
+    for (const [name, disposer] of [...this.commandDisposers]) {
+      if (wanted.has(name)) continue
+      disposer()
+      this.commandDisposers.delete(name)
+    }
+    for (const name of wanted) {
+      if (this.commandDisposers.has(name)) continue
+      this.commandDisposers.set(name, service.register(this.commandView(name)))
+    }
+  }
+
+  /** Live host-service view of one manager-held command. */
+  private commandView(name: string): unknown {
+    const current = (): PluginCommandDefinition => {
+      const entry = this.commandIndirections.get(name)
+      if (entry === undefined) throw new Error(`managed command ${name} is not live`)
+      return entry.definition
+    }
+    return {
+      get name(): string {
+        return current().name
+      },
+      get description(): string {
+        return current().description
+      },
+      get input(): { readonly hint?: string } | undefined {
+        return current().input
+      },
+      handler: (input: unknown) => current().handler(input as PluginCommandInvocation),
     }
   }
 
@@ -1645,7 +2354,53 @@ export class LifecycleEngine {
           }],
         }
       },
-      execute: (args: unknown, exec: unknown) => current().execute(args, exec as PluginToolExecutionContext),
+      execute: (args: unknown, exec: unknown) => {
+        // Disabled plugins keep their tools in the registry (so callers see
+        // the tool), but every execution is intercepted with a clear reason.
+        const entry = this.toolIndirections.get(name)
+        if (entry !== undefined) {
+          const record = this.records.get(entry.pluginId)
+          if (record !== undefined && record.status === 'disabled') {
+            throw new Error(`插件 ${entry.pluginId} 已停用，请先在设置页启用`)
+          }
+        }
+        return current().execute(args, exec as PluginToolExecutionContext)
+      },
+    }
+  }
+
+  /** Live managed tool definition for one name, or undefined when not registered. */
+  managedTool(name: string): PluginToolDefinition | undefined {
+    return this.toolIndirections.get(name)?.definition
+  }
+
+  /** Every live managed tool definition, in registration order. */
+  managedTools(): readonly PluginToolDefinition[] {
+    return [...this.toolIndirections.values()].map(entry => entry.definition)
+  }
+
+  /**
+   * Resolve one tool name against uninstall tombstones: names an uninstalled
+   * plugin used to own. Lets the host registry return a friendly
+   * "plugin removed" message instead of a bare unknown-tool failure.
+   * @param name - tool name the host registry could not find.
+   * @returns the tombstone owner, or `undefined` when the name is not attributed.
+   */
+  resolveUnknownTool(name: string): ToolTombstone | undefined {
+    return this.toolTombstones.get(name)
+  }
+
+  /**
+   * Remove an uninstall tombstone so a static/bundle plugin can be adopted
+   * again (reinstall after uninstall).
+   * @param id - plugin id whose tombstone should be cleared.
+   */
+  async clearUninstallTombstone(id: string): Promise<void> {
+    const status = await this.store.readStatus(id)
+    if (status === undefined || status.status !== 'uninstalled') return
+    await this.store.deletePlugin(id)
+    for (const [name, tombstone] of [...this.toolTombstones]) {
+      if (tombstone.pluginId === id) this.toolTombstones.delete(name)
     }
   }
 
@@ -1655,6 +2410,9 @@ export class LifecycleEngine {
     this.updateProvideTable(next, id)
     this.updateToolTable(next, id)
     this.updatePromptSectionTable(next, id)
+    this.updateHttpRouteTable(next, id)
+    this.updateSkillTable(next, id)
+    this.updateCommandTable(next, id)
     if (previous === null) return
     for (const capability of previous.provides.keys()) {
       if (next.provides.has(capability)) continue
@@ -1670,6 +2428,18 @@ export class LifecycleEngine {
     for (const name of previous.promptSections.keys()) {
       if (next.promptSections.has(name)) continue
       this.promptSectionTable.delete(name)
+    }
+    for (const key of previous.httpRoutes.keys()) {
+      if (next.httpRoutes.has(key)) continue
+      this.httpRouteIndirections.delete(key)
+    }
+    for (const name of previous.skills.keys()) {
+      if (next.skills.has(name)) continue
+      this.skillIndirections.delete(name)
+    }
+    for (const name of previous.commands.keys()) {
+      if (next.commands.has(name)) continue
+      this.commandIndirections.delete(name)
     }
   }
 
@@ -1699,6 +2469,21 @@ export class LifecycleEngine {
         this.promptSectionTable.delete(name)
       }
     }
+    for (const [key, entry] of this.httpRouteIndirections) {
+      if (entry.pluginId === id && !previousGeneration?.httpRoutes.has(key)) {
+        this.httpRouteIndirections.delete(key)
+      }
+    }
+    for (const [name, entry] of this.skillIndirections) {
+      if (entry.pluginId === id && !previousGeneration?.skills.has(name)) {
+        this.skillIndirections.delete(name)
+      }
+    }
+    for (const [name, entry] of this.commandIndirections) {
+      if (entry.pluginId === id && !previousGeneration?.commands.has(name)) {
+        this.commandIndirections.delete(name)
+      }
+    }
     if (previousGeneration !== null) {
       for (const [capability, value] of previousGeneration.provides) {
         this.provideTable.set(capability, { pluginId: id, value })
@@ -1709,9 +2494,22 @@ export class LifecycleEngine {
       for (const [name, section] of previousGeneration.promptSections) {
         this.promptSectionTable.set(name, { pluginId: id, section })
       }
+      for (const [key, spec] of previousGeneration.httpRoutes) {
+        this.httpRouteIndirections.set(key, { pluginId: id, spec })
+      }
+      for (const [name, definition] of previousGeneration.skills) {
+        this.skillIndirections.set(name, { pluginId: id, definition })
+      }
+      for (const [name, definition] of previousGeneration.commands) {
+        this.commandIndirections.set(name, { pluginId: id, definition })
+      }
     }
     this.syncToolPublishState()
     this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
   }
 
   private refreshOrders(): void {

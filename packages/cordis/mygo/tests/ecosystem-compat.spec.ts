@@ -2,7 +2,7 @@
  * #22 dsh-external ecosystem compatibility matrix: five real Cordis plugins
  * are exercised through the migration bridge (`fromCordisPlugin`) with zero
  * modification to their source, mounted in a REAL Loader composition over the
- * manager service. The verdicts drive `docs/plugin-ecosystem-compat.md`:
+ * manager service. The verdicts drive the ecosystem-compat report:
  * direct-accept / needs-wrapper / rejected-with-§16.2-code, and every
  * non-direct verdict is classified as a facade-coverage gap (harness side,
  * candidate for v1.1 review) or a plugin-boundary violation (correctly
@@ -242,19 +242,15 @@ describe('#22 dsh-external zero-modification compatibility matrix', () => {
     // host. Mounting proves the host shell is direct-acceptable.
   })
 
-  it('dsh-working-activity: zero-modification mount rejects staging-failed because the facade lacks inject/effect', async () => {
+  it('dsh-working-activity: zero-modification mount succeeds through inject/effect interception', async () => {
     const ctx = await boot('working')
     const workingActivity = await loadFixture<RawFixtureModule>('./fixtures/dsh-external/working-activity/src/index.ts')
     const adapted = fromCordisPlugin(
       rawOf(workingActivity),
       declaration('working-activity', '0.0.1', ['ui'], ['session/event', 'agent/status', 'session/disposed'], workingActivity.Config as Schemastery),
     )
-    const error = await ctx.pluginManager.adopt(adapted, {}).then(
-      () => null,
-      (caught: unknown) => caught as { code?: string; details?: Record<string, unknown> },
-    )
-    expect(error?.code).toBe('staging-failed')
-    expect(String(error?.details?.cause)).toMatch(/inject|effect/)
+    await ctx.pluginManager.adopt(adapted, {})
+    expect(ctx.pluginManager.plugins().find(handle => handle.id === 'working-activity')?.status).toBe('enabled')
   })
 
   it('session-chatlog: zero-modification mount succeeds through the service-mapping bridge (Proposal B)', async () => {

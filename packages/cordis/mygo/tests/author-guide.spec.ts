@@ -1,5 +1,5 @@
 /**
- * REAL guards for docs/plugin-author-guide.md: the two examples from the
+ * REAL guards for the author guide: the two examples from the
  * tutorial are mounted through the manager service and must actually run.
  */
 
@@ -92,7 +92,7 @@ function managerRow(extra: readonly string[]): readonly string[] {
   ]
 }
 
-describe('docs/plugin-author-guide examples', () => {
+describe('author-guide examples', () => {
   it('Example A: the minimal definePlugin runs and its listener fires', async () => {
     const ctx = await boot(managerRow([]))
     await ctx.pluginManager.install({ type: 'inline', code: MINIMAL_PLUGIN_CODE })
@@ -103,21 +103,9 @@ describe('docs/plugin-author-guide examples', () => {
     expect((globalThis as { __authorHello?: { count: number } }).__authorHello?.count).toBe(1)
   })
 
-  it('Example B: intercept permissions need the grants entry (mount rejects without it)', async () => {
-    const denied = await boot(managerRow([]))
-    await expect(denied.pluginManager.install({ type: 'inline', code: GUARD_PLUGIN_CODE }))
-      .rejects.toMatchObject({ code: 'grant-missing' })
-    await denied.fiber.dispose()
-    context = undefined
-    await rm(root!, { recursive: true, force: true })
-    root = undefined
-
-    const granted = await boot(managerRow([
-      '    grants:',
-      '      guard-plugin:',
-      '        intercept: true',
-    ]))
-    await granted.pluginManager.install({ type: 'inline', code: GUARD_PLUGIN_CODE })
-    expect(granted.pluginManager.plugins().find(handle => handle.id === 'guard-plugin')?.status).toBe('enabled')
+  it('Example B: intercept declarations mount without any grants entry', async () => {
+    const ctx = await boot(managerRow([]))
+    await ctx.pluginManager.install({ type: 'inline', code: GUARD_PLUGIN_CODE })
+    expect(ctx.pluginManager.plugins().find(handle => handle.id === 'guard-plugin')?.status).toBe('enabled')
   })
 })

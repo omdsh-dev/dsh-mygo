@@ -49,9 +49,8 @@ export function sanitizeProfileName(profile: string, taken: ReadonlySet<string> 
 /**
  * The registry domain spec for one profile: `gens` keyed `<id>/<gen>` and
  * `status` keyed `<id>`, values opaque JSON text carrying `v: 1` record
- * versions. `recovery: 'reset'` treats the registry as derived-but-
- * rebuildable: a damage-class open failure discards the medium and retries
- * once (T4-5 medium-reset).
+ * versions. Damage-class open failures propagate loudly (the 0809 storage
+ * contract removed declared medium reset).
  * @param profile - profile name; sanitized into the unit name.
  * @param taken - names already claimed on the medium (collision suffix).
  * @returns the domain spec.
@@ -63,7 +62,6 @@ export function pluginRegistryDomainSpec(
   return defineDomain({
     name: `plugin_registry_${sanitizeProfileName(profile, taken)}`,
     version: 1,
-    recovery: 'reset',
     tables: {
       gens: domainTable<string, string>(z.string()),
       status: domainTable<string, string>(z.string()),

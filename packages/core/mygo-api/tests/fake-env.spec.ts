@@ -63,13 +63,13 @@ describe('definePlugin', () => {
 })
 
 describe('fake env', () => {
-  it('resolves declared requires and returns undefined for undeclared capabilities', () => {
+  it('resolves host services regardless of the requires declaration (host passthrough)', () => {
     const env = createFakeEnv({
       requires: ['fixture-service'],
       services: { 'fixture-service': { ready: true }, 'undeclared-service': { secret: true } },
     })
     expect(env.get('fixture-service')).toEqual({ ready: true })
-    expect(env.get('undeclared-service')).toBeUndefined()
+    expect(env.get('undeclared-service')).toEqual({ secret: true })
     expect(env.get('anything-else')).toBeUndefined()
   })
 
@@ -220,6 +220,98 @@ describe('fake env', () => {
     expect(env.fsWrites[0]?.path).toBe('/out.txt')
     expect(new TextDecoder().decode(env.fsWrites[0]?.data ?? new Uint8Array())).toBe('written')
     expect(new TextDecoder().decode(await env.fs.read('/out.txt'))).toBe('written')
+    await env.fs.append('/out.txt', '!')
+    expect(env.fsAppends).toEqual([{ path: '/out.txt', data: new TextEncoder().encode('!') }])
+    expect(new TextDecoder().decode(await env.fs.read('/out.txt'))).toBe('written!')
+    await expect(env.fs.readdir('/')).resolves.toEqual([
+      { name: 'seed.txt', kind: 'file' },
+      { name: 'out.txt', kind: 'file' },
+    ])
+    await expect(env.fs.stat('/seed.txt')).resolves.toEqual({ kind: 'file', size: 4, mtimeMs: 0 })
+    await expect(env.fs.stat('/missing.txt')).rejects.toThrow(/ENOENT/)
+    expect(env.fsReaddirs).toEqual(['/'])
+    expect(env.fsStats).toEqual(['/seed.txt', '/missing.txt'])
+
+    const varsEnv = createFakeEnv({ vars: { FOO: 'bar' } })
+    expect(varsEnv.vars.get('FOO')).toBe('bar')
+    varsEnv.vars.set('FOO', 'baz')
+    expect(varsEnv.vars.get('FOO')).toBe('baz')
+    expect(varsEnv.vars.get('SECRET')).toBeUndefined()
+    varsEnv.vars.set('SECRET', 'x')
+    expect(varsEnv.vars.get('SECRET')).toBe('x')
+    expect(varsEnv.varsGets).toEqual(['FOO', 'FOO', 'SECRET', 'SECRET'])
+    expect(varsEnv.varsSets).toEqual([{ name: 'FOO', value: 'baz' }, { name: 'SECRET', value: 'x' }])
+
+    const llmEnv = createFakeEnv({
+      llmHandler: async request => ({ content: `echo:${request.model}`, model: request.model }),
+    })
+    await expect(llmEnv.llm.complete({
+      model: 'probe-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    })).resolves.toEqual({ content: 'echo:probe-model', model: 'probe-model' })
+    await expect(llmEnv.llm.complete({ model: 'other', messages: [] }))
+      .resolves.toEqual({ content: 'echo:other', model: 'other' })
+    expect(llmEnv.llmCalls.map(call => call.model)).toEqual(['probe-model', 'other'])
+
+    const execEnv = createFakeEnv({
+      execHandler: async request => ({ stdout: `out:${request.command}`, stderr: '', code: 0 }),
+    })
+    await expect(execEnv.exec.run({ command: 'probe-cli', args: ['a'] }))
+      .resolves.toEqual({ stdout: 'out:probe-cli', stderr: '', code: 0 })
+    await expect(execEnv.exec.run({ command: 'other-cli' }))
+      .resolves.toEqual({ stdout: 'out:other-cli', stderr: '', code: 0 })
+    expect(execEnv.execCalls.map(call => call.command)).toEqual(['probe-cli', 'other-cli'])
+
+    await execEnv.exec.run({ command: 'probe-cli', stdin: 'echo hello' })
+    expect(execEnv.execCalls[2]).toMatchObject({ command: 'probe-cli', stdin: 'echo hello' })
+
+    const bytesEnv = createFakeEnv({
+      execHandler: async () => ({
+        stdout: 'utf8',
+        stderr: '',
+        code: 0,
+        stdoutBytes: new TextEncoder().encode('utf8'),
+        stderrBytes: new Uint8Array(),
+      }),
+    })
+    await expect(bytesEnv.exec.run({ command: 'raw-cli' })).resolves.toMatchObject({
+      stdout: 'utf8',
+      stdoutBytes: new TextEncoder().encode('utf8'),
+    })
+
+    const httpEnv = createFakeEnv()
+    const disposer = httpEnv.http.register({
+      method: 'POST',
+      path: '/probe',
+      handler: async () => ({ status: 200, body: { ok: true } }),
+    })
+    expect(httpEnv.httpRegistrations).toHaveLength(1)
+    const adminDisposer = httpEnv.http.register({ method: 'GET', path: '/admin', handler: async () => ({ status: 200 }) })
+    expect(httpEnv.httpRegistrations).toHaveLength(2)
+    disposer()
+    expect(httpEnv.httpRegistrations).toHaveLength(1)
+    adminDisposer()
+    expect(httpEnv.httpRegistrations).toHaveLength(0)
+
+    const skillEnv = createFakeEnv()
+    const skillDisposer = skillEnv.skills.register({
+      name: 'probe-skill',
+      description: 'Probe skill',
+      content: '# Probe',
+    })
+    expect(skillEnv.registeredSkills).toEqual([{ name: 'probe-skill', description: 'Probe skill', content: '# Probe' }])
+    skillDisposer()
+    expect(skillEnv.registeredSkills).toHaveLength(0)
+
+    const commandEnv = createFakeEnv()
+    const commandDisposer = commandEnv.commands.register({
+      name: 'side',
+      description: 'Open a side session',
+      handler: async () => ({ kind: 'success', text: 'ok' }),
+    })
+    expect(commandEnv.commandRegistrations).toHaveLength(1)
+    commandDisposer()
+    expect(commandEnv.commandRegistrations).toHaveLength(0)
 
     expect(await env.fetch('https://example.dev/api', { method: 'GET' })).toBe(response)
     expect(env.fetchCalls).toEqual([{ url: 'https://example.dev/api', init: { method: 'GET' } }])
@@ -232,6 +324,28 @@ describe('fake env', () => {
       { level: 'warn', args: ['rate %d', 1000] },
       { level: 'error', args: ['boom'] },
     ])
+  })
+
+  it('supports per-call responses through fetchHandler', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const env = createFakeEnv({
+      fetchHandler: async (url, init) => {
+        calls.push(init === undefined ? { url } : { url, init })
+        return new Response(JSON.stringify({ ok: url.endsWith('/retry') }), {
+          status: url.endsWith('/retry') ? 200 : 503,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      },
+    })
+    expect((await env.fetch('https://example.dev/fail', { method: 'POST' })).status).toBe(503)
+    const retry = await env.fetch('https://example.dev/retry')
+    expect(retry.status).toBe(200)
+    expect(await retry.json()).toEqual({ ok: true })
+    expect(calls).toEqual([
+      { url: 'https://example.dev/fail', init: { method: 'POST' } },
+      { url: 'https://example.dev/retry' },
+    ])
+    expect(env.fetchCalls.map(call => call.url)).toEqual(['https://example.dev/fail', 'https://example.dev/retry'])
   })
 
   it('covers default seeds, binary writes, double disposal, and non-matching triggers', async () => {
@@ -264,5 +378,46 @@ describe('fake env', () => {
       throw new Error('must not run for another event')
     })
     await env.trigger('fixture/other', { text: 'x' })
+  })
+
+  it('records dynamic install/uninstall calls and honors installHandler', async () => {
+    const env = createFakeEnv({
+      installHandler: source => ({
+        id: 'grown-tool',
+        version: '1.0.0',
+        generation: 1,
+        origin: 'runtime-api',
+        status: 'enabled',
+        kinds: ['utility'],
+        requires: [],
+        provides: [],
+        orderNeutral: true,
+        source,
+      }),
+    })
+    const handle = await env.install({ type: 'inline', code: 'export default {}' }, { config: { x: 1 } })
+    expect(handle).toMatchObject({ id: 'grown-tool', origin: 'runtime-api' })
+    expect(env.installCalls).toEqual([
+      { source: { type: 'inline', code: 'export default {}' }, options: { config: { x: 1 } } },
+    ])
+    await env.uninstall('grown-tool')
+    expect(env.uninstallCalls).toEqual(['grown-tool'])
+  })
+
+  it('records managed emits and dispatches them to matching listeners', async () => {
+    const env = createFakeEnv()
+    const seen: Array<{ event: string; payload: unknown }> = []
+    env.on('pi-ext/greet' as never, (payload: unknown) => {
+      seen.push({ event: 'pi-ext/greet', payload })
+    })
+    env.on('pi-ext/other' as never, () => {
+      seen.push({ event: 'pi-ext/other', payload: undefined })
+    })
+    env.emit('pi-ext/greet', { text: 'hello' })
+    expect(env.emitCalls).toEqual([{ event: 'pi-ext/greet', payload: { text: 'hello' } }])
+    await Promise.resolve()
+    expect(seen).toEqual([{ event: 'pi-ext/greet', payload: { text: 'hello' } }])
+    env.emit('pi-ext/greet')
+    expect(env.emitCalls[1]).toEqual({ event: 'pi-ext/greet' })
   })
 })

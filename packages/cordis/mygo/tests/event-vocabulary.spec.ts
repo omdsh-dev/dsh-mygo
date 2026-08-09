@@ -25,6 +25,17 @@ describe('generated event vocabulary', () => {
     expect(names.has('internal/dispatch')).toBe(false)
   })
 
+  it("tracks the snapshot's ecosystem events: plugin lifecycle present, agent/settled absent", () => {
+    const names = new Set(EVENT_VOCABULARY.map(entry => entry.name))
+    expect(names.has('plugin/activated')).toBe(true)
+    expect(names.has('plugin/replaced')).toBe(true)
+    expect(names.has('plugin/uninstalled')).toBe(true)
+    // agent/settled exists in newer dsh-external harness sources but not in
+    // this snapshot; the vocabulary must not invent events the harness does
+    // not declare (distill's rejection is the documented consequence).
+    expect(names.has('agent/settled')).toBe(false)
+  })
+
   it('derives payload property names from Record-shaped return types', () => {
     const assemble = EVENT_VOCABULARY.find(entry => entry.name === 'system-prompt/assemble')
     expect(assemble?.mode).toBe('waterfall')

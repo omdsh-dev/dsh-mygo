@@ -11,6 +11,7 @@ import { z } from 'zod'
 const pluginId = z.string().regex(/^[a-z][a-z0-9-]*$/)
 const semverShape = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/)
 const kindName = z.string().min(1).regex(/^[a-z][a-z0-9-]*$/)
+const eventName = z.string().min(1).regex(/^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)*(\/\*)?$/)
 
 const transformDeclaration = z.object({
   event: z.string(),
@@ -36,6 +37,7 @@ export const MANIFEST_SCHEMA = z.object({
   id: pluginId,
   version: semverShape,
   kinds: z.array(kindName),
+  events: z.array(eventName).optional(),
   requires: z.array(z.string()),
   provides: z.array(z.string()),
   permissions: z.object({
@@ -47,6 +49,17 @@ export const MANIFEST_SCHEMA = z.object({
   }),
   fileAccess: z.array(z.tuple([fileAccessMode, z.string()])).optional(),
   networkAccess: z.object({ allow: z.array(z.string()) }).optional(),
+  varsAccess: z.array(z.string()).optional(),
+  llmAccess: z.object({ models: z.array(z.string()) }).optional(),
+  execAccess: z.object({ allow: z.array(z.string()) }).optional(),
+  httpAccess: z.object({ routes: z.array(z.string()) }).optional(),
+  client: z.object({
+    main: z.string().min(1),
+    inject: z.array(z.string()).optional(),
+  }).optional(),
+  sessionWriteAccess: z.boolean().optional(),
+  hostPublishAccess: z.boolean().optional(),
+  dynamicInstallAccess: z.boolean().optional(),
   stateful: z.boolean(),
   swapPolicy: z.enum(['immediate', 'drain', 'next-idle']),
   config: z.custom(value => typeof value === 'function', 'schemastery schema'),

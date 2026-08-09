@@ -19,7 +19,6 @@ export const AUDIT_CLASSES = [
   'provenance',
   'quarantine',
   'shadow',
-  'medium-reset',
   'boot-gc',
   'cross-process-resurrect',
   'veto-suppressed',

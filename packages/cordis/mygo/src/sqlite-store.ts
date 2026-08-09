@@ -3,8 +3,8 @@
  * over the `plugin_registry_<profile>` domain, rows stored as opaque TEXT
  * (`v: 1` record versions, structure validation deferred to recovery).
  * Unparsable rows surface as {@link RegistryRowError} so boot recovery
- * quarantines them with `damaged-record`; the domain's `recovery: 'reset'`
- * handles damage-class medium failures (T4-5).
+ * quarantines them with `damaged-record`; damage-class medium failures
+ * propagate loudly (the 0809 storage contract removed declared medium reset).
  * @module @deepseek-ai/dsh-mygo/src/sqlite-store
  */
 

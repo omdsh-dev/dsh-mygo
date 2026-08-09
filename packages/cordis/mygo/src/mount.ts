@@ -10,7 +10,6 @@
 
 import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
 import type {
-  FileAccessEntry,
   PluginDefinition,
   PluginErrorCode,
 } from '@deepseek-ai/dsh-mygo-api'
@@ -20,9 +19,10 @@ import { validateManifest } from './manifest.ts'
 import type {
   MountValidationOptions,
   MountValidationResult,
-  PermissionLevel,
-  PluginGrants,
 } from './types.ts'
+
+/** Permission-level ladder used only for mode ceilings (observe < transform < intercept < claims). */
+type PermissionLevel = 'observe' | 'transform' | 'intercept' | 'claims'
 
 /** Mode → maximum declared permission level (§7, #7-correction: serial allows intercept, never transform). */
 const MODE_CEILING: Readonly<Record<string, PermissionLevel>> = {
@@ -30,14 +30,6 @@ const MODE_CEILING: Readonly<Record<string, PermissionLevel>> = {
   parallel: 'observe',
   serial: 'intercept',
   waterfall: 'transform',
-}
-
-/** Level ladder used by `ceiling-exceeded` (§15.6). */
-const LEVEL_RANK: Readonly<Record<PermissionLevel, number>> = {
-  observe: 0,
-  transform: 1,
-  intercept: 2,
-  claims: 3,
 }
 
 /**
@@ -58,9 +50,49 @@ export function validateMount(
   const vocabulary = options.vocabulary ?? EVENT_VOCABULARY
   const byEvent = new Map(vocabulary.map(entry => [entry.name, entry]))
   const warnings: string[] = []
+  const customExact = new Set<string>()
+  const customPatterns: string[] = []
+  for (const entry of definition.events ?? []) {
+    if (entry.endsWith('/*')) {
+      const namespace = entry.slice(0, -2)
+      if (!/^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)*$/.test(namespace)) {
+        throw fail('manifest-invalid', {
+          plugin: id,
+          field: 'events',
+          cause: `event pattern "${entry}" must be a valid namespace followed by /*`,
+        }, id)
+      }
+      if (vocabulary.some(entry2 => entry2.name.startsWith(`${namespace}/`))) {
+        throw fail('manifest-invalid', {
+          plugin: id,
+          field: 'events',
+          cause: `event namespace "${namespace}/*" overlaps the harness vocabulary`,
+        }, id)
+      }
+      customPatterns.push(namespace)
+    } else if (byEvent.has(entry)) {
+      throw fail('manifest-invalid', {
+        plugin: id,
+        field: 'events',
+        cause: `event "${entry}" is reserved by the harness vocabulary`,
+      }, id)
+    } else {
+      customExact.add(entry)
+    }
+  }
+  for (const declaration of [...definition.permissions.transform, ...definition.permissions.intercept]) {
+    if (customExact.has(declaration.event) || customPatterns.some(namespace => declaration.event.startsWith(`${namespace}/`))) {
+      throw fail('manifest-invalid', {
+        plugin: id,
+        field: 'events',
+        cause: `custom event "${declaration.event}" is observe-only (no transform/intercept declarations)`,
+      }, id)
+    }
+  }
 
   // 组 1：manifest 与声明校验（fiber 建立前）
   for (const event of declaredEvents(definition)) {
+    if (customExact.has(event)) continue
     const entry = byEvent.get(event)
     if (entry === undefined) {
       throw fail('event-not-mountable', { event, tier: 'harness' }, id)
@@ -107,40 +139,11 @@ export function validateMount(
     }
   }
 
-  // 组 2：权限与授权（mount 期）
-  if (options.origin === 'model' && options.source.type === 'npm') {
-    throw fail('source-not-allowed', { channel: 'model', source: 'npm' }, id)
-  }
-  assertGrants(definition, options.grants, id)
-  if (options.origin !== 'static') {
-    const level = declaredLevel(definition)
-    if (LEVEL_RANK[level] > LEVEL_RANK[options.channelCeiling]) {
-      throw fail('ceiling-exceeded', {
-        level,
-        channel: options.origin,
-        ceiling: options.channelCeiling,
-      }, id)
-    }
-  }
   for (const declaration of definition.permissions.transform) {
     for (const name of declaration.writes ?? []) {
       const field = `${declaration.event}.${name}`
       if ((options.protectedFields ?? []).includes(field)) {
         throw fail('protected-field', { field }, id)
-      }
-    }
-  }
-  if (options.source.type === 'npm') {
-    const scope = npmScope(options.source.package)
-    const trusted = scope !== null && (options.trustedScopes ?? []).includes(scope)
-    if (!trusted) {
-      if (options.development === true) {
-        warnings.push(`development-mode: provenance check skipped for package ${options.source.package}`)
-      } else {
-        throw fail('provenance-rejected', {
-          source: options.source.package,
-          missing: 'trusted scope or provenance attestation',
-        }, id)
       }
     }
   }
@@ -197,95 +200,4 @@ function validatePropertyNames(
       throw fail('unknown-property', { event, name, valid: entry.properties }, pluginId)
     }
   }
-}
-
-/** The three grants rules (§17): declared-before-granted, channel ceiling, and static same-table. */
-function assertGrants(definition: PluginDefinition, grants: PluginGrants | undefined, pluginId: string): void {
-  if (definition.permissions.intercept.length > 0 && grants?.intercept !== true) {
-    throw fail('grant-missing', { grant: 'intercept' }, pluginId)
-  }
-  if (definition.permissions.claims.length > 0 && grants?.claims !== true) {
-    throw fail('grant-missing', { grant: 'claims' }, pluginId)
-  }
-  for (const entry of definition.fileAccess ?? []) {
-    if (!coveredByFileGrants(entry, grants?.fileAccess)) {
-      throw fail('grant-missing', { grant: `fileAccess ${entry[0]} ${entry[1]}` }, pluginId)
-    }
-  }
-  for (const url of definition.networkAccess?.allow ?? []) {
-    if (!coveredByNetworkGrants(url, grants?.networkAccess?.allow)) {
-      throw fail('grant-missing', { grant: `networkAccess ${url}` }, pluginId)
-    }
-  }
-}
-
-/**
- * Mount-time file-access coverage (§17 rule 1, decision #9): a grant covers a
- * declared entry when its mode implies the declared mode (`write` ⊇ `read`)
- * and its normalized path is a path-boundary prefix of the declared path.
- * Runtime `..`/symlink normalization is owned by the `env.fs` stage (#16).
- */
-function coveredByFileGrants(
-  declared: FileAccessEntry,
-  grants: readonly FileAccessEntry[] | undefined,
-): boolean {
-  if (grants === undefined) return false
-  const declaredPath = normalizePath(declared[1])
-  return grants.some((grant) => {
-    if (grant[0] === 'read' && declared[0] === 'write') return false
-    return pathPrefixCovers(normalizePath(grant[1]), declaredPath)
-  })
-}
-
-/**
- * Mount-time network-access coverage (§17 rule 1): an allow entry covers a
- * declared URL when the URL starts at the entry boundary (next character is
- * `:`, `/`, `?`, or `#`, or the URL is exactly the entry), so
- * `https://example.dev` does not cover a different host like
-/**
- * Boundary-prefix network coverage shared by mount validation and the
- * runtime `env.fetch` gate (#16): the URL starts at the entry boundary (next
- * character is `:`, `/`, `?`, or `#`, or the URL is exactly the entry), so
- * `https://example.dev` does not cover a different host.
- * @param url - request URL to test.
- * @param allow - allowlist entries, or `undefined` for no coverage.
- * @returns true when the URL starts at an entry's scheme/host boundary.
- */
-export function coveredByNetworkGrants(url: string, allow: readonly string[] | undefined): boolean {
-  if (allow === undefined) return false
-  return allow.some((entry) => {
-    if (url === entry) return true
-    if (!url.startsWith(entry) || entry.length >= url.length) return false
-    // The length guard above makes this index read defined.
-    const next = url[entry.length] as string
-    return ':/?#'.includes(next)
-  })
-}
-
-/** The plugin's highest declared permission level (§15.6 ladder). */
-function declaredLevel(definition: PluginDefinition): PermissionLevel {
-  if (definition.permissions.claims.length > 0) return 'claims'
-  if (definition.permissions.intercept.length > 0) return 'intercept'
-  if (definition.permissions.transform.length > 0) return 'transform'
-  return 'observe'
-}
-
-/** Normalize a path for mount-time prefix comparison: `/` separators, no trailing slash. */
-function normalizePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
-  return normalized.length === 0 ? '/' : normalized
-}
-
-/** True when `prefix` is a path-boundary prefix of `path`. */
-function pathPrefixCovers(prefix: string, path: string): boolean {
-  if (prefix === path) return true
-  const boundary = prefix.endsWith('/') ? prefix : `${prefix}/`
-  return path.startsWith(boundary)
-}
-
-/** Npm package scope (`@scope/pkg` → `@scope`), or `null` for unscoped names. */
-function npmScope(packageName: string): string | null {
-  if (!packageName.startsWith('@')) return null
-  const slash = packageName.indexOf('/')
-  return slash === -1 ? null : packageName.slice(0, slash)
 }

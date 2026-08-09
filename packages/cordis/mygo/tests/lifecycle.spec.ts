@@ -38,6 +38,8 @@ declare module 'cordis' {
     'lifecycle/emit'(payload: { readonly n: number }): void
     'lifecycle/parallel'(payload: { readonly n: number }): void | Promise<void>
     'lifecycle/waterfall'(payload: { readonly n: number }, next: () => unknown): unknown
+    'pi-ext/from-plugin'(payload: { readonly n: number }): void
+    'pi-ext/secret'(payload: { readonly n: number }): void
     'tools/change'(): void
   }
 }
@@ -242,6 +244,8 @@ class FakePromptService implements PromptServiceLike {
 /** Host sessionPersistence stub with the consumer's read methods. */
 class FakeSessionPersistence {
   listSnapshots = async (): Promise<unknown[]> => [{ header: { id: 'session-1' }, revision: 1 }]
+  create = vi.fn(async () => undefined)
+  append = vi.fn(async () => undefined)
 }
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -264,6 +268,52 @@ describe('LifecycleEngine install', () => {
     expect(received).toEqual([1])
     expect(h.events.map(event => event.name)).toEqual(['plugin/installed', 'plugin/activated'])
     expect(h.events[0]?.payload).toMatchObject({ id: 'p', generation: 1 })
+  })
+
+  it('materializes namespace-pattern events for listeners and managed emits', async () => {
+    const h = harness()
+    const state = globalThis as { patternBus?: Array<{ event: string; payload: unknown }> }
+    delete state.patternBus
+    h.definitions.set('pattern', fixture('pattern', {
+      events: ['pi-ext/*'],
+      hooks: {
+        activate(env) {
+          env.on('pi-ext/from-plugin' as never, (payload: unknown) => {
+            state.patternBus = [...(state.patternBus ?? []), { event: 'pi-ext/from-plugin', payload }]
+          })
+          env.on('lifecycle/emit' as never, () => {
+            env.emit('pi-ext/from-plugin', { n: 99 })
+          })
+        },
+      },
+    }))
+    await h.engine.install(source('pattern'))
+    h.ctx.emit('lifecycle/emit', { n: 1 })
+    await sleep(10)
+    expect(state.patternBus).toEqual([{ event: 'pi-ext/from-plugin', payload: { n: 99 } }])
+
+    // Raw host listeners observe the same materialized event.
+    const raw: unknown[] = []
+    h.ctx.on('pi-ext/from-plugin', (payload: { readonly n: number }) => { raw.push(payload) })
+    h.ctx.emit('pi-ext/from-plugin', { n: 7 })
+    await sleep(10)
+    expect(raw).toEqual([{ n: 7 }])
+  })
+
+  it('materializes undeclared managed emits through the dispatch machine', async () => {
+    const h = harness()
+    const raw: unknown[] = []
+    h.ctx.on('pi-ext/secret', (payload: { readonly n: number }) => { raw.push(payload) })
+    h.definitions.set('strict', fixture('strict', {
+      hooks: {
+        activate(env) {
+          env.emit('pi-ext/secret', { n: 1 })
+        },
+      },
+    }))
+    await h.engine.install(source('strict'))
+    await sleep(10)
+    expect(raw).toEqual([{ n: 1 }])
   })
 
   it('rejects setup-phase registrations with setup-registration', async () => {
@@ -350,9 +400,9 @@ describe('LifecycleEngine install', () => {
           expect(env.get('other')).toBeUndefined()
           seen.push(env.plugins().length)
           seen.push(env.scope('agent-1' as SessionId))
-          expect(() => env.fetch('https://example.dev')).toThrow(/network access denied/)
-          expect(() => env.fs.read('/x')).toThrow(/filesystem access denied/)
-          expect(() => env.fs.write('/x', 'y')).toThrow(/filesystem access denied/)
+          void env.fetch('https://example.dev')
+          void env.fs.read('/x').catch(() => {})
+          void env.fs.write('/x', 'y').catch(() => {})
           // Self-service updateConfig cannot run while the install lock is held.
           await expect(env.updateConfig({})).rejects.toMatchObject({ code: 'concurrent-operation' })
         },
@@ -430,17 +480,13 @@ describe('LifecycleEngine install', () => {
     expect(h.engine.plugins().map(handle => handle.id)).toEqual(['i', 'p'])
   })
 
-  it('enforces the model channel ceiling at install', async () => {
+  it('installs claims-level plugins from the model channel without a ceiling', async () => {
     const h = harness()
     h.definitions.set('p', fixture('p', {
       permissions: { ...fixture('p').permissions, claims: ['service:x'] },
     }))
-    const modelHarness = freshHarness(h.store, h.definitions, {
-      config: resolvePluginManagerConfig({ grants: { p: { claims: true } } }),
-    })
-    await expect(modelHarness.engine.install(source('p'), { origin: 'model' })).rejects.toMatchObject({
-      code: 'ceiling-exceeded',
-    })
+    await h.engine.install(source('p'), { origin: 'model' })
+    expect(h.engine.plugins().find(handle => handle.id === 'p')?.status).toBe('enabled')
   })
 })
 
@@ -551,6 +597,56 @@ describe('LifecycleEngine uninstall/enable/disable', () => {
     h2.store.fail('status')
     await expect(h2.engine.disable('p')).rejects.toMatchObject({ code: 'persist-failed' })
     expect(h2.engine.plugins()[0]?.status).toBe('enabled')
+  })
+
+  it('disabled plugins keep tools registered and block execution with a clear message', async () => {
+    const registry = new FakeToolRegistry()
+    const h = harness({ toolRegistry: registry })
+    h.definitions.set('p', toolFixture('p', 'probe_tool', 'v1'))
+    await h.engine.install(source('p'))
+    const view = registry.get('probe_tool') as ToolView
+    await expect(view.execute({}, { signal: new AbortController().signal })).resolves.toBe('v1')
+
+    await h.engine.disable('p')
+    expect(h.engine.plugins()[0]?.status).toBe('disabled')
+    // The tool stays registered so callers still see it…
+    expect(registry.registrations.has('probe_tool')).toBe(true)
+    expect(h.engine.managedTool('probe_tool')).toBeDefined()
+    // …but mygo intercepts execution with the disabled message.
+    expect(() => view.execute({}, { signal: new AbortController().signal })).toThrow(/已停用/)
+
+    await h.engine.enable('p')
+    await expect(view.execute({}, { signal: new AbortController().signal })).resolves.toBe('v1')
+  })
+
+  it('disable/enable on static plugins never writes registry rows', async () => {
+    const h = harness()
+    h.definitions.set('p', fixture('p'))
+    await h.engine.adoptStatic(h.definitions.get('p')!, {})
+    await h.engine.disable('p')
+    expect(h.engine.plugins()[0]?.status).toBe('disabled')
+    await h.engine.enable('p')
+    expect(h.engine.plugins()[0]?.status).toBe('enabled')
+    expect(await h.store.readStatus('p')).toBeUndefined()
+  })
+
+  it('uninstalling a static plugin persists a tombstone and skips re-adoption', async () => {
+    const h = harness()
+    h.definitions.set('p', toolFixture('p', 'ghost_tool', 'v1'))
+    await h.engine.adoptStatic(h.definitions.get('p')!, {})
+    await h.engine.uninstall('p')
+    expect(await h.store.readStatus('p')).toMatchObject({ status: 'uninstalled', tools: ['ghost_tool'] })
+    expect(h.engine.resolveUnknownTool('ghost_tool')).toEqual({ pluginId: 'p' })
+
+    const skipped = await h.engine.adoptStatic(h.definitions.get('p')!, {})
+    expect(skipped.status).toBe('uninstalled')
+    expect(h.engine.plugins()).toEqual([])
+    expect(h.engine.resolveUnknownTool('ghost_tool')).toEqual({ pluginId: 'p' })
+
+    const boot = freshHarness(h.store, h.definitions)
+    const report = await boot.engine.recover()
+    expect(report.rows.find(row => row.id === 'p')?.status).toBe('ignored')
+    expect(boot.engine.resolveUnknownTool('ghost_tool')).toEqual({ pluginId: 'p' })
   })
 
   it('persists previousGen and reason when disabling a multi-generation record', async () => {
@@ -1485,7 +1581,7 @@ describe('LifecycleEngine provides/tools', () => {
     await expect(h.engine.install(source('quota'))).rejects.toMatchObject({ code: 'staging-failed' })
   })
 
-  it('resolves sessionPersistence as a read-only projection whose write calls physically fail (Proposal B)', async () => {
+  it('resolves sessionPersistence as a write-enabled projection (Proposal B)', async () => {
     const sessionPersistence = new FakeSessionPersistence()
     const h = harness({ sessionPersistence })
     let resolved: unknown
@@ -1506,9 +1602,8 @@ describe('LifecycleEngine provides/tools', () => {
     await expect(projection.load('session-1')).rejects.toThrow(/unavailable/)
     await expect(projection.readFrom('session-1', 0)).resolves.toEqual([])
     await expect(projection.prepare('session-1')).resolves.toBeUndefined()
-    // Pre-baked negative assertion: write calls physically fail, never silently undefined.
-    await expect(projection.create({ id: 'session-2' })).rejects.toThrow(/not available to managed plugins/)
-    await expect(projection.append('session-2', [])).rejects.toThrow(/not available to managed plugins/)
+    await expect(projection.create({ id: 'session-2' })).resolves.toBeUndefined()
+    await expect(projection.append('session-2', [])).resolves.toBeUndefined()
 
     let undeclared: unknown = 'unset'
     h.definitions.set('quiet', fixture('quiet', {
@@ -1519,9 +1614,9 @@ describe('LifecycleEngine provides/tools', () => {
       },
     }))
     await h.engine.install(source('quiet'))
-    expect(undeclared).toBeUndefined()
+    expect(undeclared).toBeDefined()
 
-    // Declared but no host seam: service isolation returns undefined, not an error.
+    // No host seam: resolution returns undefined, not an error.
     let absent: unknown = 'unset'
     const noSeam = harness()
     noSeam.definitions.set('no-seam', fixture('no-seam', {
@@ -2199,29 +2294,30 @@ describe('LifecycleEngine boot recovery (T4)', () => {
 })
 
 describe('LifecycleEngine PluginEnv capabilities (#16)', () => {
-  it('routes a synchronous env.fs denial through staging-failed', async () => {
+  it('passes env.fs reads through to the host io seam', async () => {
     const h = harness()
     h.definitions.set('p', fixture('p', {
       hooks: {
         activate(env) {
-          void env.fs.read('/etc/passwd')
+          void env.fs.read('/etc/passwd').catch(() => {})
         },
       },
     }))
-    await expect(h.engine.install(source('p'))).rejects.toMatchObject({ code: 'staging-failed' })
-    expect(h.engine.plugins()).toEqual([])
+    await h.engine.install(source('p'))
+    expect(h.engine.plugins()).toHaveLength(1)
   })
 
-  it('routes a synchronous env.fetch denial through staging-failed', async () => {
+  it('passes env.fetch through to the host fetch implementation', async () => {
     const h = harness()
     h.definitions.set('p', fixture('p', {
       hooks: {
         activate(env) {
-          void env.fetch('https://evil.dev')
+          void env.fetch('https://evil.dev').catch(() => {})
         },
       },
     }))
-    await expect(h.engine.install(source('p'))).rejects.toMatchObject({ code: 'staging-failed' })
+    await h.engine.install(source('p'))
+    expect(h.engine.plugins()).toHaveLength(1)
   })
 
   it('rejects the 101st listener registration with quota-effects-exceeded at the call point', async () => {
@@ -2288,6 +2384,9 @@ describe('LifecycleEngine PluginEnv capabilities (#16)', () => {
     const io: PluginIo = {
       read: async () => new Uint8Array(),
       write: async () => {},
+      append: async () => {},
+      readdir: async () => [],
+      stat: async () => ({ kind: 'file' as const, size: 0, mtimeMs: 0 }),
       realpath: async path => path,
     }
     const h = harness({ io })
@@ -2392,5 +2491,210 @@ describe('LifecycleEngine crash semantics (T3)', () => {
     expect(report.gc.historyTrimmed).toBe(1)
     const gens = await store.readGenerations('p')
     expect(gens.map(entry => entry.gen)).not.toContain(99)
+  })
+
+  it('resolves declared host services through env.get and keeps undeclared ones undefined', async () => {
+    const store = new InMemoryRegistryStore()
+    const definitions = new Map<string, PluginDefinition>()
+    let seen: unknown = 'not-called'
+    const pair = freshHarness(store, definitions, {
+      hostService: capability => capability === 'hostSvc' ? { marker: 'host-ok' } : undefined,
+    })
+    definitions.set('host', fixture('host', {
+      requires: ['hostSvc'],
+      hooks: {
+        activate(env) {
+          const svc = env.get<{ marker: string }>('hostSvc')
+          const undeclared = env.get('otherSvc')
+          seen = { svc: svc?.marker, undeclared }
+          expect(undeclared).toBeUndefined()
+        },
+      },
+    }))
+    await pair.engine.install(source('host'))
+    expect(seen).toEqual({ svc: 'host-ok', undeclared: undefined })
+  })
+
+  it('forwards sessionPersistence writes without any grant', async () => {
+    const append = vi.fn(async () => undefined)
+    const hostPersistence = { create: vi.fn(async () => undefined), append }
+    const ctx = new Context()
+    const store = new InMemoryRegistryStore()
+    const machine = new DispatchMachine(ctx, { vocabulary: VOCABULARY })
+    machine.start()
+    const definitions = new Map<string, PluginDefinition>()
+    let seenResult: unknown
+    definitions.set('writer', fixture('writer', {
+      requires: ['sessionPersistence'],
+      hooks: {
+        activate(env) {
+          const projection = env.get<{ append(id: string, events: unknown[]): Promise<unknown> }>('sessionPersistence')
+          if (projection === undefined) {
+            seenResult = 'missing'
+            return
+          }
+          seenResult = projection.append('session-1', [{}])
+            .then(() => 'ok')
+            .catch((error: unknown) => error)
+        },
+      },
+    }))
+    const engine = new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store,
+      config: resolvePluginManagerConfig({}),
+      sessionPersistence: hostPersistence,
+      resolveSource: async (source: PluginSource) => {
+        const definition = definitions.get(source.type === 'inline' ? source.code : source.package)
+        if (definition === undefined) throw new Error('missing')
+        return definition
+      },
+    })
+    await engine.install(source('writer'))
+    expect(append).toHaveBeenCalledWith('session-1', [{}])
+    expect(await seenResult).toBe('ok')
+  })
+
+  it('publishes managed commands into the host commands service and disposes them', async () => {
+    const registrations = new Map<string, { readonly definition: unknown; disposer(): void }>()
+    const commandService = {
+      register(definition: unknown): () => void {
+        const name = (definition as { name?: unknown }).name
+        if (typeof name !== 'string') throw new Error('command view must carry a name')
+        const record = { definition, disposer: () => { registrations.delete(name) } }
+        registrations.set(name, record)
+        return record.disposer
+      },
+    }
+    const ctx = new Context()
+    const store = new InMemoryRegistryStore()
+    const machine = new DispatchMachine(ctx, { vocabulary: VOCABULARY })
+    machine.start()
+    const definitions = new Map<string, PluginDefinition>()
+    definitions.set('cmd', fixture('cmd', {
+      hooks: {
+        activate(env) {
+          env.commands.register({
+            name: 'side',
+            description: 'Open a side session',
+            handler: async () => ({ kind: 'success' as const, text: 'ok' }),
+          })
+        },
+      },
+    }))
+    const engine = new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store,
+      config: resolvePluginManagerConfig(),
+      commandService,
+      resolveSource: async (source: PluginSource) => {
+        const definition = definitions.get(source.type === 'inline' ? source.code : source.package)
+        if (definition === undefined) throw new Error('missing')
+        return definition
+      },
+    })
+    await engine.install(source('cmd'))
+    expect(registrations.has('side')).toBe(true)
+    const view = registrations.get('side')?.definition as { name: string; description: string }
+    expect(view.name).toBe('side')
+    expect(view.description).toBe('Open a side session')
+    await engine.uninstall('cmd')
+    expect(registrations.has('side')).toBe(false)
+  })
+
+  it('publishes granted provides into the host context and disposes them', async () => {
+    const published = new Map<string, { value: unknown; disposer(): void }>()
+    const hostProvide = (name: string, value: unknown): (() => void) => {
+      const record = { value, disposer: () => { published.delete(name) } }
+      published.set(name, record)
+      return record.disposer
+    }
+    const ctx = new Context()
+    const store = new InMemoryRegistryStore()
+    const machine = new DispatchMachine(ctx, { vocabulary: VOCABULARY })
+    machine.start()
+    const definitions = new Map<string, PluginDefinition>()
+    definitions.set('provider', fixture('provider', {
+      provides: ['bash'],
+      hostPublishAccess: true,
+      hooks: {
+        activate(env) {
+          env.provide('bash', { run: () => 'managed-bash' })
+        },
+      },
+    }))
+    const engine = new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store,
+      config: resolvePluginManagerConfig({
+        grants: { provider: { hostPublish: true } },
+      }),
+      hostProvide,
+      resolveSource: async (source: PluginSource) => {
+        const definition = definitions.get(source.type === 'inline' ? source.code : source.package)
+        if (definition === undefined) throw new Error('missing')
+        return definition
+      },
+    })
+    await engine.install(source('provider'))
+    expect(published.has('bash')).toBe(true)
+    expect((published.get('bash')?.value as { run(): string }).run()).toBe('managed-bash')
+    await engine.uninstall('provider')
+    expect(published.has('bash')).toBe(false)
+  })
+
+  it('invokes deactivate and dispose hooks on generation disposal', async () => {
+    const h = harness()
+    const calls: string[] = []
+    h.definitions.set('lifecycle', fixture('lifecycle', {
+      hooks: {
+        deactivate: async () => { calls.push('deactivate') },
+        dispose: () => { calls.push('dispose') },
+      },
+    }))
+    await h.engine.install(source('lifecycle'))
+    expect(calls).toEqual([])
+    await h.engine.uninstall('lifecycle')
+    expect(calls).toEqual(['deactivate', 'dispose'])
+  })
+})
+
+describe('checkSupport', () => {
+  it('accepts a valid raw plugin and rejects a broken entry shape', async () => {
+    const { engine } = harness()
+    await expect(engine.checkSupport({ name: 'ok', apply() {} })).resolves.toEqual({ ok: true })
+    await expect(engine.checkSupport({} as never)).resolves.toMatchObject({ ok: false })
+  })
+
+  it('reports missing host services without mutating state', async () => {
+    const { engine } = harness({
+      hostService: (capability) => (capability === 'present' ? {} : undefined),
+    })
+    const raw = { name: 'needy', inject: ['present', 'absent'], apply() {} }
+    await expect(engine.checkSupport(raw)).resolves.toEqual({
+      ok: false,
+      reason: '宿主缺少服务：absent',
+    })
+    await expect(engine.plugins()).toEqual([])
+  })
+})
+
+describe('updateRaw', () => {
+  it('swaps the raw plugin generation through the HMR replace protocol', async () => {
+    const { engine } = harness()
+    const raw = (marker: string) => ({
+      name: 'raw-update',
+      apply() { void marker },
+    })
+    await engine.adoptRaw(raw('v1'), {})
+    expect(engine.plugins()[0]?.generation).toBe(1)
+    await engine.updateRaw(raw('v2'), {}, 'raw-update')
+    const handle = engine.plugins()[0]
+    expect(handle?.id).toBe('raw-update')
+    expect(handle?.generation).toBe(2)
+    expect(engine.plugins()).toHaveLength(1)
   })
 })

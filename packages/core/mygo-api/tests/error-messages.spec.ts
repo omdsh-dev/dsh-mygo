@@ -57,6 +57,11 @@ const CASES: readonly MessageCase[] = [
     named: ['intercept'],
   },
   {
+    code: 'install-denied',
+    details: { grant: 'dynamicInstall', plugin: 'plugin-a' },
+    named: ['dynamicInstall', 'plugin-a'],
+  },
+  {
     code: 'ceiling-exceeded',
     details: { level: 'intercept', channel: 'model', ceiling: 'transform' },
     named: ['intercept', 'transform', 'model', 'grants cannot exceed the ceiling'],
@@ -196,13 +201,38 @@ const CASES: readonly MessageCase[] = [
     details: { plugin: 'plugin-a', url: 'https://example.dev/api' },
     named: ['plugin-a', 'https://example.dev/api'],
   },
+  {
+    code: 'vars-denied',
+    details: { plugin: 'plugin-a', name: 'GIT_AUTHOR_NAME', mode: 'write' },
+    named: ['plugin-a', 'GIT_AUTHOR_NAME', 'write'],
+  },
+  {
+    code: 'llm-denied',
+    details: { plugin: 'plugin-a', model: 'probe-model' },
+    named: ['plugin-a', 'probe-model'],
+  },
+  {
+    code: 'exec-denied',
+    details: { plugin: 'plugin-a', command: 'gh' },
+    named: ['plugin-a', 'gh'],
+  },
+  {
+    code: 'http-denied',
+    details: { plugin: 'plugin-a', path: '/admin' },
+    named: ['plugin-a', '/admin'],
+  },
+  {
+    code: 'emit-denied',
+    details: { plugin: 'plugin-a', event: 'pi-ext/secret' },
+    named: ['plugin-a', 'pi-ext/secret'],
+  },
 ]
 
 describe('PluginError message templates (§16.2)', () => {
   it('covers every transcribed code exactly once', () => {
     const codes = CASES.map(entry => entry.code)
     expect(new Set(codes).size).toBe(codes.length)
-    expect(codes).toHaveLength(36)
+    expect(codes).toHaveLength(42)
   })
 
   it('names every "naming X" entity for each code', () => {

@@ -1,12 +1,11 @@
 /**
  * Type-only contract surface of `@deepseek-ai/dsh-mygo`: the
- * `ctx.pluginManager` service key, manager Config (§15.6 + §17), grants, and
- * the mount-time validation options. This module deliberately contains no
- * runtime code; the validation chain itself lives in `mount.ts`.
+ * `ctx.pluginManager` service key, manager Config, and the mount-time
+ * validation options. This module deliberately contains no runtime code; the
+ * validation chain itself lives in `mount.ts`.
  * @module @deepseek-ai/dsh-mygo/src/types
  */
 
-import type { FileAccessEntry } from '@deepseek-ai/dsh-mygo-api'
 import type {
   InstallOrigin,
   InstallOptions,
@@ -15,29 +14,11 @@ import type {
   PluginErrorCode,
   PluginHandleInfo,
   PluginSource,
+  RawCordisFunctionPlugin,
 } from '@deepseek-ai/dsh-mygo-api'
 import type { PluginEventVocabularyEntry } from './event-vocabulary.ts'
 
-/**
- * The permission level ladder used by channel ceilings (§15.6, §17 rule 2):
- * `observe` < `transform` < `intercept` < `claims`. A channel ceiling caps
- * what a plugin may declare even when a matching grant exists.
- */
-export type PermissionLevel = 'observe' | 'transform' | 'intercept' | 'claims'
-
-/** Deployment-granted permissions for one plugin id (§17). */
-export interface PluginGrants {
-  /** Authorizes `intercept` declarations; default `false` (`grant-missing` when declared without it). */
-  readonly intercept?: boolean
-  /** Authorizes `claims` declarations; default `false` (`grant-missing` when declared without it). */
-  readonly claims?: boolean
-  /** Deployment-granted `[mode, path]` file-access entries; declared entries must be covered. */
-  readonly fileAccess?: readonly FileAccessEntry[]
-  /** Deployment-granted URL allowlist for `env.fetch`; declared entries must be covered. */
-  readonly networkAccess?: { readonly allow: readonly string[] }
-}
-
-/** Manager deployment Config (§15.6 + §17). */
+/** Manager deployment Config. */
 export interface PluginManagerConfig {
   /** Max inline source code bytes per install, checked before staging. */
   readonly maxCodeBytes: number
@@ -53,18 +34,10 @@ export interface PluginManagerConfig {
   readonly stateRoot: string
   /** Generation history retained per plugin. */
   readonly historyKeep: number
-  /** Ceiling for the `runtime-api` channel; `claims` means no extra cap. */
-  readonly maxRuntimeApiPermissionLevel: PermissionLevel
   /** Bounded drain/next-idle wait for replace (HP:139). */
   readonly swapTimeoutMs: number
-  /** Per-plugin grants map; key = plugin id; ships empty. */
-  readonly grants?: Readonly<Record<string, PluginGrants>>
   /** `'<event>.<property>'` fields that `writes` may not touch (PO:219/SEC:152). */
   readonly protectedFields?: readonly string[]
-  /** Skip provenance checks with a warning (SEC:158); production is always `false`. */
-  readonly development?: boolean
-  /** Npm scopes trusted without attestation (§20). */
-  readonly trustedScopes?: readonly string[]
 }
 
 /** One operation fed to `plan()` (§15.3). */
@@ -117,24 +90,54 @@ export interface PluginManager {
   plan(operation: PluginOperation): Promise<PluginOperationPlan>
   /** Static-composition self-adoption; not persisted, `origin: 'static'` (#12). */
   adopt(definition: PluginDefinition, config: unknown): Promise<void>
+  /**
+   * Zero-intrusion static adoption of a raw Cordis plugin module: the
+   * manifest is auto-derived from `name`/`inject`/`Config`/`apply` and the
+   * generation runs through the host-shaped transparent facade.
+   * @param raw - the raw cordis plugin module.
+   * @param config - deployment config validated against the raw Config schema.
+   * @param id - optional manager-side plugin id; defaults to the derived id.
+   */
+  adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo>
+  /**
+   * Live-update a previously adopted raw plugin: re-derive the manifest from
+   * the new module and run the HMR replace protocol (capture → stage → swap
+   * → dispose) so in-progress sessions and the host process stay live.
+   * @param raw - the new raw Cordis plugin module.
+   * @param config - deployment config for the new generation.
+   * @param id - the existing manager-side plugin id (required).
+   * @returns the updated plugin handle.
+   */
+  updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo>
+  /**
+   * Remove an uninstall tombstone so a previously uninstalled static/bundle
+   * plugin can be adopted again.
+   * @param id - plugin id whose tombstone should be cleared.
+   */
+  clearUninstallTombstone(id: string): Promise<void>
+  /**
+   * Pre-mount support check: derive the managed manifest from a raw plugin
+   * and verify the host can satisfy its declared requires, without mutating
+   * any state. Bridge callers use this to skip unsupported plugins at boot
+   * instead of letting one broken row fail the whole plugin tree.
+   * @param raw - the raw Cordis plugin module.
+   * @param id - optional manager-side plugin id; defaults to the derived id.
+   * @returns `{ ok: true }` or `{ ok: false, reason }`.
+   */
+  checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck>
 }
 
-/** Inputs the mount-time validation chain needs beyond the manifest (§15.1/§16/§17/§20). */
+/** Result of a pre-mount support check. */
+export type PluginSupportCheck = { readonly ok: true } | { readonly ok: false; readonly reason: string }
+
+/** Inputs the mount-time validation chain needs beyond the manifest. */
 export interface MountValidationOptions {
-  /** Source the plugin comes from; the model channel accepts inline only. */
+  /** Source the plugin comes from. */
   readonly source: PluginSource | { readonly type: 'static' }
-  /** Channel identity; `static` has no ceiling. */
+  /** Channel identity. */
   readonly origin: 'static' | InstallOrigin
-  /** Channel permission ceiling; `claims` = no extra cap. Callers resolve it from the owning channel's Config. */
-  readonly channelCeiling: PermissionLevel
-  /** The deployment's grants entry for this plugin id, when any. */
-  readonly grants?: PluginGrants
   /** Deployment-protected `'<event>.<property>'` fields. */
   readonly protectedFields?: readonly string[]
-  /** Skip provenance checks with a warning (SEC:158). */
-  readonly development?: boolean
-  /** Npm scopes trusted without attestation (§20). */
-  readonly trustedScopes?: readonly string[]
   /** Harness event vocabulary; defaults to the generated `EVENT_VOCABULARY`. */
   readonly vocabulary?: readonly PluginEventVocabularyEntry[]
 }

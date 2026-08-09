@@ -1,5 +1,5 @@
 /**
- * Runnable examples from docs/plugin-author-guide.md — the tutorial's code
+ * Runnable examples from the author guide — the tutorial's code
  * blocks are these exact sources, guarded by REAL-composition tests so a
  * documented example can never drift into a non-runnable state.
  * @module dsh-mygo/tests/author-examples

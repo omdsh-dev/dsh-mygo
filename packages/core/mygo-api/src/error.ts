@@ -1,6 +1,6 @@
 /**
  * The plugin management error vocabulary: one error class, a closed code table
- * of 36 codes in six groups, and message templates that name every machine
+ * of 42 codes in six groups, and message templates that name every machine
  * entity the spec §16.2 attaches to each code.
  * @module @deepseek-ai/dsh-mygo-api/src/error
  */
@@ -31,6 +31,8 @@ export type PluginErrorCode =
   // 组 2：权限与授权（mount 期）
   /** declared intercept/claims/fileAccess/networkAccess without a grants entry; details: grant */
   | 'grant-missing'
+  /** runtime dynamic-install call without the deployment grant; details: grant + plugin */
+  | 'install-denied'
   /** declared level above the channel ceiling; details: level + channel + ceiling */
   | 'ceiling-exceeded'
   /** source type not accepted by the channel; details: channel + source */
@@ -91,6 +93,16 @@ export type PluginErrorCode =
   | 'fs-denied'
   /** no networkAccess grant or URL outside the allowlist; details: plugin + url */
   | 'network-denied'
+  /** env var name outside varsAccess grants (read or write); details: plugin + name + mode */
+  | 'vars-denied'
+  /** model call outside llmAccess grants or with no host seam; details: plugin + model */
+  | 'llm-denied'
+  /** subprocess command outside execAccess grants or with no host seam; details: plugin + command */
+  | 'exec-denied'
+  /** HTTP route outside httpAccess grants; details: plugin + path */
+  | 'http-denied'
+  /** custom event emit outside the plugin's declared events/namespaces; details: plugin + event */
+  | 'emit-denied'
 
 /**
  * The single error class of the plugin management surface. `message` is
@@ -147,6 +159,8 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     `unsupported event option ${render(details.option)}: manifest position is the only listener-option entry`,
   'grant-missing': details =>
     `missing grant ${render(details.grant)} for declared access`,
+  'install-denied': details =>
+    `plugin ${render(details.plugin)} is not granted dynamicInstall (grant ${render(details.grant)})`,
   'ceiling-exceeded': details =>
     `declared level ${render(details.level)} exceeds channel ceiling ${render(details.ceiling)} for channel ${render(details.channel)}; grants cannot exceed the ceiling`,
   'source-not-allowed': details =>
@@ -203,6 +217,16 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     `filesystem access denied for plugin ${render(details.plugin)}: ${render(details.mode)} on ${render(details.path)} is outside fileAccess`,
   'network-denied': details =>
     `network access denied for plugin ${render(details.plugin)}: ${render(details.url)} is outside networkAccess`,
+  'vars-denied': details =>
+    `environment variable access denied for plugin ${render(details.plugin)}: ${render(details.mode)} on ${render(details.name)} is outside varsAccess`,
+  'llm-denied': details =>
+    `model call denied for plugin ${render(details.plugin)}: model ${render(details.model)} is outside llmAccess`,
+  'exec-denied': details =>
+    `subprocess execution denied for plugin ${render(details.plugin)}: command ${render(details.command)} is outside execAccess`,
+  'http-denied': details =>
+    `http route denied for plugin ${render(details.plugin)}: path ${render(details.path)} is outside httpAccess`,
+  'emit-denied': details =>
+    `event emit denied for plugin ${render(details.plugin)}: ${render(details.event)} is outside the declared events`,
 }
 
 /**

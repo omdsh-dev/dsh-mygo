@@ -1,7 +1,7 @@
 /**
  * §23.1 adapters: the self-adoption shape delegates to the manager, and the
- * migration bridge runs a raw cordis apply against a restricted facade that
- * rejects direct EventOptions.
+ * migration bridge runs a raw cordis apply against a host-shaped transparent
+ * facade that intercepts registrations and forwards everything else.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -39,6 +39,28 @@ describe('toCordisPlugin', () => {
 })
 
 describe('fromCordisPlugin', () => {
+  it('mounts a Service-style class plugin via new (token-meter pattern)', () => {
+    class RawServicePlugin {
+      static inject = ['sessions']
+      static Config = z.object({})
+
+      constructor(ctx: unknown) {
+        const facade = ctx as {
+          provide(key: string, value: unknown): () => void
+          on(event: string, listener: (...args: unknown[]) => unknown): () => void
+        }
+        facade.provide('skillStats', this)
+        facade.on('session/event', () => {})
+      }
+    }
+    const env = createFakeEnv(fixture('classy'))
+    const bridged = fromCordisPlugin(RawServicePlugin, fixture('classy'))
+    void bridged.hooks.activate?.(env)
+    expect(env.provided.find(record => record.capability === 'skillStats')?.value)
+      .toBeInstanceOf(RawServicePlugin)
+    expect(env.listeners.some(record => record.event === 'session/event')).toBe(true)
+  })
+
   it('runs the raw apply against the restricted facade', () => {
     const env = createFakeEnv(fixture('bridged'))
     const calls: string[] = []
@@ -67,7 +89,7 @@ describe('fromCordisPlugin', () => {
     expect(env.logs.some(log => log.args[0] === 'hello')).toBe(true)
   })
 
-  it('rejects direct EventOptions with unsupported-event-option', () => {
+  it('accepts direct EventOptions and still registers the listener', () => {
     const env = createFakeEnv(fixture('strict'))
     const raw = {
       name: 'raw',
@@ -75,14 +97,29 @@ describe('fromCordisPlugin', () => {
         ctx.on('agent/created', () => {}, { prepend: true })
       },
     }
-    const bridged = fromCordisPlugin(raw, fixture('strict'))
-    expect(() => { void bridged.hooks.activate?.(env) }).toThrow(PluginError)
-    try {
-      void bridged.hooks.activate?.(env)
-    } catch (error) {
-      expect((error as PluginError).code).toBe('unsupported-event-option')
-      expect((error as PluginError).pluginId).toBe('strict')
+    void fromCordisPlugin(raw, fixture('strict')).hooks.activate?.(env)
+    expect(env.listeners).toHaveLength(1)
+    expect(env.listeners[0]?.event).toBe('agent/created')
+  })
+
+  it('accepts both the logger factory shape and the logger object shape', () => {
+    const env = createFakeEnv(fixture('logger-shape'))
+    const raw = {
+      name: 'raw',
+      apply(ctx: {
+        logger: { info(message: unknown): void; warn(message: unknown): void } & ((name: string) => {
+          info(message: unknown): void
+        })
+      }) {
+        ctx.logger('auto-approval').info('factory line')
+        ctx.logger.warn('object line')
+      },
     }
+    void fromCordisPlugin(raw, fixture('logger-shape')).hooks.activate?.(env)
+    expect(env.logs).toEqual([
+      { level: 'info', args: ['factory line'] },
+      { level: 'warn', args: ['object line'] },
+    ])
   })
 
   it('fills the raw config through its schemastery schema with empty input', () => {
@@ -206,7 +243,7 @@ describe('fromCordisPlugin', () => {
     }
   })
 
-  it('forwards ctx.sessionPersistence through env.get with the declaration gate (SEC:86)', () => {
+  it('forwards ctx.sessionPersistence through env.get (host passthrough)', () => {
     const service = { listSnapshots: async () => [{ id: 's1' }] }
     const env = createFakeEnv({
       ...fixture('session-bridge'),

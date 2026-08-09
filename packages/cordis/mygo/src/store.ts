@@ -37,11 +37,13 @@ export interface StatusRecord {
   /** Previous generation number, when retained in history. */
   readonly previousGen: number | null
   /** Lifecycle status; `quarantined`/`shadowed` carry a §16.3 reason. */
-  readonly status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed'
+  readonly status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed' | 'uninstalled'
   /** §16.3 recovery reason when the status is not `enabled`. */
   readonly reason?: string
   /** Durable state-snapshot pointer (§22.2); written after the file rename. */
   readonly snapshot?: { readonly path: string; readonly bytes: number; readonly sha256: string }
+  /** Tool names owned by an uninstalled plugin (persisted uninstall tombstone). */
+  tools?: readonly string[]
   readonly provenance: ProvenanceRecord
 }
 

@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { Context } from 'cordis'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -235,7 +235,7 @@ async function boot(
   ctx.storage.backend.register('sqlite', backend)
   const facility = new DomainFacility(ctx, { backend: 'sqlite' })
   ctx.storage.mount('domain', facility)
-  const persistence = await RegistryPersistence.open(ctx, facility, {
+  const persistence = await RegistryPersistence.open(facility, {
     profile: 'main',
     stateRoot: paths.stateRoot,
     auditMaxBytes: 1024 * 1024,
@@ -606,22 +606,26 @@ describe('T4 recovery table (six row classes)', () => {
     }
   })
 
-  it('validation-failed: a changed grant environment quarantines with the original code', async () => {
+  it('validation-failed: a changed protected-field environment quarantines with the original code', async () => {
     const shared = await paths()
     try {
       const definitions = new Map<string, PluginDefinition>()
-      const withGrants = resolvePluginManagerConfig({
-        grants: { p: { networkAccess: { allow: ['https://ok.dev'] } } },
-      })
-      const first = await boot(shared, definitions, { config: withGrants })
-      first.definitions.set('p', fixture('p', { networkAccess: { allow: ['https://ok.dev'] } }))
+      const first = await boot(shared, definitions)
+      first.definitions.set('p', fixture('p', {
+        permissions: {
+          ...fixture('p').permissions,
+          transform: [{ event: 'lifecycle/waterfall', writes: ['x'] }],
+        },
+      }))
       await first.engine.install(source('p'))
       await first.close()
 
-      const second = await boot(shared, definitions)
+      const second = await boot(shared, definitions, {
+        config: resolvePluginManagerConfig({ protectedFields: ['lifecycle/waterfall.x'] }),
+      })
       const report = await second.engine.recover()
       expect(report.quarantined).toBe(1)
-      expect(report.rows[0]).toMatchObject({ id: 'p', status: 'quarantined', reason: 'validation-failed', errorCode: 'grant-missing' })
+      expect(report.rows[0]).toMatchObject({ id: 'p', status: 'quarantined', reason: 'validation-failed', errorCode: 'protected-field' })
       await second.close()
     } finally {
       await cleanup(shared)
@@ -695,7 +699,7 @@ describe('T4 recovery table (six row classes)', () => {
     }
   })
 
-  it('medium-reset: a stamped version mismatch discards and reopens empty (T4-5)', async () => {
+  it('medium damage: a stamped version mismatch fails open loudly (T4-5, 0809 contract)', async () => {
     const shared = await paths()
     try {
       const definitions = new Map<string, PluginDefinition>()
@@ -708,12 +712,7 @@ describe('T4 recovery table (six row classes)', () => {
       db.prepare('UPDATE units SET version = 99 WHERE name = ?').run('plugin_registry_main')
       db.close()
 
-      const second = await boot(shared, definitions)
-      await second.engine.recover()
-      expect(second.engine.plugins()).toEqual([])
-      await expect.poll(async () => (await second.persistence.audit.tail(20))
-        .some(entry => entry.class === 'medium-reset')).toBe(true)
-      await second.close()
+      await expect(boot(shared, definitions)).rejects.toMatchObject({ code: 'version-mismatch' })
     } finally {
       await cleanup(shared)
     }
@@ -962,24 +961,28 @@ describe('T4 edge rows and snapshot lifecycle', () => {
     const shared = await paths()
     try {
       const definitions = new Map<string, PluginDefinition>()
-      const withGrants = resolvePluginManagerConfig({
-        grants: { p: { networkAccess: { allow: ['https://ok.dev'] } } },
-      })
-      const first = await boot(shared, definitions, { config: withGrants })
-      first.definitions.set('p', fixture('p', { networkAccess: { allow: ['https://ok.dev'] } }))
+      const first = await boot(shared, definitions)
+      first.definitions.set('p', fixture('p', {
+        permissions: {
+          ...fixture('p').permissions,
+          transform: [{ event: 'lifecycle/waterfall', writes: ['x'] }],
+        },
+      }))
       await first.engine.install(source('p'))
       await first.close()
 
-      // First recovery: environment lost the grant → quarantined durably.
-      const second = await boot(shared, definitions)
+      // First recovery: environment now protects the field → quarantined durably.
+      const second = await boot(shared, definitions, {
+        config: resolvePluginManagerConfig({ protectedFields: ['lifecycle/waterfall.x'] }),
+      })
       const firstReport = await second.engine.recover()
       expect(firstReport.quarantined).toBe(1)
       expect(second.engine.plugins()).toEqual([])
       await second.close()
 
-      // Second recovery with grants restored: the quarantined row revalidates
+      // Second recovery with the field unprotected: the quarantined row revalidates
       // but stays status-only until an explicit operation.
-      const third = await boot(shared, definitions, { config: withGrants })
+      const third = await boot(shared, definitions)
       const report = await third.engine.recover()
       expect(report.rows[0]).toMatchObject({ id: 'p', status: 'quarantined', reason: 'validation-failed' })
       expect(third.engine.plugins()[0]).toMatchObject({ id: 'p', status: 'quarantined', version: '' })
@@ -988,7 +991,6 @@ describe('T4 edge rows and snapshot lifecycle', () => {
       third.definitions.set('p2', fixture('p', {
         version: '2.0.0',
         swapPolicy: 'drain',
-        networkAccess: { allow: ['https://ok.dev'] },
       }))
       await third.engine.replace('p', source('p2'))
       expect(third.engine.plugins()[0]).toMatchObject({ id: 'p', version: '2.0.0', status: 'enabled' })
@@ -1282,71 +1284,6 @@ describe('snapshot handoff and registry quotas', () => {
       await npmBoot.engine.install({ type: 'npm', package: 'p' })
       expect(npmBoot.engine.plugins()[0]?.id).toBe('p')
       await npmBoot.close()
-    } finally {
-      await cleanup(shared)
-    }
-  })
-})
-
-describe('audit medium-reset boundaries', () => {
-  it('audits a reset only for the owning profile', async () => {
-    const shared = await paths()
-    try {
-      const ctx = new Context()
-      await ctx.plugin(Storage)
-      const backend = new SqliteStorageBackend({ path: shared.dbFile, journalMode: 'wal' })
-      ctx.storage.backend.register('sqlite', backend)
-      const facility = new DomainFacility(ctx, { backend: 'sqlite' })
-      ctx.storage.mount('domain', facility)
-      const main = await RegistryPersistence.open(ctx, facility, {
-        profile: 'main', stateRoot: shared.stateRoot, auditMaxBytes: 1024 * 1024, auditKeepFiles: 3,
-      })
-      const other = await RegistryPersistence.open(ctx, facility, {
-        profile: 'other', stateRoot: shared.stateRoot, auditMaxBytes: 1024 * 1024, auditKeepFiles: 3,
-      })
-      await main.close()
-
-      const db = new DatabaseSync(shared.dbFile)
-      db.prepare('UPDATE units SET version = 99 WHERE name = ?').run('plugin_registry_main')
-      db.close()
-
-      const domain = await facility.open(pluginRegistryDomainSpec('main'))
-      await expect.poll(async () => (await main.audit.tail(10)).some(entry => entry.class === 'medium-reset')).toBe(true)
-      expect((await other.audit.tail(10)).some(entry => entry.class === 'medium-reset')).toBe(false)
-      await domain.close()
-      await other.close()
-      await backend.close()
-    } finally {
-      await cleanup(shared)
-    }
-  })
-
-  it('warns when the medium-reset audit append fails', async () => {
-    const shared = await paths()
-    try {
-      await mkdir(shared.stateRoot, { recursive: true })
-      await writeFile(join(shared.stateRoot, 'main'), 'not a directory')
-      const ctx = new Context()
-      await ctx.plugin(Storage)
-      const backend = new SqliteStorageBackend({ path: shared.dbFile, journalMode: 'wal' })
-      ctx.storage.backend.register('sqlite', backend)
-      const facility = new DomainFacility(ctx, { backend: 'sqlite' })
-      ctx.storage.mount('domain', facility)
-      const warns: string[] = []
-      ctx.logger.warn = ((message: unknown) => { warns.push(String(message)) }) as typeof ctx.logger.warn
-      const persistence = await RegistryPersistence.open(ctx, facility, {
-        profile: 'main', stateRoot: shared.stateRoot, auditMaxBytes: 1024 * 1024, auditKeepFiles: 3,
-      })
-      await persistence.close()
-
-      const db = new DatabaseSync(shared.dbFile)
-      db.prepare('UPDATE units SET version = 99 WHERE name = ?').run('plugin_registry_main')
-      db.close()
-
-      const domain = await facility.open(pluginRegistryDomainSpec('main'))
-      await domain.close()
-      await expect.poll(() => warns.some(line => line.includes('medium-reset audit failed'))).toBe(true)
-      await backend.close()
     } finally {
       await cleanup(shared)
     }

@@ -41,17 +41,17 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-invariants": "^0.0.1",
-    "@deepseek-ai/dsh-paths": "^0.0.1",
-    "@deepseek-ai/dsh-mygo-api": "^0.0.1",
-    "@deepseek-ai/dsh-skill": "^0.0.1",
-    "@deepseek-ai/dsh-storage": "^0.0.1",
-    "@deepseek-ai/dsh-storage-domain": "^0.0.1",
-    "@deepseek-ai/dsh-storage-sqlite": "^0.0.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.0.1",
-    "@deepseek-ai/dsh-timeout": "^0.0.1",
-    "@deepseek-ai/dsh-tool-cordis": "^0.0.1",
-    "@deepseek-ai/dsh-tools": "^0.0.1",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/dsh-paths": "workspace:^",
+    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "@deepseek-ai/dsh-skill": "workspace:^",
+    "@deepseek-ai/dsh-storage": "workspace:^",
+    "@deepseek-ai/dsh-storage-domain": "workspace:^",
+    "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
+    "@deepseek-ai/dsh-system-prompt": "workspace:^",
+    "@deepseek-ai/dsh-timeout": "workspace:^",
+    "@deepseek-ai/dsh-tool-cordis": "workspace:^",
+    "@deepseek-ai/dsh-tools": "workspace:^",
     "cordis": "^4.0.0-rc.7"
   }
 }

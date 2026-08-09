@@ -131,12 +131,6 @@ export const EVENT_VOCABULARY: readonly PluginEventVocabularyEntry[] = [
     branches: [],
   },
   {
-    name: 'domain/reset',
-    mode: 'emit',
-    properties: [],
-    branches: [],
-  },
-  {
     name: 'fs/edit-intent',
     mode: 'waterfall',
     properties: ['version'],

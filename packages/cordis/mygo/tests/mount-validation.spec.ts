@@ -1,8 +1,7 @@
 /**
- * §16.5 mount-time acceptance: every group-1/group-2 code is triggerable
- * through the mount validation chain, every message names the entities its
- * template requires, and the success paths surface the development-mode
- * warning (SEC:158) instead of throwing.
+ * Mount-time acceptance: manifest/declaration checks (events, vocabulary,
+ * property names, mode ceilings) and protected-field enforcement. Permission
+ * grants are gone.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -17,11 +16,7 @@ import { fixturePlugin } from './helpers.ts'
 const BASE_OPTIONS: MountValidationOptions = {
   source: { type: 'inline', code: 'export default {}' },
   origin: 'runtime-api',
-  channelCeiling: 'claims',
-  grants: {},
   protectedFields: [],
-  development: false,
-  trustedScopes: [],
 }
 
 function caught(definition: Parameters<typeof validateMount>[0], options: MountValidationOptions = BASE_OPTIONS): PluginError {
@@ -42,6 +37,58 @@ describe('validateMount group 1 (manifest and declarations)', () => {
     expect(error.message).toContain('id')
     expect(error.message).toContain('expected')
     expect(error.pluginId).toBeUndefined()
+  })
+
+  it('accepts declared custom events and rejects reserved collisions / observe-only violations', () => {
+    const ok = validateMount(fixturePlugin({
+      events: ['custom/thing'],
+      permissions: { ...fixturePlugin().permissions, observe: ['custom/thing'] },
+    }), BASE_OPTIONS)
+    expect(ok.warnings).toEqual([])
+
+    const reserved = caught(fixturePlugin({ events: ['session/created'] }))
+    expect(reserved.code).toBe('manifest-invalid')
+    expect(reserved.details).toMatchObject({ field: 'events' })
+
+    const observeOnly = caught(fixturePlugin({
+      events: ['custom/thing'],
+      permissions: {
+        ...fixturePlugin().permissions,
+        transform: [{ event: 'custom/thing', writes: [] }],
+      },
+    }))
+    expect(observeOnly.code).toBe('manifest-invalid')
+    expect(observeOnly.details).toMatchObject({ field: 'events' })
+  })
+
+  it('accepts declared event namespaces and rejects malformed/reserved patterns and permission use', () => {
+    const ok = validateMount(fixturePlugin({
+      events: ['pi-ext/*'],
+    }), BASE_OPTIONS)
+    expect(ok.warnings).toEqual([])
+
+    const malformed = caught(fixturePlugin({ events: ['pi-ext/*/deep'] }))
+    expect(malformed.code).toBe('manifest-invalid')
+    expect(malformed.details).toMatchObject({ field: 'events.0' })
+
+    const reserved = caught(fixturePlugin({ events: ['agent/*'] }))
+    expect(reserved.code).toBe('manifest-invalid')
+    expect(reserved.details).toMatchObject({ field: 'events' })
+
+    const observeOnly = caught(fixturePlugin({
+      events: ['pi-ext/*'],
+      permissions: {
+        ...fixturePlugin().permissions,
+        transform: [{ event: 'pi-ext/gate', writes: [] }],
+      },
+    }))
+    expect(observeOnly.code).toBe('manifest-invalid')
+    expect(observeOnly.details).toMatchObject({ field: 'events' })
+  })
+
+  it('accepts dynamicInstallAccess without any deployment grant', () => {
+    const result = validateMount(fixturePlugin({ dynamicInstallAccess: true }), BASE_OPTIONS)
+    expect(result.warnings).toEqual([])
   })
 
   it('names the manifest root for a non-object manifest', () => {
@@ -73,6 +120,19 @@ describe('validateMount group 1 (manifest and declarations)', () => {
     } as unknown as Parameters<typeof validateMount>[0])
     expect(error.code).toBe('manifest-invalid')
     expect(error.details).toMatchObject({ field: 'hooks.activate' })
+  })
+
+  it('accepts a client-half declaration and rejects a malformed one', () => {
+    const result = validateMount(fixturePlugin({
+      client: { main: './lib/client.js', inject: ['@deepseek-ai/dsh-client-runtime'] },
+    }), BASE_OPTIONS)
+    expect(result.warnings).toEqual([])
+
+    const error = caught(fixturePlugin({
+      client: { main: '', inject: [] },
+    }))
+    expect(error.code).toBe('manifest-invalid')
+    expect(error.details).toMatchObject({ field: 'client.main' })
   })
 
   it('rejects observe declarations outside the harness tier with event-not-mountable', () => {
@@ -115,7 +175,7 @@ describe('validateMount group 1 (manifest and declarations)', () => {
         ...fixturePlugin().permissions,
         intercept: [{ event: 'agent/turn-stopping', returns: [] }],
       },
-    }), { ...BASE_OPTIONS, grants: { intercept: true } })
+    }), BASE_OPTIONS)
     expect(serial.warnings).toEqual([])
   })
 
@@ -178,138 +238,6 @@ describe('validateMount group 1 (manifest and declarations)', () => {
     expect(provides.code).toBe('capability-range-reserved')
   })
 
-  it('rejects direct event options through assertEventOptions', () => {
-    expect(() => { assertEventOptions([], 'fixture-plugin') }).not.toThrow()
-    try {
-      assertEventOptions([{ prepend: true }], 'fixture-plugin')
-    } catch (caughtError) {
-      expect(caughtError).toBeInstanceOf(PluginError)
-      expect((caughtError as PluginError).code).toBe('unsupported-event-option')
-      expect((caughtError as PluginError).details).toEqual({ option: 'prepend' })
-      expect((caughtError as PluginError).message).toContain('prepend')
-      expect((caughtError as PluginError).pluginId).toBe('fixture-plugin')
-      return
-    }
-    throw new Error('expected assertEventOptions to throw')
-  })
-})
-
-describe('validateMount group 2 (permissions and grants)', () => {
-  it('rejects a model-channel npm source with source-not-allowed', () => {
-    const error = caught(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: 'some-plugin' },
-      origin: 'model',
-    })
-    expect(error.code).toBe('source-not-allowed')
-    expect(error.details).toEqual({ channel: 'model', source: 'npm' })
-    expect(error.message).toContain('model')
-    expect(error.message).toContain('npm')
-  })
-
-  it('rejects declared intercept without the grant with grant-missing', () => {
-    const error = caught(fixturePlugin({
-      permissions: {
-        ...fixturePlugin().permissions,
-        intercept: [{ event: 'tools/pre-execute', returns: ['deny'] }],
-      },
-    }), { ...BASE_OPTIONS, grants: {} })
-    expect(error.code).toBe('grant-missing')
-    expect(error.details).toEqual({ grant: 'intercept' })
-    expect(error.message).toContain('intercept')
-  })
-
-  it('rejects declared claims without the grant with grant-missing', () => {
-    const error = caught(fixturePlugin({
-      permissions: {
-        ...fixturePlugin().permissions,
-        claims: ['service:llm'],
-      },
-    }))
-    expect(error.code).toBe('grant-missing')
-    expect(error.details).toEqual({ grant: 'claims' })
-  })
-
-  it('rejects uncovered fileAccess and networkAccess declarations with grant-missing', () => {
-    const fileError = caught(fixturePlugin({ fileAccess: [['write', '/data/secret.txt']] }), {
-      ...BASE_OPTIONS,
-      grants: { fileAccess: [['read', '/data']] },
-    })
-    expect(fileError.code).toBe('grant-missing')
-    expect(fileError.details).toEqual({ grant: 'fileAccess write /data/secret.txt' })
-
-    const networkError = caught(fixturePlugin({
-      networkAccess: { allow: ['https://example.dev/api'] },
-    }), { ...BASE_OPTIONS, grants: { networkAccess: { allow: ['https://other.dev'] } } })
-    expect(networkError.code).toBe('grant-missing')
-    expect(networkError.details).toEqual({ grant: 'networkAccess https://example.dev/api' })
-  })
-
-  it('accepts covered fileAccess and networkAccess declarations', () => {
-    const result = validateMount(fixturePlugin({
-      fileAccess: [['write', '/data/secret.txt'], ['read', '/notes/a.md']],
-      networkAccess: { allow: ['https://example.dev/api', 'https://cdn.example.dev/x'] },
-    }), {
-      ...BASE_OPTIONS,
-      grants: {
-        fileAccess: [['write', '/data'], ['read', '/notes']],
-        networkAccess: { allow: ['https://example.dev', 'https://cdn.example.dev'] },
-      },
-    })
-    expect(result.warnings).toEqual([])
-  })
-
-  it('rejects declared fileAccess or networkAccess when the grant collection is absent', () => {
-    const fileError = caught(fixturePlugin({ fileAccess: [['read', '/data']] }), {
-      ...BASE_OPTIONS,
-      grants: {},
-    })
-    expect(fileError.code).toBe('grant-missing')
-
-    const networkError = caught(fixturePlugin({
-      networkAccess: { allow: ['https://example.dev/api'] },
-    }), {
-      ...BASE_OPTIONS,
-      grants: {},
-    })
-    expect(networkError.code).toBe('grant-missing')
-  })
-
-  it('accepts exact paths, the root prefix, and exact URLs', () => {
-    const result = validateMount(fixturePlugin({
-      fileAccess: [['read', '/etc/hosts'], ['read', '/var/log/app.log']],
-      networkAccess: { allow: ['https://exact.example.dev/path'] },
-    }), {
-      ...BASE_OPTIONS,
-      grants: {
-        fileAccess: [['read', '/etc/hosts'], ['read', '/']],
-        networkAccess: { allow: ['https://exact.example.dev/path'] },
-      },
-    })
-    expect(result.warnings).toEqual([])
-  })
-
-  it('rejects declared levels above the channel ceiling with ceiling-exceeded naming both axes', () => {
-    const error = caught(fixturePlugin({
-      permissions: {
-        ...fixturePlugin().permissions,
-        intercept: [{ event: 'tools/pre-execute', returns: ['deny'] }],
-      },
-    }), {
-      ...BASE_OPTIONS,
-      source: { type: 'inline', code: 'export default {}' },
-      origin: 'model',
-      channelCeiling: 'transform',
-      grants: { intercept: true },
-    })
-    expect(error.code).toBe('ceiling-exceeded')
-    expect(error.details).toEqual({ level: 'intercept', channel: 'model', ceiling: 'transform' })
-    expect(error.message).toContain('intercept')
-    expect(error.message).toContain('model')
-    expect(error.message).toContain('transform')
-    expect(error.message).toContain('grants cannot exceed the ceiling')
-  })
-
   it('rejects writes hitting protected fields with protected-field', () => {
     const error = caught(fixturePlugin({
       permissions: {
@@ -324,71 +252,10 @@ describe('validateMount group 2 (permissions and grants)', () => {
     expect(error.details).toEqual({ field: 'tools/post-execute.value' })
     expect(error.message).toContain('tools/post-execute.value')
   })
-
-  it('rejects untrusted npm scopes with provenance-rejected unless development warns', () => {
-    const rejected = caught(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: '@untrusted/pkg' },
-      trustedScopes: ['@deepseek-ai'],
-    })
-    expect(rejected.code).toBe('provenance-rejected')
-    expect(rejected.details).toEqual({
-      source: '@untrusted/pkg',
-      missing: 'trusted scope or provenance attestation',
-    })
-    expect(rejected.message).toContain('@untrusted/pkg')
-    expect(rejected.message).toContain('trusted scope or provenance attestation')
-
-    const result = validateMount(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: '@untrusted/pkg' },
-      trustedScopes: ['@deepseek-ai'],
-      development: true,
-    })
-    expect(result.warnings).toEqual([
-      'development-mode: provenance check skipped for package @untrusted/pkg',
-    ])
-  })
-
-  it('rejects scoped npm packages when trustedScopes is absent and unscoped packages always', () => {
-    const scoped = caught(fixturePlugin(), {
-      source: { type: 'npm', package: '@deepseek-ai/some-plugin' },
-      origin: BASE_OPTIONS.origin,
-      channelCeiling: BASE_OPTIONS.channelCeiling,
-      grants: {},
-      protectedFields: [],
-      development: false,
-    })
-    expect(scoped.code).toBe('provenance-rejected')
-
-    const unscoped = caught(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: 'plain-plugin' },
-      trustedScopes: ['@deepseek-ai'],
-    })
-    expect(unscoped.code).toBe('provenance-rejected')
-    expect(unscoped.details.source).toBe('plain-plugin')
-
-    const bareScope = caught(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: '@bare-scope' },
-      trustedScopes: ['@bare-scope'],
-    })
-    expect(bareScope.code).toBe('provenance-rejected')
-  })
-
-  it('accepts a trusted npm scope without warnings', () => {
-    const result = validateMount(fixturePlugin(), {
-      ...BASE_OPTIONS,
-      source: { type: 'npm', package: '@deepseek-ai/some-plugin' },
-      trustedScopes: ['@deepseek-ai'],
-    })
-    expect(result.warnings).toEqual([])
-  })
 })
 
 describe('validateMount success path', () => {
-  it('accepts a fully granted waterfall transform with no warnings', () => {
+  it('accepts a waterfall transform with reads/writes/appends and no warnings', () => {
     const definition = fixturePlugin({
       requires: ['llm'],
       provides: ['counter'],
@@ -403,13 +270,7 @@ describe('validateMount success path', () => {
         }],
       },
     })
-    const result = validateMount(definePlugin(definition), {
-      source: BASE_OPTIONS.source,
-      origin: BASE_OPTIONS.origin,
-      channelCeiling: BASE_OPTIONS.channelCeiling,
-      grants: {},
-      trustedScopes: [],
-    })
+    const result = validateMount(definePlugin(definition), BASE_OPTIONS)
     expect(result.warnings).toEqual([])
   })
 
@@ -423,49 +284,26 @@ describe('validateMount success path', () => {
           appends: ['additionalContexts'],
         }],
       },
-    }), {
-      source: BASE_OPTIONS.source,
-      origin: BASE_OPTIONS.origin,
-      channelCeiling: BASE_OPTIONS.channelCeiling,
-      grants: {},
-    })
+    }), BASE_OPTIONS)
     expect(result.warnings).toEqual([])
   })
 
-  it('accepts claims at the runtime-api ceiling when granted', () => {
-    const result = validateMount(fixturePlugin({
+  it('accepts claims and serial intercept without any grant', () => {
+    const claims = validateMount(fixturePlugin({
       permissions: {
         ...fixturePlugin().permissions,
         claims: ['service:llm'],
       },
-    }), { ...BASE_OPTIONS, grants: { claims: true } })
-    expect(result.warnings).toEqual([])
-  })
+    }), BASE_OPTIONS)
+    expect(claims.warnings).toEqual([])
 
-  it('applies no ceiling for static compositions and no provenance for inline sources', () => {
-    const result = validateMount(fixturePlugin({
-      permissions: {
-        ...fixturePlugin().permissions,
-        claims: ['service:llm'],
-      },
-    }), {
-      ...BASE_OPTIONS,
-      source: { type: 'static' },
-      origin: 'static',
-      channelCeiling: 'observe',
-      grants: { claims: true },
-    })
-    expect(result.warnings).toEqual([])
-  })
-
-  it('accepts serial intercept with an empty returns list when granted', () => {
-    const result = validateMount(fixturePlugin({
+    const intercept = validateMount(fixturePlugin({
       permissions: {
         ...fixturePlugin().permissions,
         intercept: [{ event: 'agent/turn-stopping', returns: [] }],
       },
-    }), { ...BASE_OPTIONS, grants: { intercept: true } })
-    expect(result.warnings).toEqual([])
+    }), BASE_OPTIONS)
+    expect(intercept.warnings).toEqual([])
   })
 })
 

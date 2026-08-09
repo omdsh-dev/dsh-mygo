@@ -28,17 +28,14 @@ export { SnapshotStore } from './snapshots.ts'
 export type { SnapshotMeta } from './snapshots.ts'
 export { openSqliteRegistryStore, parseGenerationRecord, parseStatusRecord, RegistryRowError, SqliteRegistryStore } from './sqlite-store.ts'
 export {
-  assertFileMode,
   claimEffect,
   createPluginFs,
+  createPluginVars,
   createRateLimitedLogger,
   createNetworkFetch,
-  fileModeForPath,
-  networkUrlAllowed,
+  createModelCall,
+  createExecBoundary,
   nodePluginIo,
-  normalizeGatePath,
-  pathPrefixCovers,
-  realPathOf,
   type PluginEffectQuota,
   type PluginIo,
 } from './capabilities.ts'
@@ -51,6 +48,9 @@ export type {
 export type {
   LifecycleEngineOptions,
   LifecycleRecoveryReport,
+  CommandServiceLike,
+  HttpServerLike,
+  SkillServiceLike,
   PromptServiceLike,
   RecoveryRow,
   SessionPersistenceProjection,
@@ -71,11 +71,9 @@ export type {
   DerivationResult,
   MountValidationOptions,
   MountValidationResult,
-  PermissionLevel,
   PlanOperationInput,
   PlanState,
   PluginDeclarationInput,
-  PluginGrants,
   PluginLifecycleEventPayload,
   PluginManager,
   PluginManagerConfig,

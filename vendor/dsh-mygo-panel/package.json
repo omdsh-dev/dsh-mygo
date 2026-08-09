@@ -1,0 +1,27 @@
+{
+  "name": "@dsh-external/dsh-mygo-panel",
+  "version": "0.1.0",
+  "description": "MyGO managed-plugin panel for the dsh web settings page (marisa slot route)",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dshClient": {
+    "inject": [
+      "@deepseek-ai/dsh-client-ui-slots"
+    ],
+    "platform": "web"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-mygo": "workspace:^",
+    "cordis": "^4.0.0-rc.7"
+  }
+}

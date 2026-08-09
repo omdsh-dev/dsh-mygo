@@ -1,7 +1,7 @@
 /**
- * Manager Config schema and resolver (§15.6 + §17). Defaults follow the
+ * Manager Config schema and resolver. Defaults follow the
  * schedule's T6 values: 256KB code, 64MB registry, 1000 dynamic plugins,
- * 50MB audit × 5 files, 2 retained generations, `claims` runtime-api ceiling.
+ * 50MB audit × 5 files, 2 retained generations.
  * `stateRoot` defaults to the harness-home `plugin-state` directory.
  * @module @deepseek-ai/dsh-mygo/src/config
  */
@@ -12,25 +12,6 @@ import type { PluginManagerConfig } from './types.ts'
 
 /** The schema's normalized output: `stateRoot` is optional until the resolver fills it. */
 type ParsedConfig = Omit<PluginManagerConfig, 'stateRoot'> & { readonly stateRoot?: string }
-
-const fileAccessEntry = z.tuple([
-  z.union([z.const('read'), z.const('write')]),
-  z.string(),
-])
-
-const grantsSchema = z.object({
-  intercept: z.boolean(),
-  claims: z.boolean(),
-  fileAccess: z.array(fileAccessEntry),
-  networkAccess: z.object({ allow: z.array(z.string()) }),
-})
-
-const permissionLevelSchema = z.union([
-  z.const('observe'),
-  z.const('transform'),
-  z.const('intercept'),
-  z.const('claims'),
-])
 
 /**
  * Schemastery schema for the manager Config. All fields except `stateRoot`
@@ -46,12 +27,8 @@ export const PluginManagerConfigSchema = z.object({
   auditKeepFiles: z.number().step(1).min(1).default(5),
   stateRoot: z.string(),
   historyKeep: z.number().step(1).min(1).default(2),
-  maxRuntimeApiPermissionLevel: permissionLevelSchema.default('claims'),
   swapTimeoutMs: z.number().step(1).min(1).default(30_000),
-  grants: z.dict(grantsSchema).default({}),
   protectedFields: z.array(z.string()).default([]),
-  development: z.boolean().default(false),
-  trustedScopes: z.array(z.string()).default([]),
 })
 
 /**

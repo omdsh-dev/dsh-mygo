@@ -7,7 +7,6 @@
  * @module @deepseek-ai/dsh-mygo/src/persistence
  */
 
-import type { Context } from 'cordis'
 import type { Domain, DomainFacility, DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { AuditLog } from './audit.ts'
 import { pluginRegistryDomainSpec } from './registry-domain.ts'
@@ -42,15 +41,15 @@ export class RegistryPersistence {
   ) {}
 
   /**
-   * Open the profile's registry domain, snapshot store, and audit log, and
-   * subscribe `domain/reset` into the audit stream (T4-5 medium-reset).
-   * @param ctx - context for the reset event subscription.
+   * Open the profile's registry domain, snapshot store, and audit log.
+   * On 0809 the storage contract no longer carries declared medium reset
+   * (`domain/reset` / `KvFacet.destroy`), so a damage-class open failure
+   * propagates loudly instead of discarding the medium (T4-5 adapted).
    * @param facility - the mounted domain facility.
    * @param options - profile and policy knobs.
    * @returns the composed persistence facade.
    */
   static async open(
-    ctx: Context,
     facility: DomainFacility,
     options: RegistryPersistenceOptions,
   ): Promise<RegistryPersistence> {
@@ -62,13 +61,6 @@ export class RegistryPersistence {
       options.auditMaxBytes,
       options.auditKeepFiles,
     )
-    // Subscribe before open so the medium-reset event of this open is audited.
-    ctx.on('domain/reset', (reset) => {
-      if (reset.domain === spec.name) {
-        void audit.append({ class: 'medium-reset', actor: 'system', details: { code: reset.code } })
-          .catch((error: unknown) => { ctx.logger.warn(`plugin registry medium-reset audit failed: ${String(error)}`) })
-      }
-    })
     const domain = await facility.open(spec)
     const store = new SqliteRegistryStore(domain)
     return new RegistryPersistence(store, snapshots, audit, options.profile, domain)

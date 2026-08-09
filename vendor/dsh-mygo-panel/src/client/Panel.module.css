@@ -1,0 +1,139 @@
+.panel {
+  overflow-wrap: break-word;
+  word-break: keep-all;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 20px 14px;
+  display: flex;
+}
+.head {
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  display: flex;
+}
+.title {
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.item {
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  display: flex;
+}
+.itemBody {
+  overflow-wrap: break-word;
+  word-break: keep-all;
+  min-width: 0;
+}
+.itemId {
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: break-word;
+  word-break: keep-all;
+  font-size: 14px;
+  font-weight: 600;
+}
+.itemMeta {
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: break-word;
+  word-break: keep-all;
+  font-size: 12px;
+}
+.itemActions {
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  display: flex;
+}
+.pill {
+  background: var(--dsw-alias-bg-multi-select);
+  color: var(--dsw-alias-label-tertiary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.pillOn {
+  color: var(--dsw-alias-state-success-primary);
+}
+.btn {
+  cursor: pointer;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-inverted);
+  border: 0;
+  border-radius: 12px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.btnGhost {
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: 0 0;
+}
+.btnDanger {
+  color: var(--dsw-alias-state-error-primary);
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: 0 0;
+}
+.btn:disabled {
+  opacity: .5;
+  cursor: default;
+}
+.status {
+  color: var(--dsw-alias-label-tertiary);
+  min-height: 16px;
+  font-size: 12px;
+}
+.statusError {
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+.installBox {
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  display: flex;
+}
+.installTitle {
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+.row {
+  gap: 8px;
+  display: flex;
+}
+.depsRow {
+  color: var(--dsw-alias-label-secondary);
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  display: flex;
+  cursor: pointer;
+}
+.input {
+  background: var(--dsw-alias-bg-base);
+  min-width: 0;
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+.btnActive {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-inverted);
+}

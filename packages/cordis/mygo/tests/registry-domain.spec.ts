@@ -38,7 +38,6 @@ describe('pluginRegistryDomainSpec', () => {
     const spec = pluginRegistryDomainSpec('Main')
     expect(spec.name).toBe('plugin_registry_main')
     expect(spec.version).toBe(1)
-    expect(spec.recovery).toBe('reset')
     expect(Object.keys(spec.tables)).toEqual(['gens', 'status'])
     expect(spec.tables.gens?.valueSchema.parse('{"v":1}')).toBe('{"v":1}')
     expect(spec.tables.status?.valueSchema.parse('{"v":1}')).toBe('{"v":1}')

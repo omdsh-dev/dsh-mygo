@@ -27,7 +27,7 @@ import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { guardedPlugin, managedToolPluginId, sandboxDefineTool } from '@deepseek-ai/dsh-tool-cordis/src/guard.ts'
+import { guardedPlugin, sandboxDefineTool } from '@deepseek-ai/dsh-tool-cordis/src/guard.ts'
 import { fromCordisPlugin, toCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
 import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
 import PluginManagerService from '@deepseek-ai/dsh-mygo'
@@ -41,6 +41,13 @@ declare module 'cordis' {
 declare module '@deepseek-ai/dsh-mygo-api' {
   interface PluginEvents {
     'tools/change'(): void
+    'custom/thing'(payload: { readonly n: number }): void
+  }
+}
+
+declare module 'cordis' {
+  interface Events {
+    'custom/thing'(payload: { readonly n: number }): void
   }
 }
 
@@ -89,6 +96,8 @@ async function loadComposition(build: (root: string) => readonly string[]): Prom
     ['@deepseek-ai/dsh-mygo/test-session-persistence', StubSessionPersistence],
     ['@deepseek-ai/dsh-mygo', PluginManagerService],
     ['@deepseek-ai/dsh-mygo/test-static', toCordisPlugin(staticDefinition)],
+    ['@deepseek-ai/dsh-mygo/test-custom-events', toCordisPlugin(customEventFixture())],
+    ['@deepseek-ai/dsh-mygo/test-pattern-events', toCordisPlugin(patternEventFixture())],
   ])
   ctx.loader.internal = {
     version: 'v2',
@@ -125,6 +134,55 @@ function staticFixture(): PluginDefinition {
           const holder = globalThis as { dshRealDynamic?: { count: number } }
           const counter = (holder.dshRealDynamic ??= { count: 0 })
           counter.count += 1
+        })
+      },
+    },
+  }
+}
+
+function customEventFixture(): PluginDefinition {
+  return {
+    id: 'custom-events',
+    version: '1.0.0',
+    kinds: ['fixture'],
+    requires: [],
+    provides: [],
+    permissions: { observe: ['custom/thing'], transform: [], intercept: [], position: 'derived', claims: [] },
+    events: ['custom/thing'],
+    stateful: false,
+    swapPolicy: 'immediate',
+    config: z.object({}),
+    hooks: {
+      activate: (env) => {
+        env.on('custom/thing', () => {
+          const state = globalThis as { dshCustomEventCount?: number }
+          state.dshCustomEventCount = (state.dshCustomEventCount ?? 0) + 1
+        })
+      },
+    },
+  }
+}
+
+function patternEventFixture(): PluginDefinition {
+  return {
+    id: 'pattern-events',
+    version: '1.0.0',
+    kinds: ['fixture'],
+    requires: [],
+    provides: [],
+    permissions: { observe: ['tools/change'], transform: [], intercept: [], position: 'derived', claims: [] },
+    events: ['pi-ext/*'],
+    stateful: false,
+    swapPolicy: 'immediate',
+    config: z.object({}),
+    hooks: {
+      activate: (env) => {
+        env.on('pi-ext/from-plugin' as never, (payload: unknown) => {
+          const state = globalThis as { dshPatternBus?: unknown[] }
+          state.dshPatternBus = [...(state.dshPatternBus ?? []), payload]
+        })
+        env.on('tools/change', () => {
+          env.emit('pi-ext/from-plugin', { n: 1 })
         })
       },
     },
@@ -335,6 +393,34 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
     // The registry medium is the sqlite file.
     const header = (await readFile(join(bootRoot, 'registry.db'))).subarray(0, 15).toString()
     expect(header).toContain('SQLite format 3')
+  })
+
+  it('dispatches a plugin-declared custom event through the managed machine', async () => {
+    const { ctx } = await loadComposition(bootRoot => [
+      ...managerRows('<root>', 'realtest-custom', ['    backend: sqlite']),
+      "- name: '@deepseek-ai/dsh-mygo/test-custom-events'",
+      '',
+    ].map(line => line.replace('<root>', bootRoot)))
+    await expect.poll(() => ctx.pluginManager.plugins().map(handle => handle.id)).toContain('custom-events')
+    const state = globalThis as { dshCustomEventCount?: number }
+    delete state.dshCustomEventCount
+    ctx.emit('custom/thing', { n: 1 })
+    await sleep(20)
+    expect(state.dshCustomEventCount).toBe(1)
+  })
+
+  it('materializes a namespace-pattern event bus through managed emit', async () => {
+    const { ctx } = await loadComposition(bootRoot => [
+      ...managerRows('<root>', 'realtest-pattern', ['    backend: sqlite']),
+      "- name: '@deepseek-ai/dsh-mygo/test-pattern-events'",
+      '',
+    ].map(line => line.replace('<root>', bootRoot)))
+    await expect.poll(() => ctx.pluginManager.plugins().map(handle => handle.id)).toContain('pattern-events')
+    const state = globalThis as { dshPatternBus?: unknown[] }
+    delete state.dshPatternBus
+    ctx.emit('tools/change')
+    await sleep(20)
+    expect(state.dshPatternBus).toEqual([{ n: 1 }])
   })
 
   it('covers replace, updateConfig, plan, and source-resolution failures over a dynamic plugin', async () => {
@@ -645,7 +731,7 @@ describe('Proposal A: tools.register bridge (F1/F2 REAL)', () => {
     await expect.poll(() => ctx.tools.schemas().some(schema => schema.name === 'facade_tool')).toBe(false)
   })
 
-  it('F2(b): the tool-cordis sandbox routes a mounted raw tool through the manager when composed', async () => {
+  it('F2(b): the tool-cordis sandbox registers a raw tool directly on 0809 (manager bridge removed from core)', async () => {
     const { ctx } = await loadComposition(bootRoot => toolCompositionRows('<root>', 'f2b')
       .map(line => line.replace('<root>', bootRoot)))
     const tool = sandboxDefineTool({
@@ -660,15 +746,15 @@ describe('Proposal A: tools.register bridge (F1/F2 REAL)', () => {
     })
     ctx.plugin(guardedPlugin({
       name: 'raw-mount',
+      inject: ['tools'],
       apply: (ctxLike: { tools: { register(tool: unknown): () => void } }): void => {
         ctxLike.tools.register(tool)
       },
     }))
     await expect.poll(() => ctx.tools.schemas().some(schema => schema.name === 'sandbox_tool')).toBe(true)
-    const synthesizedId = managedToolPluginId('raw-mount-sandbox_tool')
-    expect(ctx.pluginManager.plugins().some(handle => handle.id === synthesizedId)).toBe(true)
-    await ctx.pluginManager.uninstall(synthesizedId)
-    await expect.poll(() => ctx.tools.schemas().some(schema => schema.name === 'sandbox_tool')).toBe(false)
+    // The 0809 tool-cordis sandboxRegisterTool no longer consults the plugin
+    // manager; the tool lands in the raw registry, so the manager stays empty.
+    expect(ctx.pluginManager.plugins().some(handle => handle.id === 'raw-mount-sandbox_tool')).toBe(false)
   })
 
   it('pre-baked race: raw-held tool names reject loudly and a later raw registration cannot win', async () => {
@@ -746,7 +832,7 @@ describe('Proposal B: systemPrompt/sessionPersistence mapping (REAL)', () => {
     await expect.poll(() => promptChanges).toBe(2)
   })
 
-  it('pre-baked negative: the projection write surface physically fails instead of silently undefined', async () => {
+  it('forwards projection writes to the host sessionPersistence service', async () => {
     const { ctx } = await loadComposition(bootRoot => toolCompositionRows('<root>', 'write-denied')
       .map(line => line.replace('<root>', bootRoot)))
     const probe = `module.exports = {
@@ -761,11 +847,7 @@ describe('Proposal B: systemPrompt/sessionPersistence mapping (REAL)', () => {
       config: () => ({}),
       hooks: { activate: async (env) => { await env.get('sessionPersistence').create({ id: 'x' }) } },
     }`
-    const error = await ctx.pluginManager.install({ type: 'inline', code: probe }).then(
-      () => null,
-      (caught: unknown) => caught as { code?: string; details?: Record<string, unknown> },
-    )
-    expect(error?.code).toBe('staging-failed')
-    expect(String(error?.details?.cause)).toContain('not available to managed plugins')
+    await ctx.pluginManager.install({ type: 'inline', code: probe })
+    expect(ctx.pluginManager.plugins().find(handle => handle.id === 'write-probe')?.status).toBe('enabled')
   })
 })

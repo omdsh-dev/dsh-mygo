@@ -1,214 +1,87 @@
 /**
- * PluginEnv capability boundaries (#16, §3/§17/§18): the file-access gate
- * with write⊃read implication and runtime `..`/symlink normalization, the
- * network allowlist gate, the per-plugin registration quotas, and the
- * rate-limited logger. Every denial is a synchronous `PluginError` from the
- * shared template vocabulary and precedes any actual I/O or network call.
+ * Capability surfaces for managed plugin generations. The permission-gate
+ * layer is removed: filesystem, network, env-var, model, subprocess, and
+ * http-route surfaces are direct host passthroughs. Registration surfaces
+ * still stage through the manager so HMR can swap/dispose them atomically.
  * @module @deepseek-ai/dsh-mygo/src/capabilities
  */
 
-import { readFile, writeFile, realpath as fsRealpath } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { appendFile, lstat, readdir as fsReaddir, readFile, writeFile, realpath as fsRealpath } from 'node:fs/promises'
 import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { FileAccessEntry, Logger, PluginEnv, PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
-import { coveredByNetworkGrants } from './mount.ts'
-import type { PluginGrants } from './types.ts'
+import type {
+  Logger,
+  PluginDirEntry,
+  PluginEnv,
+  PluginErrorCode,
+  PluginExec,
+  PluginExecRequest,
+  PluginExecResult,
+  PluginFileStat,
+  PluginModel,
+  PluginModelRequest,
+  PluginModelResponse,
+} from '@deepseek-ai/dsh-mygo-api'
 
-/** Host I/O seam for the `env.fs` boundary; the node implementation is the default. */
+/** Host I/O seam backing the ungated `env.fs` surface. */
 export interface PluginIo {
   /** Read one file's bytes. */
   read(path: string): Promise<Uint8Array>
   /** Write one file's bytes. */
   write(path: string, data: Uint8Array): Promise<void>
+  /** Append bytes to one file. */
+  append(path: string, data: Uint8Array): Promise<void>
+  /** List one directory's entries (symlinks reported without following). */
+  readdir(path: string): Promise<readonly PluginDirEntry[]>
+  /** Metadata with lstat semantics (symlinks reported without following). */
+  stat(path: string): Promise<PluginFileStat>
   /** Resolve symlinks to a canonical absolute path. */
   realpath(path: string): Promise<string>
 }
 
-/** Default `PluginIo` over Node's `fs/promises`. */
+/** Node fs implementation of the host I/O seam. */
 export const nodePluginIo: PluginIo = {
   read: path => readFile(path),
   write: (path, data) => writeFile(path, data),
+  append: (path, data) => appendFile(path, data),
+  readdir: async path => (await fsReaddir(path, { withFileTypes: true })).map(entry => ({
+    name: entry.name,
+    kind: entry.isFile()
+      ? 'file'
+      : entry.isDirectory()
+        ? 'directory'
+        : entry.isSymbolicLink()
+          ? 'symlink'
+          : 'other',
+  })),
+  stat: async path => {
+    const stat = await lstat(path)
+    return {
+      kind: stat.isFile()
+        ? 'file'
+        : stat.isDirectory()
+          ? 'directory'
+          : stat.isSymbolicLink()
+            ? 'symlink'
+            : 'other',
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    }
+  },
   realpath: path => fsRealpath(path),
 }
 
-/** Per-plugin registration-effect counters shared across scope layers. */
+/** Registration-effect quotas (§18): 100 listeners / 50 tools / 20 services. */
 export interface PluginEffectQuota {
+  /** Listener registrations staged for one generation. */
   listeners: number
+  /** Tool/skill/prompt registrations staged for one generation. */
   tools: number
+  /** Provide/http/command registrations staged for one generation. */
   services: number
 }
 
 /**
- * Normalize one path for gate comparison: `\` → `/`, `..` collapsed, absolute.
- * @param path - request path in host form.
- * @returns the normalized absolute gate path.
- */
-export function normalizeGatePath(path: string): string {
-  const normalized = resolve(path.replace(/\\/g, '/')).replace(/\/+$/, '')
-  return normalized.length === 0 ? '/' : normalized
-}
-
-/**
- * Path-boundary prefix: `/project` covers `/project` and `/project/x`, never `/projectile`.
- * @param base - normalized grant base path.
- * @param path - normalized request path.
- * @returns true when `base` is a path-boundary prefix of `path`.
- */
-export function pathPrefixCovers(base: string, path: string): boolean {
-  if (path === base) return true
-  const boundary = base.endsWith('/') ? base : `${base}/`
-  return path.startsWith(boundary)
-}
-
-/**
- * The runtime file-access verdict (SEC:149, decision #9): a grant covers a
- * request when its mode implies the requested mode (`write` ⊇ `read`) and
- * its normalized path is a path-boundary prefix of the request path.
- * @param path - request path in host form.
- * @param entries - deployment `fileAccess` entries, or `undefined` for none.
- * @returns the strongest granted mode, or `undefined` when nothing covers.
- */
-export function fileModeForPath(
-  path: string,
-  entries: readonly FileAccessEntry[] | undefined,
-): 'read' | 'write' | undefined {
-  if (entries === undefined) return undefined
-  const requested = normalizeGatePath(path)
-  let allowed: 'read' | 'write' | undefined
-  for (const [grantMode, base] of entries) {
-    if (!pathPrefixCovers(normalizeGatePath(base), requested)) continue
-    if (grantMode === 'write') return 'write'
-    allowed = 'read'
-  }
-  return allowed
-}
-
-/**
- * Throw `fs-denied` when the lexical path is outside the grant set.
- * @param path - request path in host form.
- * @param required - requested access mode.
- * @param entries - deployment `fileAccess` entries, or `undefined` for none.
- * @param pluginId - owning plugin id for error attribution.
- */
-export function assertFileMode(
-  path: string,
-  required: 'read' | 'write',
-  entries: readonly FileAccessEntry[] | undefined,
-  pluginId: string,
-): void {
-  const allowed = fileModeForPath(path, entries)
-  if (allowed === undefined || (required === 'write' && allowed !== 'write')) {
-    throw fail('fs-denied', { plugin: pluginId, path: normalizeGatePath(path), mode: required }, pluginId)
-  }
-}
-
-/**
- * Resolve symlinks along the longest existing ancestor and append the rest.
- * @param path - request path in host form.
- * @param io - host I/O seam providing `realpath`.
- * @returns the fully resolved real path.
- */
-export async function realPathOf(path: string, io: PluginIo): Promise<string> {
-  let candidate = normalizeGatePath(path)
-  const suffix: string[] = []
-  for (;;) {
-    try {
-      const resolved = await io.realpath(candidate)
-      if (suffix.length === 0) return resolved
-      return normalizeGatePath(join(resolved, ...suffix.reverse()))
-    } catch {
-      const parent = dirname(candidate)
-      if (parent === candidate) throw new Error(`no existing ancestor for ${path}`)
-      suffix.push(basename(candidate))
-      candidate = parent
-    }
-  }
-}
-
-/**
- * Build the `env.fs` boundary for one plugin. The lexical check throws
- * synchronously before any I/O; a symlink-resolved real path is re-checked
- * against real-resolved grant bases before the host read/write is called.
- * @param pluginId - owning plugin id for `fs-denied` attribution.
- * @param grants - the deployment grant set executed at runtime (§17 rule 1).
- * @param io - host I/O seam; denied requests never reach it.
- * @returns the gated fs surface.
- */
-export function createPluginFs(pluginId: string, grants: PluginGrants | undefined, io: PluginIo): PluginEnv['fs'] {
-  const entries = grants?.fileAccess
-  const granted = entries ?? []
-  const realBases = new Map<string, string>()
-  const realBase = async (base: string): Promise<string> => {
-    const cached = realBases.get(base)
-    if (cached !== undefined) return cached
-    const resolved = await realPathOf(base, io)
-    realBases.set(base, resolved)
-    return resolved
-  }
-  const gate = async (path: string, required: 'read' | 'write'): Promise<string> => {
-    const lexical = normalizeGatePath(path)
-    const real = await realPathOf(lexical, io)
-    let allowed: 'read' | 'write' | undefined
-    for (const [grantMode, base] of granted) {
-      if (!pathPrefixCovers(await realBase(base), real)) continue
-      if (grantMode === 'write') {
-        allowed = 'write'
-        break
-      }
-      allowed = 'read'
-    }
-    if (allowed === undefined || (required === 'write' && allowed !== 'write')) {
-      throw fail('fs-denied', { plugin: pluginId, path: real, mode: required }, pluginId)
-    }
-    return real
-  }
-  return {
-    read: (path: string): Promise<Uint8Array> => {
-      assertFileMode(path, 'read', entries, pluginId)
-      return gate(path, 'read').then(real => io.read(real))
-    },
-    write: (path: string, data: Uint8Array | string): Promise<void> => {
-      assertFileMode(path, 'write', entries, pluginId)
-      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
-      return gate(path, 'write').then(real => io.write(real, bytes))
-    },
-  }
-}
-
-/**
- * Runtime network allowlist (SEC:150): the request URL must start at an allow
- * entry's scheme/host boundary, mirroring the mount-time coverage rule.
- * @param url - request URL to test.
- * @param allow - deployment `networkAccess.allow` entries, or `undefined`.
- * @returns true when a boundary prefix of `url` is allowlisted.
- */
-export function networkUrlAllowed(url: string, allow: readonly string[] | undefined): boolean {
-  return coveredByNetworkGrants(url, allow)
-}
-
-/**
- * Build the `env.fetch` boundary for one plugin: the allowlist check throws
- * synchronously (`network-denied`) before the host fetch is invoked.
- * @param pluginId - owning plugin id for `network-denied` attribution.
- * @param grants - the deployment grant set executed at runtime (§17 rule 1).
- * @param fetchImpl - host fetch; denied requests never reach it.
- * @returns the gated fetch function.
- */
-export function createNetworkFetch(
-  pluginId: string,
-  grants: PluginGrants | undefined,
-  fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
-): (url: string, init?: RequestInit) => Promise<Response> {
-  return (url, init) => {
-    if (!networkUrlAllowed(url, grants?.networkAccess?.allow)) {
-      throw fail('network-denied', { plugin: pluginId, url }, pluginId)
-    }
-    return fetchImpl(url, init)
-  }
-}
-
-/**
- * Registration-effect quotas (§18): 100 listeners / 50 tools / 20 services.
+ * Claim one registration-effect slot for a plugin generation.
  * @param quota - per-plugin counters shared across scope layers.
  * @param kind - which quota bucket to claim.
  * @param pluginId - owning plugin id for error attribution.
@@ -262,11 +135,107 @@ export function createRateLimitedLogger(raw: Logger, now: () => number): Logger 
   }
 }
 
-/** Build a `PluginError` with the shared template vocabulary. */
-function fail(
-  code: PluginErrorCode,
-  details: Record<string, unknown>,
-  pluginId: string | undefined,
-): PluginError {
+/**
+ * Build the `env.fs` surface for one plugin: a direct host I/O passthrough
+ * (no path grants).
+ * @param _pluginId - owning plugin id (kept for surface parity).
+ * @param io - host I/O seam.
+ * @returns the ungated fs surface.
+ */
+export function createPluginFs(_pluginId: string, io: PluginIo): PluginEnv['fs'] {
+  return {
+    read: (path: string): Promise<Uint8Array> => io.read(path),
+    write: (path: string, data: Uint8Array | string): Promise<void> => {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      return io.write(path, bytes)
+    },
+    append: (path: string, data: Uint8Array | string): Promise<void> => {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      return io.append(path, bytes)
+    },
+    readdir: (path: string): Promise<readonly PluginDirEntry[]> => io.readdir(path),
+    stat: (path: string): Promise<PluginFileStat> => io.stat(path),
+  }
+}
+
+/**
+ * Build the `env.fetch` boundary for one plugin: a direct host fetch
+ * passthrough (no URL allowlist).
+ * @param fetchImpl - host fetch.
+ * @returns the ungated fetch function.
+ */
+export function createNetworkFetch(
+  fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
+): (url: string, init?: RequestInit) => Promise<Response> {
+  return (url, init) => fetchImpl(url, init)
+}
+
+/**
+ * Build the `env.vars` surface for one plugin: a direct host process-env
+ * passthrough (no variable allowlist).
+ * @returns the ungated vars surface.
+ */
+export function createPluginVars(): PluginEnv['vars'] {
+  return {
+    get: (name: string): string | undefined => process.env[name],
+    set: (name: string, value: string): void => {
+      process.env[name] = value
+    },
+  }
+}
+
+/**
+ * Build the `env.llm` surface for one plugin: a direct host LLM passthrough.
+ * A missing host seam still fails loudly (`llm-denied`, host-unavailable).
+ * @param pluginId - owning plugin id for error attribution.
+ * @param host - host completion seam, or `undefined` when none is wired.
+ * @returns the ungated model surface.
+ */
+export function createModelCall(
+  pluginId: string,
+  host: ((request: PluginModelRequest) => Promise<PluginModelResponse>) | undefined,
+): PluginModel {
+  return {
+    complete: (request: PluginModelRequest): Promise<PluginModelResponse> => {
+      if (host === undefined) {
+        throw fail('llm-denied', {
+          plugin: pluginId,
+          model: request.model,
+          reason: 'host-unavailable',
+        }, pluginId)
+      }
+      return host(request)
+    },
+  }
+}
+
+/**
+ * Build the `env.exec` surface for one plugin: a direct host subprocess
+ * passthrough. A missing host seam still fails loudly (`exec-denied`,
+ * host-unavailable).
+ * @param pluginId - owning plugin id for error attribution.
+ * @param host - host subprocess seam, or `undefined` when none is wired.
+ * @returns the ungated exec surface.
+ */
+export function createExecBoundary(
+  pluginId: string,
+  host: ((request: PluginExecRequest) => Promise<PluginExecResult>) | undefined,
+): PluginExec {
+  return {
+    run: (request: PluginExecRequest): Promise<PluginExecResult> => {
+      if (host === undefined) {
+        throw fail('exec-denied', {
+          plugin: pluginId,
+          command: request.command,
+          reason: 'host-unavailable',
+        }, pluginId)
+      }
+      return host(request)
+    },
+  }
+}
+
+/** Build a `PluginError` from the shared template vocabulary. */
+function fail(code: PluginErrorCode, details: Record<string, unknown>, pluginId: string): PluginError {
   return new PluginError(code, formatPluginError(code, details), details, pluginId)
 }

@@ -12,7 +12,17 @@
 import { Context, Service } from 'cordis'
 import z from 'schemastery'
 import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { InstallOptions, PluginDefinition, PluginHandleInfo, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type {
+  InstallOptions,
+  PluginDefinition,
+  PluginExecRequest,
+  PluginExecResult,
+  PluginHandleInfo,
+  PluginModelRequest,
+  PluginModelResponse,
+  RawCordisFunctionPlugin,
+  PluginSource,
+} from '@deepseek-ai/dsh-mygo-api'
 import { PluginManagerConfigSchema, resolvePluginManagerConfig } from './config.ts'
 import { DispatchMachine } from './dispatch.ts'
 import type { DispatchViolation } from './dispatch.ts'
@@ -25,6 +35,7 @@ import type {
   PluginManagerConfig,
   PluginOperation,
   PluginOperationPlan,
+  PluginSupportCheck,
 } from './types.ts'
 
 /** Schemastery Config for the dsh-mygo row: the §15.6/§17 surface plus the profile name. */
@@ -71,13 +82,120 @@ export class PluginManagerService extends Service implements PluginManager {
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
-    const persistence = await RegistryPersistence.open(ctx, ctx.storageDomain, {
+    const persistence = await RegistryPersistence.open(ctx.storageDomain, {
       profile: this.config.profile,
       stateRoot: this.resolved.stateRoot,
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
     })
     const holder: { engine?: LifecycleEngine } = {}
+    const hostLlm = ctx.get('llm') as
+      | { stream(options: unknown): AsyncIterable<unknown> }
+      | undefined
+    const llm = hostLlm === undefined
+      ? undefined
+      : async (request: PluginModelRequest): Promise<PluginModelResponse> => {
+          let text = ''
+          let promptTokens: number | undefined
+          let completionTokens: number | undefined
+          for await (const chunk of hostLlm.stream({
+            provider: 'managed-plugin',
+            model: request.model,
+            messages: request.messages.map(message => ({ role: message.role, content: message.content })),
+            ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+            ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+          })) {
+            if (typeof chunk !== 'object' || chunk === null) continue
+            const record = chunk as { type?: unknown; text?: unknown; usage?: { promptTokens?: number; completionTokens?: number } }
+            if (record.type === 'text-delta' && typeof record.text === 'string') text += record.text
+            if (record.type === 'usage' && record.usage !== undefined) {
+              promptTokens = record.usage.promptTokens
+              completionTokens = record.usage.completionTokens
+            }
+          }
+          return {
+            content: text,
+            model: request.model,
+            ...(promptTokens !== undefined || completionTokens !== undefined
+              ? {
+                  usage: {
+                    ...(promptTokens === undefined ? {} : { promptTokens }),
+                    ...(completionTokens === undefined ? {} : { completionTokens }),
+                  },
+                }
+              : {}),
+          }
+        }
+    const hostSubprocess = ctx.get('subprocess') as
+      | {
+          spawn(spec: {
+            argv: readonly string[]
+            cwd: string
+            stdio: { stdin: unknown; stdout: unknown; stderr: unknown }
+            graceMs: number
+            signal?: AbortSignal
+          }): {
+            done: Promise<{ exitCode: number | null; signal: string | null }>
+            stdout?: { on(event: 'data', listener: (chunk: Buffer) => void): void }
+            stderr?: { on(event: 'data', listener: (chunk: Buffer) => void): void }
+          }
+        }
+      | undefined
+    const exec = hostSubprocess === undefined
+      ? undefined
+      : async (request: PluginExecRequest): Promise<PluginExecResult> => {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? 30_000)
+          try {
+            const handle = hostSubprocess.spawn({
+              argv: [request.command, ...(request.args ?? [])],
+              cwd: request.cwd ?? process.cwd(),
+              stdio: {
+                stdin: request.stdin === undefined ? 'ignore' : { data: request.stdin },
+                stdout: 'pipe',
+                stderr: 'pipe',
+              },
+              graceMs: 2_000,
+              signal: request.signal ?? controller.signal,
+            })
+            const stdoutChunks: Buffer[] = []
+            const stderrChunks: Buffer[] = []
+            let stdoutBytes = 0
+            let stderrBytes = 0
+            const MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+            handle.stdout?.on('data', (chunk: Buffer) => {
+              if (stdoutBytes >= MAX_CAPTURE_BYTES) return
+              stdoutChunks.push(chunk)
+              stdoutBytes += chunk.length
+            })
+            handle.stderr?.on('data', (chunk: Buffer) => {
+              if (stderrBytes >= MAX_CAPTURE_BYTES) return
+              stderrChunks.push(chunk)
+              stderrBytes += chunk.length
+            })
+            const outcome = await handle.done
+            const stdoutRaw = Buffer.concat(stdoutChunks)
+            const stderrRaw = Buffer.concat(stderrChunks)
+            return {
+              stdout: stdoutRaw.toString('utf8'),
+              stderr: stderrRaw.toString('utf8'),
+              code: outcome.exitCode ?? -1,
+              stdoutBytes: new Uint8Array(stdoutRaw),
+              stderrBytes: new Uint8Array(stderrRaw),
+            }
+          } finally {
+            clearTimeout(timeout)
+          }
+        }
+    const hostHttpServer = ctx.get('httpServer') as
+      | { register(route: unknown): () => void }
+      | undefined
+    const hostSkills = ctx.get('skills') as
+      | { registerProvider(create: (control: unknown) => unknown): () => void }
+      | undefined
+    const hostCommands = ctx.get('commands') as
+      | { register(definition: unknown): () => void }
+      | undefined
     const machine = new DispatchMachine(ctx, {
       vocabulary: new Map(EVENT_VOCABULARY.map(entry => [entry.name, entry.mode])),
       cpuBudgetMs: this.config.cpuBudgetMs,
@@ -105,6 +223,13 @@ export class PluginManagerService extends Service implements PluginManager {
       config: this.resolved,
       eventVocabulary: EVENT_VOCABULARY,
       persistence,
+      ...(llm === undefined ? {} : { llm }),
+      ...(exec === undefined ? {} : { exec }),
+      ...(hostHttpServer === undefined ? {} : { httpServer: hostHttpServer }),
+      ...(hostSkills === undefined ? {} : { skillService: hostSkills }),
+      ...(hostCommands === undefined ? {} : { commandService: hostCommands }),
+      hostService: (capability: string) => ctx.get(capability),
+      hostProvide: (name: string, value: unknown) => ctx.provide(name, value),
       resolveSource: (source) => {
         if (source.type === 'npm') {
           return Promise.reject(new PluginError(
@@ -123,6 +248,21 @@ export class PluginManagerService extends Service implements PluginManager {
     await engine.recover()
     this.engine = engine
     this.persistence = persistence
+    // Zero-intrusion unknown-tool attribution: the harness wraps every tool
+    // dispatch in the `tools/execute` waterfall, so intercepting there lets a
+    // call to an uninstalled plugin's old tool return a friendly failure
+    // without any harness modification.
+    ctx.on('tools/execute' as never, ((exec: { readonly name?: unknown }, next: () => Promise<unknown>) => {
+      const name = typeof exec?.name === 'string' ? exec.name : ''
+      const tombstone = holder.engine?.resolveUnknownTool(name)
+      if (tombstone === undefined) return next()
+      const message = `工具 ${name} 已不可用：插件 ${tombstone.pluginId} 已被卸载`
+      return {
+        isError: true,
+        error: { message, info: { name: 'ToolUnavailableError', code: 'TOOL_UNAVAILABLE' } },
+        content: [{ type: 'text', text: `Error: ${message}` }],
+      }
+    }) as never)
     ctx.effect(() => () => {
       holder.engine?.dispose()
       void persistence.close()
@@ -194,6 +334,26 @@ export class PluginManagerService extends Service implements PluginManager {
 
   async adopt(definition: PluginDefinition, config: unknown): Promise<void> {
     await this.requireEngine().adoptStatic(definition, config)
+  }
+
+  /** Zero-intrusion static adoption of a raw Cordis plugin (see {@link PluginManager.adoptRaw}). */
+  async adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo> {
+    return this.requireEngine().adoptRaw(raw, config, id)
+  }
+
+  /** Live-update an adopted raw plugin through the HMR replace protocol. */
+  updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo> {
+    return this.requireEngine().updateRaw(raw, config, id)
+  }
+
+  /** Pre-mount support check (see {@link PluginManager.checkSupport}). */
+  checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck> {
+    return this.requireEngine().checkSupport(raw, id)
+  }
+
+  /** Remove an uninstall tombstone (see {@link PluginManager.clearUninstallTombstone}). */
+  clearUninstallTombstone(id: string): Promise<void> {
+    return this.requireEngine().clearUninstallTombstone(id)
   }
 
   private requireEngine(): LifecycleEngine {
