@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # dsh-mygo 首次安装脚本：把 mygo / mygo-api / mygo-panel / BOM 脚手架装进一个
-# dsh 0809 checkout，接线 tsconfig 与 web profile，并记录“已安装版本”供检查更新使用。
+# dsh 0809/0810 checkout，接线 tsconfig 与 web profile，并记录“已安装版本”供检查更新使用。
 #
 # 用法：
 #   ./install.sh                          # 自动定位 dsh checkout（dsh 命令 / ~/.dsh/source/current）
@@ -38,7 +38,7 @@ CHECKOUT="$(resolve_checkout)"
 if [ ! -f "$CHECKOUT/packages/client/tsdown.client.ts" ] \
   || [ ! -d "$CHECKOUT/vendor/cordis" ] \
   || [ ! -d "$CHECKOUT/packages/core/session" ]; then
-  echo "错误：$CHECKOUT 不是 dsh 0809 checkout（缺少 packages/client/tsdown.client.ts / vendor/cordis / packages/core/session）" >&2
+  echo "错误：$CHECKOUT 不是有效的 dsh 0809/0810 checkout（缺少 packages/client/tsdown.client.ts / vendor/cordis / packages/core/session）" >&2
   exit 1
 fi
 echo "==> 目标 dsh checkout: $CHECKOUT"
