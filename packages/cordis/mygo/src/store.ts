@@ -170,6 +170,9 @@ export class InMemoryRegistryStore implements RegistryStore {
     return Promise.resolve({ rows, bytes })
   }
 
+  /** In-memory backend self-check: always passes. */
+  async check(): Promise<void> {}
+
   private consumeFailure(table: 'gens' | 'status' | 'delete'): Promise<void> {
     const remaining = this.failNext.get(table) ?? 0
     if (remaining <= 0) return Promise.resolve()

@@ -130,7 +130,7 @@ describe('registry store seam', () => {
         profile: 'web',
         class: 'mount',
         actor: 'system',
-      })
+      } as never)
       expect(appended).toHaveLength(1)
       await persistence.close()
     } finally {
@@ -174,12 +174,12 @@ describe('registry store seam', () => {
       await store.writeStatus('p', status)
       expect(await store.listIds()).toEqual(['p'])
       expect(await store.readStatus('p')).toMatchObject({ currentGen: 1, status: 'enabled' })
-      expect((await store.readGenerations('p')).map(entry => entry.gen)).toEqual([1])
+      expect((await store.readGenerations('p')).map((entry: { readonly gen: number }) => entry.gen)).toEqual([1])
       await store.writeGeneration('p', 2, { ...record, resolvedConfig: { step: 2 } })
       await store.writeStatus('p', { ...status, currentGen: 2 })
-      expect((await store.readGenerations('p')).map(entry => entry.gen)).toEqual([2, 1])
+      expect((await store.readGenerations('p')).map((entry: { readonly gen: number }) => entry.gen)).toEqual([2, 1])
       await store.deleteGeneration('p', 1)
-      expect((await store.readGenerations('p')).map(entry => entry.gen)).toEqual([2])
+      expect((await store.readGenerations('p')).map((entry: { readonly gen: number }) => entry.gen)).toEqual([2])
       const usage = await store.usage()
       expect(usage.rows).toBeGreaterThanOrEqual(2)
       await store.writeStatus('damaged', '{oops')

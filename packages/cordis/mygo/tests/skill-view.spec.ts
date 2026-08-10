@@ -57,7 +57,7 @@ describe('managed skill provider view', () => {
         })
       },
     } as never, {}, 'skill-plugin')
-    const provider = skills.providers[0]
+    const provider = skills.providers[0]!
     expect(provider).toBeDefined()
     const list = (await provider.list()) as Array<Record<string, unknown>>
     expect(list).toHaveLength(1)
@@ -93,7 +93,7 @@ describe('managed skill provider view', () => {
         })
       },
     } as never, {}, 'plain-skill')
-    const provider = skills.providers[0]
+    const provider = skills.providers[0]!
     const list = (await provider.list()) as Array<Record<string, unknown>>
     expect(list[0]).toMatchObject({
       name: 'plain',

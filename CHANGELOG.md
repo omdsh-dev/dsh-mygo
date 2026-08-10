@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.2.1 · 2026-08-10 — 0810 分支适配 + 客户端兼容 + 测试类型债清理
+
+### 0810 分支支持
+
+- 支持 dsh `snapshots/20260810T155924Z-8ec407cd64`：storage-domain /
+  storage-sqlite / cordis fiber / settings.register 接口兼容确认，hmr /
+  include 只是写文件容错增强；构建、启动、安装、BOM、配置 HMR 在 0810
+  实测通过；
+- 清理 43 个测试类型错误（0.2.0 之后从未通过 checkout 全量 host tsc，
+  0809 同样存在）：`requires/provides/permissions` 改 readonly、
+  `resolveSource` 可选（缺省 fail-loud）、vocabulary 字段可选、
+  `InMemoryRegistryStore.check` 补上、host-event 测试适配 0810 更严格的
+  `ctx.emit` 泛型；
+- **3080 已切换 0810**（`source/current` → 0810 检出），rdb 注册表/PG、
+  bundle rail、BOM、面板全部在 0810 下验证。
+
+### 客户端（浏览器 half）兼容
+
+- 面板安装链路读 `dsh.client`（0810）并回退旧 `dshClient`（0809）；桥接包
+  双写两个字段，存量桥接启动时自动补 `dsh.client`；
+- 桥接 client gate 的 rawId 按 bundle 真实注册 id 提取（0810 为绝对路径，
+  0809 为包名，回退包名）；
+- 官方 bundle 安装自动注入顶层 `dshClient`（0809 roster 需要，0810 忽略，
+  无害），带 `dsh.mygo.legacyClientInjected` 标记、卸载还原；
+- 面板自身 client half 也补齐 `dsh.client`（否则 0810 设置页看不到
+  “My 插件”）。
+
+### 其他
+
+- UI：设置页“受管插件”改名为 **“My 插件”**；
+- 已知边界（实测确认，宿主设计）：运行时新增带 client half 的包（桥接或
+  官方 bundle）需**重启**才进 roster；无 `dsh.client` 语义的旧插件暂不
+  支持（0809 时代插件请作者升级，3080 已移除这类插件）。
+
 ## 0.2.0 · 2026-08-10 — 重构：HMR 语义、依赖体系、持久化、BOM
 
 > 0.2.0 在 0.1.1 的基础上几乎重构了一切：HMR 从自建七步的 stage-first

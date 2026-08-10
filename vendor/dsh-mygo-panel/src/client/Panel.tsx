@@ -893,7 +893,7 @@ export function Panel(): JSX.Element {
   return (
     <div className={css.panel}>
       <div className={css.head}>
-        <div className={css.title}>受管插件（mygo）</div>
+        <div className={css.title}>My 插件（mygo）</div>
         <button
           className={`${css.btn} ${css.btnGhost}`}
           disabled={updatesBusy}
@@ -1086,7 +1086,7 @@ export function Panel(): JSX.Element {
         )}
       </div>
       <div className={css.head}>
-        <div className={css.title}>受管插件</div>
+        <div className={css.title}>My 插件</div>
         <button
           className={`${css.btn} ${css.btnGhost}`}
           disabled={helperBusy}
@@ -1168,7 +1168,7 @@ export function Panel(): JSX.Element {
       {plugins === null
         ? <div className={css.status}>加载中…</div>
         : plugins.length === 0
-          ? <div className={css.status}>暂无受管插件</div>
+          ? <div className={css.status}>暂无 My 插件</div>
           : plugins.map((plugin) => (
               <div key={plugin.id} className={css.itemWrap}>
                 <div

@@ -21,9 +21,9 @@ export interface PluginEventVocabularyEntry {
   /** The dispatch mode from the declaration's `@mode` tag. */
   mode: 'emit' | 'waterfall' | 'parallel' | 'serial'
   /** Top-level property names of the event's real return type, sorted. */
-  properties: readonly string[]
+  properties?: readonly string[]
   /** Discriminant labels of a decision-union return type, sorted; empty otherwise. */
-  branches: readonly string[]
+  branches?: readonly string[]
 }
 
 /** Every harness event's declaration vocabulary, sorted by name. */

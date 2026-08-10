@@ -719,3 +719,28 @@ hostPackages 记录），随 mygo 版本化。运行期套件锁定为第二用�
 边界澄清：rdb 持久化（mygo-rdb / store-provider / session-reader）与 HMR
 稳定性收尾（immediate 挂起、ESM 缓存降级疑点、quarantine 清表）不属于
 P4，另行跟踪。
+
+## 2026-08-10 0810 ClientModuleHost 边界（实测确认）
+
+0810 的浏览器 roster（`packages/client/modules` ClientModuleHost）对每个
+loader 条目名缓存“是否为 client 包”判定：
+
+- **包名新增/删除：有运行时增量 HMR**（`internal/plugin` → dirty set →
+  flush → `processOne`），全新名字能直接进 roster（实测：运行中卸载再装
+  dsh-web-review，boot 图即时出现、bundle 路由 200）；
+- **bundle 代码重建：有 HMR**（`onRebuilt(id, rev)` 重新哈希，rev 变化通知
+  浏览器拉新 bundle）；
+- **包“分类/元数据”变化：无 HMR，重启生效**——`pkgMeta` 否定判定（包不可
+  解析 / 无 `dsh.client` / platform 非 web）永不过期，正向缓存
+  （clientPath/inject）也冻结；这是宿主设计（注释：plugin-set changes take
+  effect on restart），不是缺陷。
+
+对我方桥接的影响：正常安装新插件（全新桥接名 + 生成时带 `dsh.client`）运行
+时可进 roster；**升级路径“无 client half → 新增 client half”必须重启**
+（旧版本已把该桥接名判为 null）。面板已兼容双字段（`dshClient` 0809 +
+`dsh.client` 0810），gate 的 rawId 按 bundle 真实注册 id 提取（0810 为绝对
+路径，0809 为包名，回退包名）。**官方 bundle 同理**：安装后浏览器半部要
+重启才进 roster（0809/0810 实测一致；node 半部即时生效，/webview-proxy
+这类路由不用重启）。0809 侧 bundle 还需要顶层 `dshClient`——BundleRail
+安装时从 `dsh.client` 自动注入（`dsh.mygo.legacyClientInjected` 标记，
+卸载还原），0810 原生读 `dsh.client`，注入无害。

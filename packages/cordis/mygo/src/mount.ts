@@ -124,11 +124,11 @@ export function validateMount(
       }, id)
     }
     for (const branch of declaration.returns) {
-      if (!entry.branches.includes(branch)) {
+      if (!(entry.branches ?? []).includes(branch)) {
         throw fail('unknown-property', {
           event: declaration.event,
           name: branch,
-          valid: entry.branches,
+          valid: entry.branches ?? [],
         }, id)
       }
     }
@@ -196,8 +196,8 @@ function validatePropertyNames(
     if (name.includes(':')) {
       throw fail('non-payload-name', { name, boundary: 'payload properties only' }, pluginId)
     }
-    if (!entry.properties.includes(name)) {
-      throw fail('unknown-property', { event, name, valid: entry.properties }, pluginId)
+    if (!(entry.properties ?? []).includes(name)) {
+      throw fail('unknown-property', { event, name, valid: entry.properties ?? [] }, pluginId)
     }
   }
 }

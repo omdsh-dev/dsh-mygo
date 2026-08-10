@@ -308,6 +308,10 @@ export class BundleRail {
       : this.readMember(installed, bundles.includes(installed))
     if (member === undefined) throw new Error(`安装后未能在 profile 中找到 bundle：${spec}`)
     if (member.hostDisables.length > 0) this.writeHostBlock(member.id, member.hostDisables)
+    // 0809 roster 读 `dshClient`，0810 读 `dsh.client`。官方 0810 格式的 bundle
+    // 只声明 dsh.client；补一个 legacy 字段让 0809 的浏览器半部也能进 roster
+    // （0810 会忽略 dshClient，双写无害）。卸载时按标记还原。
+    this.injectLegacyClient(member.packageName)
     return member
   }
 
@@ -319,6 +323,7 @@ export class BundleRail {
     this.removeEnableBlock(id)
     this.removeHostBlock(id)
     this.runDshPlugin(['remove', member.packageName])
+    this.restoreLegacyClient(member.packageName)
   }
 
   /**
@@ -470,5 +475,65 @@ export class BundleRail {
     const { dependencies } = this.readManifest()
     return Object.keys(dependencies).find(pkg => pkg === name || pkg === `@${name}`)
       ?? (name.startsWith('@') ? name : Object.keys(dependencies).find(pkg => pkg === name))
+  }
+
+  /** Absolute package.json path of one installed bundle package. */
+  private bundlePackageJson(packageName: string): string {
+    return join(this.profileDir(), 'node_modules', ...packageName.split('/'), 'package.json')
+  }
+
+  /**
+   * Inject the legacy `dshClient` declaration into an 0810-style bundle
+   * package that only declares `dsh.client`, so the 0809 browser roster can
+   * discover its client half. Records the injection under `dsh.mygo` so
+   * {@link restoreLegacyClient} can undo it exactly.
+   */
+  private injectLegacyClient(packageName: string): void {
+    const pkgPath = this.bundlePackageJson(packageName)
+    let pkg: Record<string, unknown>
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      return
+    }
+    const dsh = pkg.dsh
+    if (dsh === undefined || typeof dsh !== 'object' || Array.isArray(dsh)) return
+    const dshObj = dsh as Record<string, unknown>
+    const client = dshObj.client
+    if (client === undefined || typeof client !== 'object' || client === null) return
+    if (pkg.dshClient !== undefined) return
+    const decl = client as Record<string, unknown>
+    // 0809 的 ClientModuleHost 读 package.json 顶层 `dshClient`（0810 读
+    // `dsh.client`）——必须放顶层，不能嵌进 `dsh`。
+    pkg.dshClient = {
+      platform: typeof decl.platform === 'string' ? decl.platform : 'web',
+      ...(Array.isArray(decl.inject) ? { inject: decl.inject } : {}),
+      ...(typeof decl.immediately === 'boolean' ? { immediately: decl.immediately } : {}),
+    }
+    const mygo = typeof dshObj.mygo === 'object' && dshObj.mygo !== null
+      ? { ...dshObj.mygo as Record<string, unknown> }
+      : {}
+    dshObj.mygo = { ...mygo, legacyClientInjected: true }
+    writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+  }
+
+  /** Undo {@link injectLegacyClient} when the bundle package still exists. */
+  private restoreLegacyClient(packageName: string): void {
+    const pkgPath = this.bundlePackageJson(packageName)
+    let pkg: Record<string, unknown>
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      return
+    }
+    const dsh = pkg.dsh
+    if (dsh === undefined || typeof dsh !== 'object' || Array.isArray(dsh)) return
+    const dshObj = dsh as Record<string, unknown>
+    const mygo = dshObj.mygo
+    if (typeof mygo !== 'object' || mygo === null
+      || (mygo as Record<string, unknown>).legacyClientInjected !== true) return
+    delete pkg.dshClient
+    delete dshObj.mygo
+    writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
   }
 }

@@ -672,7 +672,7 @@ describe('#18 deferred wirings: auto-disable and dispatch audit', () => {
     // per-id lock: the in-flight parallel dispatch makes releaseGeneration
     // wait for idle before the (hanging) apply runs under the native
     // dispose-first ordering.
-    ctx.emit('session/flush')
+    ;(ctx.emit as (name: string, ...args: unknown[]) => void)('session/flush', {})
     await sleep(30)
     const replacing = ctx.pluginManager.replace('cpu-bound', { type: 'inline', code: hangingCode })
     await sleep(30)

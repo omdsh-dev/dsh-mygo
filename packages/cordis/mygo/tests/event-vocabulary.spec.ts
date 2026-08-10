@@ -68,8 +68,8 @@ describe('generated event vocabulary', () => {
     const names = EVENT_VOCABULARY.map(entry => entry.name)
     expect(names).toEqual([...names].sort())
     for (const entry of EVENT_VOCABULARY) {
-      expect(entry.properties).toEqual([...entry.properties].sort())
-      expect(entry.branches).toEqual([...entry.branches].sort())
+      expect(entry.properties ?? []).toEqual([...(entry.properties ?? [])].sort())
+      expect(entry.branches ?? []).toEqual([...(entry.branches ?? [])].sort())
     }
   })
 })

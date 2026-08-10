@@ -20,6 +20,14 @@
     ],
     "platform": "web"
   },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
   "dependencies": {
     "@deepseek-ai/dsh-mygo": "workspace:^",
     "cordis": "^4.0.0-rc.7"

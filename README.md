@@ -4,98 +4,84 @@
 > 名字致敬《BanG Dream! It's MyGO!!!!!》（迷途之子）——插件们各怀心思，
 > 但总有一个地方会把它们聚在一起。
 
-**版本：0.2.0 · 2026-08-10**（0.2.0：HMR 语义重构 + 依赖体系 + 持久化后端无关 + BOM；0.1.1：install.sh 修复——空 profile 占位覆盖、set -e 兜底、模块回退链接）
+**版本：0.2.1 · 2026-08-10**（0810 分支适配 + 客户端兼容 + 测试清理；
+0.2.0：HMR 语义重构 + 依赖体系 + 持久化 + BOM）
 
-mygo 是 DSH 的受管插件层：插件不再是裸的 Cordis 行，而是有安装/启停/卸载/替换/恢复语义、
-能热替换（HMR）、坏插件不会拖垮后端的“受管对象”。权限核心已移除，只保留 HMR 与插件管理两条主线，
-并通过透明 facade 直接用宿主 API——不需要改 dsh core。
+mygo 是 DSH 的受管插件层：插件不再是裸的 Cordis 行，而是有安装/启停/卸载/
+替换/恢复语义、能热替换（HMR）、坏插件不会拖垮后端的“受管对象”。权限核心已
+移除，通过透明 facade 直接用宿主 API——不需要改 dsh core。
 
-## 版本要求（重要）
+## 支持的分支
 
-目标 dsh：**0809 快照**（`test-r05En1cU`）。
-
-- 0808/0809 的 `storage-domain` 已移除 `recovery: 'reset'` / `domain/reset` / `KvFacet.destroy`：
-  注册表介质损坏时 mygo **fail-loud**（打开报错，不会自动清库重建），人工删
-  `~/.dsh/storages/registry.sqlite` 后重启即可。
-- 0 侵入只对 mygo 自身成立：依赖 dsh 核心能力补丁的生态插件（如 split-panes 的 `SessionScope`、
-  working-activity 的 webui patch）需要上游合入，mygo **显式不支持**，不会硬适配。
+- **0810（主支持）**：`snapshots/20260810T155924Z-8ec407cd64`，浏览器
+  half 原生 `dsh.client` 语义；
+- **0809（兼容）**：可运行；浏览器 half 需要 `dshClient`，面板/桥接自动
+  双写、官方 bundle 安装自动注入，无需手动处理；
+- **无 `dsh.client` 语义的旧插件**：暂不支持（等插件作者升级），不会硬适配。
 
 ## 快速开始
 
-首次安装直接用仓库里的 `install.sh`（自动复制包、接线 tsconfig、装依赖、写 profile 行、记录自身版本）：
+目标 checkout 拉 0810 分支后，用仓库里的 `install.sh` 接线（复制包、tsconfig、
+依赖、profile 行、记录自身版本）：
 
 ```sh
+git clone https://github.com/dsh2026/test-r05En1cU.git -b snapshots/20260810T155924Z-8ec407cd64 <dsh-checkout>
 git clone https://github.com/dsh-external/dsh-mygo.git
 cd dsh-mygo
-./install.sh                        # 自动定位 dsh checkout（或 DSH_CHECKOUT=/path/to/dsh ./install.sh）
+DSH_CHECKOUT=<dsh-checkout> ./install.sh
+cd <dsh-checkout> && pnpm run build
+dsh web
 ```
 
-也可以手动接线（等价的 profile patch 内容）：
+重启后设置页出现 **“My 插件”** 和 **“外部应用”** 两个分区：
 
-```yaml
-- id: dsh-mygo
-  name: '@deepseek-ai/dsh-mygo'
-  config:
-    profile: web
-- id: dsh-mygo-panel
-  name: '@dsh-external/dsh-mygo-panel'
-  config: {}
-```
-
-重启 `dsh web` 后，设置页会出现“受管插件”和“外部应用”两个分区：
-
-- 插件安装：GitHub 仓库 / 本地文件夹 / zip·tar.gz；可勾选“自动安装依赖并构建”
-  （`npm install` + 仓库 build，自动剔除 `link:`/`workspace:` 协议）
-- 外部应用安装：独立进程（Electron/Next 等），带沙箱档位与“卸载不同步”标识
-- 检查更新：远程（GitHub）安装的插件/应用可扫描远端 commit；插件更新走 **HMR 热替换**，
-  进行中的 session 与进程不重启
-- **mygo 自身更新**：检查更新里包含 `dsh-mygo` 自身（基于 `~/.dsh/mygo-self.json` 记录的远端与 commit）；
-  更新时替换并重建 mygo/mygo-api/panel 源码，随后触发 Loader 热重载（受管插件由 recover() 恢复）
+- 插件安装：GitHub 仓库 / 本地文件夹 / zip·tar.gz / **官方 bundle tgz**；
+  可勾选“自动安装依赖并构建”；
+- 启停/卸载（二次确认）、配置模板与保存（HMR 热生效）、远程更新（GitHub
+  插件走 `updateRaw` 热替换，session 不重启）；
+- **mygo 自身更新**：检查更新里包含 `dsh-mygo`（`~/.dsh/mygo-self.json`
+  记录远端/commit/version），更新走 Loader 热重载 + recover；
+- **BOM**：导出当前依赖图为 `dsh.bom/v1`（mygo 自身一等成员），只读对账，
+  离线脚手架生成新插件声明骨架。
 
 ## 它能做什么
 
-- **HMR 插件管理**：install / enable / disable / replace / uninstall / recover；
-  替换对齐宿主 `fiber.update` 语义（dispose-first：先完整释放旧代，再应用新代），
-  全局 seat 类注册不再重复；失败自动回滚重挂旧代
-- **兼容性检查与插件依赖**：Fabric 五级词汇（depends/recommends/suggests/
-  conflicts/breaks）+ 传递闭包链报告、激活求解器（连带启用/冲突消解）、
-  bundle 轨统一依赖图、声明式 manifest（package.json `dsh.mygo` 段 +
-  `ctx.entrypoints`）
-- **零侵入 raw 接入**：`fromCordisPlugin` / `adoptRaw` 直接把任意 Cordis 插件纳入管理，
-  facade 拦截注册面（tools/systemPrompt/httpServer/skills/commands/effect/timers），其余透传宿主
-- **类插件支持**：Service 子类（token-meter / compact-basic 模式）按 `new raw(ctx, config)` 挂载
-- **停用/卸载语义**：停用后工具保持注册、dispatch 拦截回报；卸载持久化 tombstone，
-  重装自动清除，卸载后调用提示“插件不存在/已卸载”
-- **unknown-tool 零侵入**：不改 dsh-tools，监听 `tools/execute` waterfall 拦截
-- **启动守卫**：桥接动态导入 + `checkSupport`（入口形状 / requires 可用性），坏插件跳过挂载只记日志
-- **HTTP 桥**：流式 `pipe`、SSE 逐块转发与二进制响应（按 content-type 返回字节），
-  路由卸载/替换时 disposer 安全
-- **外部应用模式**：独立 `mygo-apps` 根，进程组启停，沙箱 `none` / `workspace`，
-  `syncUninstall: false` 标识 + 操作审计
-- **远程更新**：记录安装 commit，`git ls-remote` 对比，插件走 `updateRaw` HMR 热替换
-- **P4 BOM（依赖参考物）**：把当前依赖图导出为 `dsh.bom/v1`（intent+lock 双段，
-  mygo 自身一等成员），只读 `bom check` 对账（missing/extra/drift/约束链），
-  离线脚手架生成新插件 `dsh.mygo` 声明骨架
+- **HMR 插件管理**：install / enable / disable / replace / uninstall /
+  recover；替换对齐宿主 `fiber.update`（dispose-first：先释放旧代再应用
+  新代），seat 类注册不重复，失败自动回滚重挂旧代；
+- **兼容性检查与插件依赖**：Fabric 五级词汇（depends / recommends /
+  suggests / conflicts / breaks）+ 传递闭包链报告、激活求解器、bundle 轨
+  统一依赖图、声明式 manifest（package.json `dsh.mygo` 段 +
+  `ctx.entrypoints`）；
+- **零侵入 raw 接入**：`fromCordisPlugin` / `adoptRaw` 直接纳入任意 Cordis
+  插件，facade 拦截注册面（tools / systemPrompt / httpServer / skills /
+  commands / effect / timers），其余透传宿主；
+- **持久化后端无关**：mygo-rdb extension 把注册表持久化切到 rdb/postgres
+  （store-provider 接管 + sqlite→rdb 迁移 + audit 迁入），并支持从
+  jsonl / sqlite / rdb 会话读取对话记录；
+- **停用/卸载语义**：停用后工具保持注册、dispatch 拦截回报；卸载持久化
+  tombstone，重装自动清除；
+- **外部应用模式**：独立 `mygo-apps` 根、进程组启停、沙箱档位、
+  `syncUninstall: false` 标识 + 操作审计；
+- **配置助手**：临时对话（continuable child session），自动读配置模板、
+  装插件、改配置，排队 + 超时自愈；
+- **P4 BOM**：依赖参考物（intent+lock 双段）、只读对账、离线脚手架；
+  套件生命周期（install/upgrade/apply）留 P5。
 
-## 原生支持 / 显式不支持
+## 开发者
 
-| 插件类型 | 结论 |
-|---|---|
-| 标准 Cordis 函数 / `apply` 对象插件 | ✅ 原生支持 |
-| Service 子类插件（类即插件） | ✅ 原生支持 |
-| 带浏览器 client half 的插件 | ✅ 桥接投影进 client roster（需 `exports["./client"]` + `dshClient`） |
-| 需要 npm 依赖 / 构建的插件 | ✅ `installDeps` 自动装依赖并构建 |
-| 0804/0805 时代工作区插件（`workspace:` 协议） | ❌ “版本过老”，显式报错 |
-| apply 内 `ctx.plugin` 组合子插件（如 dsh-rewind） | ❌ 暂不支持，明确报错、干净回收 |
-| 依赖渲染器核心补丁的插件（split-panes / working-activity） | ❌ 待上游合入 |
-
-## 开发
-
-dsh-mygo 仓库是源树（无根 package.json），构建/测试在 **dsh 0809 checkout**
-里做（改完用 rsync 同步源码，排除 node_modules/lib）：
+- **BOM 参考**：`POST /api/mygo/bom/export` 生成
+  `~/.dsh/mygo-boms/<profile>/dsh.bom.{json,md}`；新插件声明用
+  `POST /api/mygo/bom/check { "target": "<dir>" }` 校验；
+- **脚手架**：`node ~/.dsh/mygo-boms/bom-scaffold.mjs <id> --bom
+  ~/.dsh/mygo-boms/<profile>/dsh.bom.json`，自动填 `depends
+  service:mygo-core` 当前版本带；
+- **声明式 manifest v1**：package.json `dsh.mygo` 段（entrypoints +
+  compatibility）；client half 用 `dsh.client`（0809 另兼容 `dshClient`）；
+- **构建/测试**在 dsh checkout 里做（dsh-mygo 是源树）：
 
 ```sh
-cd <dsh checkout>
+cd <dsh-checkout>
 node node_modules/typescript/bin/tsc -b packages/core/mygo-api packages/cordis/mygo --pretty false
 node node_modules/tsdown/dist/run.mjs --config packages/core/mygo-api/tsdown.config.ts
 node node_modules/tsdown/dist/run.mjs --config packages/cordis/mygo/tsdown.config.ts
@@ -103,54 +89,38 @@ node node_modules/vitest/vitest.mjs run --config vitest.config.ts \
   packages/core/mygo-api/tests packages/cordis/mygo/tests
 ```
 
-全量测试建议**拆小串行跑**（WSL 环境偶发 worker D 状态卡死）；运行实例用的是
-`~/.dsh/source/current`（staging）的构建产物，改完需同步 + 重建 lib + 重启。
+全量测试建议拆小串行跑（WSL 环境偶发 worker D 状态）；运行实例用
+`~/.dsh/source/current` 的构建产物，改完需同步 + 重建 lib + 重启。
 
-目录：
+文档：`CHANGELOG.md`（版本记录）、`docs/development-memo.md`（开发备忘录）、
+`docs/next/`（提案与设计）。
 
-- `packages/core/mygo-api`：Cordis-free 的上层插件契约（definePlugin / facade / PluginError / fake-env）
-- `packages/cordis/mygo`：管理器（生命周期引擎 / dispatch / registry / 审计）
-- `scripts/bom-scaffold.mjs`：P4 BOM 离线脚手架
-- `docs/development-memo.md`：开发备忘录（去权限层后的饼与已实现清单）
-- `CHANGELOG.md`：版本变更记录
+## 边界与已知问题
 
-## Roadmap（已评估项）
-
-| 方向 | 结论 |
-|---|---|
-| HMR 语义重构（dispose-first，取消 seat 特判） | ✅ 0.2.0 已做 |
-| 兼容性检查 + 插件依赖（五级词汇 / 求解器 / bundle 轨 / 声明式 manifest） | ✅ 0.2.0 已做 |
-| 持久化后端无关（mygo-rdb / store-provider / session 读取器） | ✅ 0.2.0 已做 |
-| 配置助手（临时对话） | ✅ 0.2.0 已做 |
-| P4 BOM 依赖参考物（导出 / 只读对账 / 脚手架） | ✅ 0.2.0 已做（套件生命周期留 P5） |
-| 外部应用模式（sandbox none/workspace、卸载不同步标识） | ✅ 已做 |
-| 远程更新 + HMR 热替换 | ✅ 已做 |
-| mygo 自身更新（检查 + Loader 热重载） | ✅ 已做 |
-| 启动支持检查 + 守卫桥接 | ✅ 已做 |
-| 类插件 / 零侵入 raw 接入 | ✅ 已做 |
-| facade 宿主透传通用化（hostPassthrough） | ✅ 已做 |
-| 旧受管权限 API 开发文档 | 不写（权限层已删，生态插件原生支持） |
-| `ctx.plugin` 子插件组合的真实支持 | 不做（显式不支持） |
-| storage-domain medium-reset 回补 | 不做（0 侵入冲突） |
-| 外部应用 sandbox `strict` 档 / systemd·launchd 托管 | 待办 |
-| 渲染器能力类插件的 0809 适配 | 待上游合入 |
-| pnpm 构建兜底 / 安装策略路由 | 待办 |
-| BOM 套件生命周期（install/upgrade/apply） | P5 |
-| author-guide / catalog 等旧文档重写 | 待补（旧文档已清除） |
+- **新增带 client half 的包（桥接或官方 bundle）要重启才进 roster**：
+  宿主 ClientModuleHost 对包的分类判定做进程级缓存，0809/0810 一致；
+  代码重建走 rev HMR，无需重启；
+- **`immediate` 替换策略等待 in-flight 事件（无超时）**：插件有常驻事件
+  监听时建议用 `drain`（30s 超时，失败不动旧代）；
+- **rdb 注册表依赖 PostgreSQL**（mygo-pg 容器 / Docker Desktop），
+  PG 不可用会 fail-loud（`registry backend self-check failed ... 5432`）；
+- 显式不支持：0804/0805 时代工作区插件（`workspace:` 协议）、apply 内
+  `ctx.plugin` 组合子插件（如 dsh-rewind）、依赖渲染器核心补丁的插件
+  （split-panes / working-activity）；
+- storage-domain medium-reset 不回补（0 侵入冲突）；
+- BOM 套件生命周期（install/upgrade/apply/reconcile）→ P5。
 
 ## 常见问题
 
-- **装插件报“版本过老”？** 0804/0805 时代工作区插件（嵌套 `@deepseek-ai/dsh-*` + `workspace:` 协议），
-  需要放进 dsh 源码仓库安装；请用作者的新版独立包。
-- **装 dsh-rewind 报“暂不支持 ctx.plugin”？** 该插件在 apply 内组合 Service/工具子插件，
-  mygo 暂不纳入生命周期；请作者改为直接注册或拆成独立插件。
-- **后端起不来？** 先看日志：守卫桥接会跳过导入失败/不支持的插件；
-  若日志出现“包完全不存在”的 Loader 错误，那是 patch 行引用了缺失包，正常安装流程不会产生。
-- **日志报 `registry backend self-check failed ... 5432`？** rdb 注册表依赖
-  PostgreSQL（mygo-pg 容器 / Docker Desktop），先确认 5432 在线再重启。
-- **配置保存长时间不返回？** `immediate` 替换策略会等待该插件 in-flight 事件
-  结束（无超时）；插件有常驻事件监听时建议改用 `drain`（30s 超时，失败不动旧代）。
-- **注册表 sqlite 损坏？** 0808/0809 没有自动重建，删除 `~/.dsh/storages/registry.sqlite` 后重启。
+- **设置页看不到“My 插件”？** 0810 需要面板包声明 `dsh.client`（0.2.1 已
+  带）；装完 bundle/插件后强刷，若 client half 仍不出现先重启
+  （ClientModuleHost 缓存边界）。
+- **装插件报“版本过老”？** 0804/0805 时代工作区插件需要放进 dsh 源码仓库
+  安装，请用作者的新版独立包。
+- **后端起不来？** 先看日志：守卫桥接会跳过导入失败/不支持的插件；日志出现
+  `registry backend self-check failed ... 5432` 时先确认 PG 在线。
+- **配置保存长时间不返回？** `immediate` 策略等待该插件 in-flight 事件
+  结束（无超时），建议改用 `drain`。
 
 ---
 

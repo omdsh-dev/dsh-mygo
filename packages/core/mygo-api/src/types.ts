@@ -59,9 +59,9 @@ export interface PluginDefinition {
    */
   readonly kinds: string[]
   /** Cordis service ids this plugin consumes; an entry containing `@` is reserved (`capability-range-reserved`). */
-  readonly requires: string[]
+  readonly requires: readonly string[]
   /** Service ids this plugin provides; the manager holds the `provide` registrations. */
-  readonly provides: string[]
+  readonly provides: readonly string[]
   /** Declared event permissions and position (§5). */
   readonly permissions: PermissionsBlock
   /**
@@ -933,15 +933,15 @@ export interface PreviousGeneration {
 /** Declared event permission block (§5). */
 export interface PermissionsBlock {
   /** Event names this plugin observes (harness tier). */
-  readonly observe: string[]
+  readonly observe: readonly string[]
   /** Transform declarations on waterfall events (grant-gated). */
-  readonly transform: TransformDeclaration[]
+  readonly transform: readonly TransformDeclaration[]
   /** Intercept declarations (grant-gated). */
-  readonly intercept: InterceptDeclaration[]
+  readonly intercept: readonly InterceptDeclaration[]
   /** Listener position; default is `derived`. */
   readonly position: 'outermost' | 'derived' | 'innermost'
   /** Claimed contributions: `'service:<id>'` or `'tool:<name>'`. */
-  readonly claims: string[]
+  readonly claims: readonly string[]
 }
 
 /** One transform declaration on a waterfall event. */

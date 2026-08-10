@@ -516,18 +516,21 @@ async function allDependenciesOf(root: string): Promise<Record<string, string>> 
 
 /**
  * The declared browser client half of one plugin root: the `exports['./client']`
- * target when the package also declares `dshClient.platform === 'web'`.
+ * target when the package also declares `dsh.client.platform === 'web'`
+ * (0810+) or the legacy `dshClient.platform === 'web'` (0809).
  */
 async function clientTargetOf(root: string): Promise<string | undefined> {
   try {
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
       readonly dshClient?: { readonly platform?: string }
+      readonly dsh?: { readonly client?: { readonly platform?: string } }
       readonly exports?: Record<string, { readonly default?: string } | string>
     }
     const clientExport = pkg.exports?.['./client']
     const target = typeof clientExport === 'string' ? clientExport : clientExport?.default
     if (typeof target !== 'string' || target.length === 0) return undefined
-    if (pkg.dshClient?.platform !== 'web') return undefined
+    const platform = pkg.dsh?.client?.platform ?? pkg.dshClient?.platform
+    if (platform !== 'web') return undefined
     return target
   } catch {
     return undefined
@@ -1161,11 +1164,12 @@ async function ensureProjectedBridge(manifest: InstallManifest): Promise<void> {
   const pluginPkg = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8')) as {
     readonly name?: unknown
     readonly dshClient?: { readonly inject?: readonly string[]; readonly platform?: string }
+    readonly dsh?: { readonly client?: { readonly inject?: readonly string[]; readonly platform?: string } }
     readonly exports?: Record<string, { readonly default?: string } | string>
   }
   const originalName = typeof pluginPkg.name === 'string' ? pluginPkg.name : bridgeName
   const clientTarget = await clientTargetOf(pluginDir)
-  const declaredClientInject = pluginPkg.dshClient?.inject ?? []
+  const declaredClientInject = pluginPkg.dsh?.client?.inject ?? pluginPkg.dshClient?.inject ?? []
   let completedClientInject: readonly string[] = declaredClientInject
   if (clientTarget !== undefined) {
     try {
@@ -1189,7 +1193,11 @@ async function ensureProjectedBridge(manifest: InstallManifest): Promise<void> {
       './package.json': './package.json',
     },
     ...(clientTarget !== undefined
-      ? { dshClient: { platform: 'web' as const, inject: completedClientInject } }
+      ? {
+          // 0809 roster reads dshClient; 0810 ClientModuleHost reads dsh.client.
+          dshClient: { platform: 'web' as const, inject: completedClientInject },
+          dsh: { client: { platform: 'web' as const, inject: completedClientInject } },
+        }
       : {}),
   }
   await writeFile(join(bridgeDir, 'package.json'), JSON.stringify(bridgePackage, null, 2))
@@ -1258,7 +1266,12 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
     // enabled. This makes a disabled plugin's browser half stop on reload
     // (the browser side of sfw/ads-style plugins has no node-side dispatch
     // gate and previously kept running off its local default config).
-    const rawId = JSON.stringify(originalName)
+    // The bundle registers under its own id: package name on 0809-era
+    // bundles, absolute package path on 0810-era bundles (gen-config writes
+    // the absolute path so Loader and client-modules resolve independently).
+    // The gate must require the ACTUAL registered id, not the package name.
+    const registeredId = /__ModuleLoader__\.load\(\s*\{\s*id:\s*"([^"]+)"/.exec(clientText)?.[1]
+    const rawId = JSON.stringify(registeredId ?? originalName)
     const bridgeId = JSON.stringify(bridgeName)
     const pluginId = JSON.stringify(manifest.id)
     const gate = `
@@ -1534,6 +1547,52 @@ async function regenerateBridges(): Promise<void> {
     } catch {
       // unreadable or already upgraded; keep whatever bridge exists
     }
+  }
+}
+
+/**
+ * 0809→0810 兼容补字段：给存量桥接包补 `dsh.client` 声明。新装桥接已经双写
+ * （dshClient + dsh.client）；历史安装只有 dshClient，0810 的
+ * ClientModuleHost 不认，浏览器半部会缺席。幂等：已有 `dsh.client` 或没有
+ * `./client` 导出的桥接跳过。
+ */
+async function ensureBridgeClientDeclarations(): Promise<void> {
+  let ids: string[]
+  try {
+    ids = (await readdir(INSTALL_DIR, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+  } catch {
+    return
+  }
+  for (const id of ids) {
+    if (id.endsWith('-mygo')) continue
+    const pkgPath = join(bridgeDirOf(id), 'package.json')
+    let bridge: {
+      readonly exports?: Record<string, unknown>
+      readonly dshClient?: {
+        readonly platform?: string
+        readonly inject?: readonly string[]
+        readonly immediately?: boolean
+      }
+      readonly dsh?: { readonly client?: unknown }
+    }
+    try {
+      bridge = JSON.parse(await readFile(pkgPath, 'utf8'))
+    } catch {
+      continue
+    }
+    if (bridge.exports?.['./client'] === undefined) continue
+    if (bridge.dsh?.client !== undefined) continue
+    const legacy = bridge.dshClient
+    if (legacy === undefined) continue
+    const dsh = { ...bridge.dsh }
+    dsh.client = {
+      ...(legacy.platform === undefined ? {} : { platform: legacy.platform }),
+      ...(legacy.inject === undefined ? {} : { inject: legacy.inject }),
+      ...(legacy.immediately === undefined ? {} : { immediately: legacy.immediately }),
+    }
+    await writeFile(pkgPath, `${JSON.stringify({ ...bridge, dsh }, null, 2)}\n`)
   }
 }
 
@@ -3023,6 +3082,7 @@ export function apply(ctx: PanelContext): void {
   void (async () => {
     await syncBridgeRows()
     await regenerateBridges()
+    await ensureBridgeClientDeclarations()
   })().catch((error: unknown) => {
     console.error('[dsh-mygo-panel] startup sync failed:', error)
   })

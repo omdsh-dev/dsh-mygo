@@ -2058,7 +2058,7 @@ describe('LifecycleEngine updateConfig, adoptStatic, dispose', () => {
     const raw = {
       name: 'static-config',
       Config: z.object({ marker: z.string().required(false) }),
-      apply(ctx: unknown, entry: unknown) {
+      apply(_ctx: unknown, entry: unknown) {
         sawConfig = entry
       },
     }
@@ -2827,7 +2827,7 @@ describe('updateRaw', () => {
 })
 
 describe('settings namespace staging (raw-plugin facade)', () => {
-  const settingsRaw = (marker: string) => ({
+  const settingsRaw = (_marker: string) => ({
     name: 'settings-raw',
     Config: z.object({ marker: z.string().required(false) }),
     apply(ctx: any, entry: any) {

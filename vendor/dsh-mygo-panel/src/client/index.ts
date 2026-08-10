@@ -13,7 +13,7 @@ export function apply(ctx: ClientContext): void {
     name: 'settings.section',
     id: 'mygo-plugins',
     order: 70,
-    label: () => '受管插件',
+    label: () => 'My 插件',
     inject: () => ({}),
   }, Panel))
 }

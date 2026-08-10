@@ -640,8 +640,11 @@ export interface LifecycleEngineOptions {
   readonly store: RegistryStore
   /** Resolved manager Config (#12). */
   readonly config: PluginManagerConfig
-  /** Resolve an inline/npm source to a definition (evaluation is the caller's host power). */
-  readonly resolveSource: (source: PluginSource) => Promise<PluginDefinition>
+  /**
+   * Resolve an inline/npm source to a definition (evaluation is the caller's
+   * host power). Absent (harness/tests): every resolution fails loudly.
+   */
+  readonly resolveSource?: (source: PluginSource) => Promise<PluginDefinition>
   /** Generation history retained per plugin; defaults to Config `historyKeep`. */
   readonly historyKeep?: number
   /** Bounded drain/next-idle wait; defaults to Config `swapTimeoutMs`. */
@@ -777,7 +780,16 @@ export class LifecycleEngine {
     this.dispatch = options.dispatch
     this.store = options.store
     this.config = options.config
-    this.resolveSource = options.resolveSource
+    this.resolveSource = options.resolveSource ?? (async () => {
+      throw new PluginError(
+        'package-not-resolvable',
+        formatPluginError('package-not-resolvable', {
+          package: 'n/a',
+          anchors: 'resolveSource 未配置',
+        }),
+        { package: 'n/a', anchors: 'resolveSource 未配置' },
+      )
+    })
     this.historyKeep = options.historyKeep ?? options.config.historyKeep
     this.swapTimeoutMs = options.swapTimeoutMs ?? options.config.swapTimeoutMs
     this.isTurnBusy = options.isTurnBusy ?? (() => false)

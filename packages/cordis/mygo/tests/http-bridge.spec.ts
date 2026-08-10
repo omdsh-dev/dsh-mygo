@@ -30,6 +30,7 @@ class FakeHttpServer {
 }
 
 interface FakeRes {
+  readonly res: unknown
   readonly statusCode: number
   readonly headers: Record<string, string>
   readonly writes: Buffer[]
@@ -154,7 +155,7 @@ describe('raw facade HTTP bridge', () => {
                 'content-type': 'image/png',
                 'cache-control': 'public, max-age=86400',
               })
-              createReadStream(file).pipe(response)
+              createReadStream(file).pipe(response as unknown as import('node:stream').Writable)
             },
           })
         },
