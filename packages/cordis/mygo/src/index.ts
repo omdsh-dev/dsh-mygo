@@ -13,8 +13,45 @@ export { evaluateConflicts } from './conflicts.ts'
 export { buildScopeGraph, deriveOrders, deriveScopeOrder, scopeMembers } from './order.ts'
 export type { ScopeEdge, ScopeGraph } from './order.ts'
 export { planOperation } from './plan.ts'
+export { solveActivation } from './activation.ts'
+export type { ActivationOperation, ActivationPlugin } from './activation.ts'
+export { BundleRail } from './bundle-rail.ts'
+export type { BundleInstallResult, BundleMember, BundlePatchFact, BundleRailOptions } from './bundle-rail.ts'
+export {
+  JsonlSessionReader,
+  RdbSessionReader,
+  SqliteSessionReader,
+  decodeStorageRecord,
+  decompressZstd,
+  extractFields,
+  parseJsonl,
+  rdbRowToHeader,
+  scanRdbRows,
+  scanZstdFrames,
+} from './session-reader.ts'
+export type {
+  RdbEventRow,
+  SessionEventLike,
+  SessionFields,
+  SessionHeaderLike,
+  StoredSession,
+} from './session-reader.ts'
 export { DispatchMachine, managedListenerOptions } from './dispatch.ts'
+export { EntrypointsTable } from './entrypoints.ts'
+export type { EntrypointContribution, EntrypointsService } from './entrypoints.ts'
+export {
+  compatibilityViolationLines,
+  compatibilityWarningLines,
+  evaluateCompatibility,
+  normalizeCompatibility,
+  transitiveUninstallViolations,
+  type CompatibilityInput,
+  type CompatibilityPlugin,
+  type CompatibilitySet,
+} from './compatibility.ts'
+export { isValidRange, matchesVersionRange } from './semver-range.ts'
 export { LifecycleEngine } from './lifecycle.ts'
+export { MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from './lifecycle.ts'
 export { PluginManagerService, PluginManagerServiceConfig } from './service.ts'
 import { PluginManagerService } from './service.ts'
 export type { PluginManagerServiceConfigValue } from './service.ts'

@@ -10,14 +10,19 @@
 
 import { PluginError, formatPluginError, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
 import type {
+  ActivationPlan,
+  CompositionFactProvider,
+  CompatibilityReport,
   InstallOptions,
   InstallOrigin,
   Logger,
+  PluginCompatibility,
   PluginDefinition,
   PluginEnv,
   PluginErrorCode,
   PluginExecRequest,
   PluginExecResult,
+  PluginEntrypointContribution,
   PluginHandleInfo,
   PluginHttpRouteSpec,
   PluginCommandDefinition,
@@ -26,12 +31,21 @@ import type {
   PluginModelResponse,
   PluginSource,
   PluginSkillDefinition,
+  StagedSettingsRegistration,
   PluginToolExecutionContext,
   PluginToolDefinition,
   PluginPromptSection,
   RawCordisFunctionPlugin,
+  RawPluginDeclaration,
 } from '@deepseek-ai/dsh-mygo-api'
 import type { Context, Events } from 'cordis'
+import { isDeepStrictEqual } from 'node:util'
+
+/** Implicit manager identity in the unified dependency graph. */
+export const MYGO_MANAGER_ID = 'dsh-mygo'
+export { MYGO_MANAGER_VERSION } from './self.ts'
+import { MYGO_MANAGER_VERSION } from './self.ts'
+export const MYGO_MANAGER_CAPABILITY = 'service:mygo-core'
 import {
   claimEffect,
   createPluginFs,
@@ -51,6 +65,16 @@ import type { PluginEventVocabularyEntry } from './event-vocabulary.ts'
 import { deriveOrders } from './order.ts'
 import { validateMount } from './mount.ts'
 import { planOperation } from './plan.ts'
+import {
+  compatibilityViolationLines,
+  evaluateCompatibility,
+  transitiveUninstallViolations,
+  type CompatibilityPlugin,
+  type CompatibilitySet,
+} from './compatibility.ts'
+import { EntrypointsTable } from './entrypoints.ts'
+import type { BundleInstallResult, BundleMember, BundleRail } from './bundle-rail.ts'
+import { solveActivation, type ActivationPlugin } from './activation.ts'
 import type { RegistryPersistence } from './persistence.ts'
 import type { SnapshotMeta } from './snapshots.ts'
 import type {
@@ -75,6 +99,14 @@ type StagedRegistration =
     readonly position: 'outermost' | 'derived' | 'innermost'
     readonly returns?: readonly string[]
     readonly listener: (...args: unknown[]) => unknown
+  }
+  | {
+    readonly kind: 'host-listener'
+    readonly pluginId: string
+    readonly event: string
+    readonly listener: (...args: unknown[]) => unknown
+    readonly once?: boolean
+    readonly prepend?: boolean
   }
   | {
     readonly kind: 'tool'
@@ -107,6 +139,12 @@ type StagedRegistration =
     readonly definition: PluginCommandDefinition
   }
   | {
+    readonly kind: 'entrypoint'
+    readonly pluginId: string
+    readonly key: string
+    readonly raw: PluginEntrypointContribution
+  }
+  | {
     readonly kind: 'provide'
     readonly pluginId: string
     readonly scope?: string
@@ -120,6 +158,13 @@ type StagedRegistration =
     readonly disposer: () => void
     readonly name?: string
   }
+  | {
+    readonly kind: 'host-effect'
+    readonly pluginId: string
+    readonly disposer: () => void
+    readonly name?: string
+  }
+  | StagedSettingsRegistration
 
 /** Shared staging phase: registrations belong to activate only (§4-1). */
 interface PhaseHolder {
@@ -215,9 +260,27 @@ class StagingEnv implements PluginEnv {
     }
   }
 
-  on(event: string, listener: (...args: unknown[]) => unknown): () => void {
+  on(
+    event: string,
+    listener: (...args: unknown[]) => unknown,
+    options?: { readonly prepend?: boolean },
+  ): () => void {
     this.assertRegistrable('on')
     claimEffect(this.quotas, 'listener', this.pluginId)
+    if (!this.owner.eventKnown(event) && !this.isDeclaredCustomEvent(event)) {
+      // Host passthrough: the manager does not claim this event (outside the
+      // harness vocabulary and outside the plugin's declared custom events).
+      // The listener registers on the raw host bus with real Cordis
+      // semantics; the manager tracks the disposer for HMR-safe revocation.
+      this.registrations.push({
+        kind: 'host-listener',
+        pluginId: this.pluginId,
+        event,
+        listener,
+        ...(options?.prepend === true ? { prepend: true } : {}),
+      })
+      return () => {}
+    }
     const declaration = this.manifest.permissions.intercept.find(entry => entry.event === event)
     const transform = this.manifest.permissions.transform.find(entry => entry.event === event)
     this.registrations.push({
@@ -233,6 +296,36 @@ class StagingEnv implements PluginEnv {
     return () => {}
   }
 
+  onHost(
+    event: string,
+    listener: (...args: unknown[]) => unknown,
+    options?: { readonly once?: boolean; readonly prepend?: boolean },
+  ): () => void {
+    this.assertRegistrable('onHost')
+    claimEffect(this.quotas, 'listener', this.pluginId)
+    this.registrations.push({
+      kind: 'host-listener',
+      pluginId: this.pluginId,
+      event,
+      listener,
+      ...(options?.once === true ? { once: true } : {}),
+      ...(options?.prepend === true ? { prepend: true } : {}),
+    })
+    return () => {}
+  }
+
+  /** Whether the event matches a declared custom `events` entry (exact or namespace/*). */
+  private isDeclaredCustomEvent(event: string): boolean {
+    for (const pattern of this.manifest.events ?? []) {
+      if (pattern.endsWith('/*')) {
+        if (event.startsWith(pattern.slice(0, -1))) return true
+      } else if (pattern === event) {
+        return true
+      }
+    }
+    return false
+  }
+
   emit(event: string, payload?: unknown): void {
     this.owner.emitManaged(event, payload)
   }
@@ -246,6 +339,22 @@ class StagingEnv implements PluginEnv {
       ...(name === undefined ? {} : { name }),
       ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
     })
+  }
+
+  hostEffect(disposer: () => void, name?: string): void {
+    this.assertRegistrable('hostEffect')
+    this.registrations.push({
+      kind: 'host-effect',
+      pluginId: this.pluginId,
+      disposer,
+      ...(name === undefined ? {} : { name }),
+    })
+  }
+
+  registerSettings(registration: StagedSettingsRegistration): void {
+    this.assertRegistrable('settings.register')
+    claimEffect(this.quotas, 'service', this.pluginId)
+    this.registrations.push(registration)
   }
 
   get host(): unknown {
@@ -381,6 +490,20 @@ interface EngineGeneration {
   readonly httpRoutes: Map<string, PluginHttpRouteSpec>
   readonly skills: Map<string, PluginSkillDefinition>
   readonly commands: Map<string, PluginCommandDefinition>
+  /** Opaque tokens of this generation's entrypoint contributions. */
+  readonly entrypointTokens: unknown[]
+  /** Host-side side-effect disposers; revocable on disable AND release. */
+  readonly hostEffectDisposers: (() => void)[]
+  /**
+   * Settings namespaces staged by the facade; registered on a per-generation
+   * host fiber at commit (replace releases the incumbent before the new
+   * generation applies, so the global namespace map never sees two owners).
+   */
+  readonly settingsRegistrations: StagedSettingsRegistration[]
+  /** Per-generation settings owner fiber, set at settings commit. */
+  settingsOwner?: { readonly fiber: { dispose(): Promise<void> } }
+  /** Settled once the settings owner fiber is disposed (set by disposeGeneration). */
+  settingsOwnerDisposal?: Promise<void>
   /** Whether this generation's registrations are live on the machine. */
   readonly mounted: boolean
 }
@@ -392,6 +515,8 @@ interface ManagedRecord {
   readonly source: PluginSource | { readonly type: 'static' }
   status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed'
   reason?: string
+  /** Host side effects were revoked by disable; enable must remount. */
+  hostSideEffectsDropped?: boolean
   generations: EngineGeneration[]
   state: unknown
   snapshot?: SnapshotMeta
@@ -555,6 +680,16 @@ export interface LifecycleEngineOptions {
   readonly skillService?: SkillServiceLike
   /** Host commands service seam for `env.commands` publication; absent keeps commands manager-held. */
   readonly commandService?: CommandServiceLike
+  /** Entrypoint aggregation table; defaults to a fresh manager-owned table. */
+  readonly entrypoints?: EntrypointsTable
+  /**
+   * Versions of non-managed packages (host packages) constraints may name.
+   * Keys are plugin-id style; v1 deployments pass an empty map and constraint
+   * keys reference managed plugin ids only.
+   */
+  readonly hostPackages?: Readonly<Record<string, string>>
+  /** P3 bundle rail adapter; when present, profile bundles join the unified graph. */
+  readonly bundleRail?: BundleRail
   /** Host provide seam for publishing manager-held provides into `ctx`; absent keeps provides manager-held. */
   readonly hostProvide?: (name: string, value: unknown) => () => void
   /**
@@ -600,6 +735,9 @@ export class LifecycleEngine {
   private readonly httpServerHost: HttpServerLike | undefined
   private readonly skillServiceHost: SkillServiceLike | undefined
   private readonly commandServiceHost: CommandServiceLike | undefined
+  private readonly entrypoints: EntrypointsTable
+  private readonly hostPackages: Readonly<Record<string, string>>
+  private readonly bundleRail: BundleRail | undefined
   private readonly hostProvideSeam: ((name: string, value: unknown) => () => void) | undefined
   private readonly hostService: ((capability: string) => unknown) | undefined
   private readonly toolRegistry: ToolRegistryLike | undefined
@@ -654,6 +792,9 @@ export class LifecycleEngine {
     this.httpServerHost = options.httpServer
     this.skillServiceHost = options.skillService
     this.commandServiceHost = options.commandService
+    this.entrypoints = options.entrypoints ?? new EntrypointsTable(options.ctx)
+    this.hostPackages = options.hostPackages ?? {}
+    this.bundleRail = options.bundleRail
     this.hostProvideSeam = options.hostProvide
     this.hostService = options.hostService
     this.toolRegistry = options.toolRegistry ?? (this.ctx.get('tools') as ToolRegistryLike | undefined)
@@ -675,6 +816,24 @@ export class LifecycleEngine {
     const definition = await this.resolveSource(source)
     return this.withLock(definition.id, 'install', async () => {
       this.validate(definition, origin, source)
+      if (options.autoResolve === true) {
+        const activationPlan = planOperation(
+          { op: 'install', plugin: this.declarationFromDefinition(definition) },
+          this.planState(),
+        )
+        if (!activationPlan.accepted) {
+          // The detailed P1 report is the canonical rejection; the solver
+          // plan preview above exists to discover required-by actions.
+          this.assertCompatibility(definition)
+        }
+        for (const action of activationPlan.actions ?? []) {
+          if (action.op === 'enable' && action.kind === 'required-by') {
+            await this.enable(action.id)
+          }
+        }
+      } else {
+        this.assertCompatibility(definition)
+      }
       await this.assertRegistryQuota(source, definition.id)
       const existing = this.records.get(definition.id)
       if (existing !== undefined) {
@@ -703,63 +862,106 @@ export class LifecycleEngine {
    * @returns the static plugin handle.
    */
   async adoptStatic(definition: PluginDefinition, config: unknown): Promise<PluginHandleInfo> {
-    this.validate(definition, 'static', { type: 'static' })
-    // A persisted uninstall tombstone keeps a static bundle row from being
-    // re-adopted on every boot until the operator clears it.
-    const tombstone = await this.store.readStatus(definition.id)
-    if (tombstone !== undefined && tombstone.status === 'uninstalled') {
-      this.logger.warn(`static plugin ${definition.id} skipped: uninstalled tombstone`)
-      for (const tool of tombstone.tools ?? []) {
-        this.toolTombstones.set(tool, { pluginId: definition.id })
+    // Serialize per id: a Loader hot-reload bridge adoption and the panel's
+    // live adoptRaw can race into the same static row; without the lock both
+    // pass the idempotency check and run apply twice (double host-side
+    // registrations, e.g. settings namespaces).
+    return this.withLock(definition.id, 'adopt', async () => {
+      this.validate(definition, 'static', { type: 'static' })
+      this.assertCompatibility(definition)
+      // Idempotent static adoption: a Loader hot-reload (bridge row re-adopt)
+      // and the panel's live adoptRaw can reach the same static row in either
+      // order. A second adoption of the same live generation must not re-run
+      // apply — host side effects (index taps, skill providers, upgrade
+      // routes) are not double-registrable. A same-version re-adoption with
+      // a DIFFERENT config is a hot-config change and must replace.
+      const live = this.records.get(definition.id)
+      if (live !== undefined && live.origin === 'static' && live.status === 'enabled') {
+        const current = live.generations.at(-1)
+        if (current !== undefined && current.mounted && current.manifest.version === definition.version) {
+          const resolved = this.resolveConfig(definition, config)
+          if (isDeepStrictEqual(resolved, current.resolvedConfig)) {
+            return this.handleOf(live)
+          }
+        }
       }
-      return {
+      // A persisted uninstall tombstone keeps a static bundle row from being
+      // re-adopted on every boot until the operator clears it.
+      const tombstone = await this.store.readStatus(definition.id)
+      if (tombstone !== undefined && tombstone.status === 'uninstalled') {
+        this.logger.warn(`static plugin ${definition.id} skipped: uninstalled tombstone`)
+        for (const tool of tombstone.tools ?? []) {
+          this.toolTombstones.set(tool, { pluginId: definition.id })
+        }
+        return {
+          id: definition.id,
+          version: definition.version,
+          generation: 0,
+          origin: 'static',
+          status: 'uninstalled',
+          kinds: definition.kinds,
+          requires: definition.requires,
+          provides: definition.provides,
+          orderNeutral: true,
+          source: { type: 'static' },
+        }
+      }
+      const existing = this.records.get(definition.id)
+      if (existing !== undefined && existing.origin !== 'static') {
+        existing.status = 'shadowed'
+        existing.reason = 'shadowed'
+        this.refreshOrders()
+      }
+      // Native HMR ordering: release the incumbent generation before the new
+      // static definition applies, so global host seats (settings namespaces,
+      // upgrade/fallback routes) never see two owners in one adoption.
+      if (existing !== undefined) {
+        for (const old of existing.generations) {
+          this.disposeGeneration(old)
+          await old.settingsOwnerDisposal
+          this.emit('plugin/deactivated', this.eventPayload(existing.id, old.manifest, old.number))
+        }
+      }
+      const previous = existing?.generations.at(-1) ?? null
+      let generation: EngineGeneration
+      try {
+        generation = await this.stageNew(definition, { type: 'static' }, config, null, undefined)
+        this.assertToolNamesAvailable(generation, definition.id)
+        this.assertToolRegistryConflicts(generation, definition.id)
+      } catch (error) {
+        // The incumbent was already released; restore it so a failed
+        // re-adoption never strands the plugin.
+        if (existing !== undefined && previous !== null) {
+          try {
+            await this.restoreIncumbent(existing, previous, 'adopt')
+          } catch (rollbackError) {
+            this.logger.warn(`static plugin ${definition.id} adopt rollback failed: ${String(rollbackError)}`)
+          }
+        }
+        throw error
+      }
+      this.applyRegistrations(generation)
+      this.replaceTables(definition.id, previous, generation)
+      this.syncToolPublishState()
+      this.syncPromptSectionState()
+      this.syncHttpRouteState()
+      this.syncSkillState()
+      this.syncCommandState()
+      this.syncProvideState()
+      await this.commitSettingsRegistrations(generation)
+      this.records.set(definition.id, {
         id: definition.id,
-        version: definition.version,
-        generation: 0,
         origin: 'static',
-        status: 'uninstalled',
-        kinds: definition.kinds,
-        requires: definition.requires,
-        provides: definition.provides,
-        orderNeutral: true,
         source: { type: 'static' },
-      }
-    }
-    const existing = this.records.get(definition.id)
-    if (existing !== undefined && existing.origin !== 'static') {
-      existing.status = 'shadowed'
-      existing.reason = 'shadowed'
+        status: 'enabled',
+        generations: [generation],
+        state: undefined,
+      })
       this.refreshOrders()
-    }
-    const generation = await this.stageNew(definition, { type: 'static' }, config, null, undefined)
-    this.assertToolNamesAvailable(generation, definition.id)
-    this.assertToolRegistryConflicts(generation, definition.id)
-    this.applyRegistrations(generation)
-    this.replaceTables(definition.id, existing?.generations.at(-1) ?? null, generation)
-    this.syncToolPublishState()
-    this.syncPromptSectionState()
-    this.syncHttpRouteState()
-    this.syncSkillState()
-    this.syncCommandState()
-    this.syncProvideState()
-    if (existing !== undefined) {
-      for (const old of existing.generations) {
-        this.disposeGeneration(old)
-        this.emit('plugin/deactivated', this.eventPayload(existing.id, old.manifest, old.number))
-      }
-    }
-    this.records.set(definition.id, {
-      id: definition.id,
-      origin: 'static',
-      source: { type: 'static' },
-      status: 'enabled',
-      generations: [generation],
-      state: undefined,
+      this.emit('plugin/installed', this.eventPayload(definition.id, definition, generation.number))
+      this.emit('plugin/activated', this.eventPayload(definition.id, definition, generation.number))
+      return this.handleOf(this.record(definition.id))
     })
-    this.refreshOrders()
-    this.emit('plugin/installed', this.eventPayload(definition.id, definition, generation.number))
-    this.emit('plugin/activated', this.eventPayload(definition.id, definition, generation.number))
-    return this.handleOf(this.record(definition.id))
   }
 
   /**
@@ -772,11 +974,13 @@ export class LifecycleEngine {
    * @param id - optional manager-side plugin id; defaults to the derived id.
    * @returns the static plugin handle.
    */
-  async adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo> {
-    const derived = fromCordisPlugin(raw)
-    const definition = id === undefined || id === derived.id
-      ? derived
-      : { ...derived, id }
+  async adoptRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id?: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginHandleInfo> {
+    const definition = mergeRawDeclaration(fromCordisPlugin(raw), id, declaration)
     return this.adoptStatic(definition, config)
   }
 
@@ -789,9 +993,13 @@ export class LifecycleEngine {
    * @param id - the existing manager-side plugin id (required).
    * @returns the updated plugin handle.
    */
-  async updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo> {
-    const derived = fromCordisPlugin(raw)
-    const definition = id === undefined || id === derived.id ? derived : { ...derived, id }
+  async updateRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginHandleInfo> {
+    const definition = mergeRawDeclaration(fromCordisPlugin(raw), id, declaration)
     return this.withLock(id, 'replace', async () => {
       this.requireRecord(id, 'replace')
       return this.replaceWithDefinition(id, { type: 'static' }, definition, false, config)
@@ -807,7 +1015,11 @@ export class LifecycleEngine {
    * @param id - optional manager-side plugin id; defaults to the derived id.
    * @returns `{ ok: true }` or `{ ok: false, reason }`.
    */
-  async checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck> {
+  async checkSupport(
+    raw: RawCordisFunctionPlugin,
+    id?: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginSupportCheck> {
     if (typeof raw !== 'function' && typeof (raw as { apply?: unknown }).apply !== 'function') {
       return { ok: false, reason: '插件入口不是函数 / apply 对象 / 类构造器' }
     }
@@ -817,7 +1029,7 @@ export class LifecycleEngine {
     } catch (error) {
       return { ok: false, reason: `插件入口形状不合法：${error instanceof Error ? error.message : String(error)}` }
     }
-    const definition = id === undefined || id === derived.id ? derived : { ...derived, id }
+    const definition = mergeRawDeclaration(derived, id, declaration)
     const managerHeld = new Set(['tools', 'systemPrompt', 'httpServer', 'skills', 'commands', 'sessionPersistence'])
     const missing: string[] = []
     for (const capability of definition.requires) {
@@ -829,7 +1041,32 @@ export class LifecycleEngine {
     if (missing.length > 0) {
       return { ok: false, reason: `宿主缺少服务：${missing.join(', ')}` }
     }
+    const violations = this.incomingCompatibilityViolations(definition)
+    if (violations.length > 0) {
+      return { ok: false, reason: `兼容性冲突：${violations.join('；')}` }
+    }
     return { ok: true }
+  }
+
+  /**
+   * Pure compatibility preflight: whether a declarative package
+   * (`dsh.mygo` from its package.json) would violate any constraint against
+   * the live managed set. Panel installers call this before writing the
+   * bridge so a broken combination is refused early.
+   */
+  checkCompatibility(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: PluginCompatibility
+  }): CompatibilityReport {
+    const definition: PluginDefinition = {
+      ...emptyManifest(declaration.id),
+      version: declaration.version ?? '0.0.0-raw',
+      ...(declaration.compatibility === undefined
+        ? {}
+        : { compatibility: declaration.compatibility }),
+    }
+    return this.incomingCompatibilityReport(definition, 'preflight')
   }
 
   /**
@@ -842,6 +1079,19 @@ export class LifecycleEngine {
       if (record === undefined) return
       const dependents = this.dependentsOf(id)
       if (dependents.length > 0) throw fail('dependent-exists', { dependents }, id)
+      const victimVersion = record.generations.at(-1)?.manifest.version
+      const victimProvides = record.generations.at(-1)?.manifest.provides ?? []
+      const blocked = transitiveUninstallViolations(
+        [...this.records.values()]
+          .filter(record => record.id !== id)
+          .map(record => this.compatibilityPluginOf(record)),
+        {
+          id,
+          ...(victimVersion === undefined ? {} : { version: victimVersion }),
+          provides: victimProvides,
+        },
+      )
+      if (blocked.length > 0) throw fail('compatibility-conflict', { plugin: id, violations: blocked }, id)
       const plan = planOperation({ op: 'uninstall', id }, this.planState())
       const displaced = plan.displaced
       // Static rows are never persisted as generations; persist the uninstall
@@ -896,11 +1146,47 @@ export class LifecycleEngine {
    * @param id - plugin id to enable.
    */
   async enable(id: string): Promise<void> {
+    if (this.isBundleMember(id)) {
+      const activationPlan = planOperation({ op: 'enable', id }, this.planState())
+      if (!activationPlan.accepted || activationPlan.error !== undefined) {
+        throw fail(activationPlan.error?.code ?? 'compatibility-conflict', { plugin: id }, id)
+      }
+      for (const action of activationPlan.actions ?? []) {
+        if (action.op !== 'enable' || action.kind !== 'required-by' || action.id === id) continue
+        if (this.isBundleMember(action.id)) this.bundleRail?.enable(action.id)
+        else await this.enable(action.id)
+      }
+      this.bundleRail?.enable(id)
+      return
+    }
     return this.withLock(id, 'enable', async () => {
       const record = this.requireRecord(id, 'enable')
       if (record.status === 'enabled') return
       // Shadowed dynamic rows stay inert while the static incumbent owns the id.
       if (record.status === 'shadowed') return
+      // Disable revoked the generation's host side effects (index taps,
+      // skill providers, upgrade routes). Re-enabling must remount: the same
+      // code and config through the HMR replace protocol re-runs apply and
+      // re-registers the host effects without restarting sessions.
+      if (record.hostSideEffectsDropped === true) {
+        const generation = record.generations.at(-1)
+        const definition = generation?.manifest
+        if (definition === undefined) {
+          throw fail('plugin-not-found', { id, operation: 'enable' }, id)
+        }
+        await this.replaceWithDefinition(
+          id,
+          record.source,
+          definition,
+          false,
+          generation?.resolvedConfig,
+        )
+        delete record.hostSideEffectsDropped
+        this.emit('plugin/enabled', this.eventPayload(id, this.manifestOf(record), this.generationNumber(record)))
+        return
+      }
+      const definition = record.generations.at(-1)?.manifest
+      if (definition !== undefined) this.assertCompatibility(definition)
       const generation = record.generations.at(-1)
       if (generation !== undefined && !generation.mounted) {
         await this.mountDeclared(record, generation)
@@ -978,11 +1264,35 @@ export class LifecycleEngine {
    * @param id - plugin id to disable.
    * @param reason - optional durable reason stamped on the status row.
    */
-  async disable(id: string, reason?: string): Promise<void> {
+  async disable(id: string, reason?: string, force = false): Promise<void> {
+    if (this.isBundleMember(id)) {
+      const activationPlan = planOperation({ op: 'disable', id, force }, this.planState())
+      if (!activationPlan.accepted || activationPlan.error !== undefined) {
+        const dependents = (activationPlan.error?.details?.dependents as readonly string[] | undefined) ?? []
+        throw fail('dependent-exists', { dependents }, id)
+      }
+      for (const action of activationPlan.actions ?? []) {
+        if (action.op !== 'disable' || action.id === id) continue
+        if (this.isBundleMember(action.id)) this.bundleRail?.disable(action.id)
+        else await this.disable(action.id, reason, false)
+      }
+      this.bundleRail?.disable(id)
+      return
+    }
     return this.withLock(id, 'disable', async () => {
       const record = this.requireRecord(id, 'disable')
       if (record.status === 'disabled') return
       if (record.status === 'shadowed') return
+      const activationPlan = planOperation({ op: 'disable', id, force }, this.planState())
+      if (!activationPlan.accepted) {
+        const dependents = (activationPlan.error?.details?.dependents as readonly string[] | undefined) ?? []
+        throw fail('dependent-exists', { dependents }, id)
+      }
+      for (const action of activationPlan.actions ?? []) {
+        if (action.op === 'disable' && action.id !== id && action.kind === 'conflict-resolution') {
+          await this.disable(action.id, reason, false)
+        }
+      }
       // Delete-class persist first for dynamic rows; static records never
       // write a phantom status row into the registry.
       if (record.origin !== 'static') {
@@ -998,6 +1308,31 @@ export class LifecycleEngine {
       record.status = 'disabled'
       if (reason === undefined) delete record.reason
       else record.reason = reason
+      // Revoke hot-revocable host side effects (the reason `disable` keeps
+      // dispatch registrations live is the "stopped" interception semantics;
+      // host side effects have no such gate and must leave now).
+      const generation = record.generations.at(-1)
+      if (generation !== undefined && generation.hostEffectDisposers.length > 0) {
+        for (const disposer of generation.hostEffectDisposers) {
+          try {
+            disposer()
+          } catch (error) {
+            this.logger.warn(`plugin ${id} disable host effect disposer failed: ${String(error)}`)
+          }
+        }
+        generation.hostEffectDisposers.length = 0
+        record.hostSideEffectsDropped = true
+      }
+      // Settings namespaces ride the same hot-revocable line: a disabled
+      // plugin must not keep its Settings UI row (or its namespace claim)
+      // while stopped; enable remounts them through the replace protocol.
+      const settingsOwner = generation?.settingsOwner
+      if (settingsOwner !== undefined) {
+        delete generation!.settingsOwner
+        generation!.settingsOwnerDisposal = Promise.resolve(settingsOwner.fiber.dispose()).catch(() => undefined)
+        record.hostSideEffectsDropped = true
+      }
+      await generation?.settingsOwnerDisposal
       this.refreshOrders()
       this.emit('plugin/disabled', {
         ...this.eventPayload(id, this.manifestOf(record), this.generationNumber(record)),
@@ -1076,6 +1411,17 @@ export class LifecycleEngine {
   }
 
   /**
+   * Current resolved config of one managed plugin's live generation.
+   * @param id - plugin id.
+   * @returns the resolved config, or `undefined` when unknown.
+   */
+  configOf(id: string): unknown | undefined {
+    const record = this.records.get(id)
+    if (record === undefined) return undefined
+    return record.generations.at(-1)?.resolvedConfig
+  }
+
+  /**
    * Plan preview against the current managed set (§15.3/PO:242). Async since
    * install/replace resolve their source through the manager's resolver;
    * resolution is pure-read — no fiber, no hooks, no registry writes
@@ -1097,7 +1443,108 @@ export class LifecycleEngine {
         force: operation.force === true,
       }, this.planState())
     }
-    return planOperation({ op: operation.op, id: operation.id }, this.planState())
+    return planOperation(
+      {
+        op: operation.op,
+        id: operation.id,
+        ...(operation.op === 'disable' && operation.force === true ? { force: true } : {}),
+      },
+      this.planState(),
+    )
+  }
+
+  /**
+   * Plan one declarative install from `dsh.mygo` metadata. The panel calls
+   * this before writing a bridge row so required-by actions and warnings are
+   * visible; resolution is pure and never mutates state.
+   */
+  async planInstall(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: PluginCompatibility
+    readonly provides?: readonly string[]
+  }): Promise<PluginOperationPlan> {
+    const definition: PluginDefinition = {
+      ...emptyManifest(declaration.id),
+      version: declaration.version ?? '0.0.0-raw',
+      ...(declaration.compatibility === undefined ? {} : { compatibility: declaration.compatibility }),
+      provides: [...(declaration.provides ?? [])],
+    }
+    return planOperation({ op: 'install', plugin: this.declarationFromDefinition(definition) }, this.planState())
+  }
+
+  /** Bundle rail members (empty when the rail is not wired). */
+  bundleList(): readonly BundleMember[] {
+    return this.bundleRail?.members() ?? []
+  }
+
+  /** Install one profile bundle via the official CLI. */
+  async bundleInstall(spec: string): Promise<BundleInstallResult> {
+    if (this.bundleRail === undefined) throw new Error('bundle rail 未启用')
+    const member = this.bundleRail.install(spec)
+    const plan = this.verifyBundleInstall(member)
+    if (!plan.accepted || plan.error !== undefined) {
+      try {
+        this.bundleRail.uninstall(member.id)
+      } catch {
+        // rollback is best-effort; the rejection below names the conflict
+      }
+      throw new PluginError(
+        plan.error?.code ?? 'compatibility-conflict',
+        plan.error?.message ?? 'bundle install 校验未通过',
+        {
+          plugin: member.id,
+          ...(plan.error?.details === undefined ? {} : { ...plan.error.details }),
+        },
+        member.id,
+      )
+    }
+    return { member, plan }
+  }
+
+  /** Solve one newly installed bundle as an incoming activation (pre-apply verify). */
+  private verifyBundleInstall(member: BundleMember): ActivationPlan {
+    const plugins: ActivationPlugin[] = this.planState()
+      .plugins
+      .filter(plugin => plugin.id !== member.id)
+      .map(plugin => ({
+        id: plugin.id,
+        ...(plugin.version === undefined ? {} : { version: plugin.version }),
+        ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+        ...(plugin.provides === undefined ? {} : { provides: plugin.provides }),
+        enabled: plugin.enabled !== false,
+        ...(plugin.rail === undefined ? {} : { rail: plugin.rail }),
+      }))
+    const incoming: ActivationPlugin = {
+      id: member.id,
+      ...(member.version === undefined ? {} : { version: member.version }),
+      ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
+      ...(member.provides === undefined ? {} : { provides: member.provides }),
+      enabled: true,
+      rail: 'bundle',
+    }
+    return solveActivation(plugins, { op: 'install', plugin: incoming })
+  }
+
+  /** Uninstall one profile bundle (dependents block first, no force). */
+  async bundleUninstall(id: string): Promise<void> {
+    if (this.bundleRail === undefined) throw new Error('bundle rail 未启用')
+    const activationPlan = planOperation({ op: 'uninstall', id }, this.planState())
+    if (!activationPlan.accepted || activationPlan.error !== undefined) {
+      const dependents = (activationPlan.error?.details?.dependents as readonly string[] | undefined) ?? []
+      throw fail(activationPlan.error?.code === 'dependent-exists' ? 'dependent-exists' : 'compatibility-conflict', {
+        ...(dependents.length > 0 ? { dependents } : {}),
+        ...(activationPlan.error?.details === undefined ? {} : { ...activationPlan.error.details }),
+      }, id)
+    }
+    this.bundleRail.uninstall(id)
+  }
+
+  /** Enable/disable one profile bundle (routes through the unified graph). */
+  async bundleSetEnabled(id: string, enabled: boolean, force = false): Promise<void> {
+    if (this.bundleRail === undefined) throw new Error('bundle rail 未启用')
+    if (enabled) await this.enable(id)
+    else await this.disable(id, undefined, force)
   }
 
   /**
@@ -1254,6 +1701,9 @@ export class LifecycleEngine {
             httpRoutes: new Map(),
             skills: new Map(),
             commands: new Map(),
+            entrypointTokens: [],
+            hostEffectDisposers: [],
+            settingsRegistrations: [],
             mounted: false,
           }]
           : []
@@ -1281,6 +1731,10 @@ export class LifecycleEngine {
         this.nextGeneration = Math.max(this.nextGeneration, generation.number + 1)
       }
     }
+    // The recovery loop mounts rows in list order, which may not match
+    // declaration order; re-check the complete set once and disable the
+    // declaring violators deterministically.
+    await this.reconcileCompatibility()
     if (this.persistence !== undefined) {
       const keep = new Set<string>()
       for (const record of this.records.values()) {
@@ -1388,6 +1842,19 @@ export class LifecycleEngine {
   }
 
   /**
+   * Whether an event belongs to the static host harness vocabulary. Managed
+   * listeners are routed through the dispatch machine for these events;
+   * everything else (outside the vocabulary and outside a plugin's declared
+   * custom events) is bridged to the raw host bus so host events keep real
+   * Cordis semantics.
+   * @param event - event name to test.
+   * @returns true when the event is a known host harness event.
+   */
+  eventKnown(event: string): boolean {
+    return this.eventVocabulary.some(entry => entry.name === event)
+  }
+
+  /**
    * Emit one plugin-declared custom event through the dispatch machine,
    * materializing the event in the vocabulary when it first appears (exact
    * declarations or `namespace/*` pattern members are both manifest-gated).
@@ -1434,6 +1901,173 @@ export class LifecycleEngine {
       ...(this.config.protectedFields === undefined ? {} : { protectedFields: this.config.protectedFields }),
       vocabulary: this.eventVocabulary,
     })
+  }
+
+  /** Installed versions (enabled + disabled, excluding shadowed/quarantined) plus host packages. */
+  private installedVersions(): Readonly<Record<string, string>> {
+    const versions: Record<string, string> = { ...this.hostPackages }
+    for (const record of this.records.values()) {
+      if (record.status !== 'enabled' && record.status !== 'disabled') continue
+      const version = record.generations.at(-1)?.manifest.version
+      if (version !== undefined && version !== '') versions[record.id] = version
+    }
+    for (const member of this.bundleRail?.members() ?? []) {
+      if (member.version !== undefined && member.version !== '') versions[member.id] = member.version
+    }
+    versions[MYGO_MANAGER_ID] = MYGO_MANAGER_VERSION
+    return versions
+  }
+
+  /**
+   * Fail loud when the incoming plugin's own constraints are unsatisfiable or
+   * its arrival breaks a survivor's declared constraints. The incoming plugin
+   * is the deterministic victim of both directions.
+   */
+  private assertCompatibility(definition: PluginDefinition): void {
+    const violations = this.incomingCompatibilityViolations(definition)
+    if (violations.length > 0) {
+      throw fail('compatibility-conflict', { plugin: definition.id, violations }, definition.id)
+    }
+  }
+
+  /** One managed record as a compatibility evaluation member. */
+  private compatibilityPluginOf(record: ManagedRecord): CompatibilityPlugin {
+    const generation = record.generations.at(-1)
+    return {
+      id: record.id,
+      ...(generation?.manifest.version === undefined
+        ? {}
+        : { version: generation?.manifest.version }),
+      ...(generation?.manifest.compatibility === undefined
+        ? {}
+        : { compatibility: generation?.manifest.compatibility }),
+      ...(generation?.manifest.provides === undefined
+        ? {}
+        : { provides: generation?.manifest.provides }),
+      enabled: record.status === 'enabled',
+    }
+  }
+
+  /** The current managed set: enabled members and every installed member. */
+  private compatibilitySet(): CompatibilitySet {
+    const records = [...this.records.values()]
+      .filter(record => record.status === 'enabled' || record.status === 'disabled')
+      .map(record => this.compatibilityPluginOf(record))
+    const bundleMembers = this.bundleRail?.members() ?? []
+    const bundlePlugins: CompatibilityPlugin[] = bundleMembers.map(member => ({
+      id: member.id,
+      ...(member.version === undefined ? {} : { version: member.version }),
+      ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
+      ...(member.provides === undefined ? {} : { provides: member.provides }),
+      enabled: member.enabled,
+    }))
+    const managerMember: CompatibilityPlugin = {
+      id: MYGO_MANAGER_ID,
+      version: MYGO_MANAGER_VERSION,
+      provides: [MYGO_MANAGER_CAPABILITY],
+      enabled: true,
+    }
+    return {
+      enabled: [...records.filter(plugin => plugin.enabled === true), ...bundlePlugins.filter(plugin => plugin.enabled), managerMember],
+      installed: [...records, ...bundlePlugins, managerMember],
+    }
+  }
+
+  /** Derived provider facts from the current managed set (P1: service level). */
+  private compositionFacts(): CompositionFactProvider {
+    const bundleMembers = this.bundleRail?.members() ?? []
+    return {
+      serviceProviders: () => {
+        const facts: { readonly service: string; readonly plugin: string }[] = []
+        for (const plugin of this.compatibilitySet().enabled) {
+          for (const service of plugin.provides ?? []) facts.push({ service, plugin: plugin.id })
+        }
+        return facts
+      },
+      patchedRows: () => {
+        const rows: { readonly rowId: string; readonly plugin: string }[] = []
+        for (const member of bundleMembers) {
+          if (!member.enabled) continue
+          for (const fact of member.patchFacts) {
+            rows.push({ rowId: fact.rowId, plugin: member.id })
+          }
+        }
+        return rows
+      },
+    }
+  }
+
+  /** Whether one id belongs to the bundle rail (and is currently installed). */
+  private isBundleMember(id: string): boolean {
+    return (this.bundleRail?.members().some(member => member.id === id) ?? false)
+  }
+
+  /** Full compatibility report for one incoming plugin against the set. */
+  private incomingCompatibilityReport(
+    definition: PluginDefinition,
+    action: CompatibilityReport['action'],
+  ): CompatibilityReport {
+    return evaluateCompatibility(
+      {
+        id: definition.id,
+        version: definition.version,
+        ...(definition.compatibility === undefined ? {} : { compatibility: definition.compatibility }),
+        provides: definition.provides,
+      },
+      this.compatibilitySet(),
+      action,
+      this.compositionFacts(),
+    )
+  }
+
+  /** Own-declared plus survivor-declared violations against one incoming plugin. */
+  private incomingCompatibilityViolations(definition: PluginDefinition): string[] {
+    return compatibilityViolationLines(this.incomingCompatibilityReport(definition, 'install'))
+  }
+
+  /**
+   * Post-recovery compatibility pass: rows were mounted in list order, which
+   * may not match declaration order, so the final set is re-checked once
+   * complete. The declaring plugin is the deterministic victim: its record is
+   * disabled with reason `compatibility-conflict` and the violation chain
+   * logged, instead of taking down the host.
+   */
+  private async reconcileCompatibility(): Promise<void> {
+    let changed = false
+    // Cascade to a fixpoint: a missing leaf disables its direct declarer
+    // first; the next pass then disables every plugin whose hard closure
+    // walked through the now-disabled member. Each record carries only its
+    // own edge chain as the violation reason.
+    while (true) {
+      const pass = [...this.records.values()].filter(record => record.status === 'enabled')
+      let disabled = false
+      for (const record of pass) {
+        const definition = record.generations.at(-1)?.manifest
+        if (definition === undefined) continue
+        const report = this.incomingCompatibilityReport(definition, 'reconcile')
+        const violations = compatibilityViolationLines(report)
+        if (violations.length === 0) continue
+        disabled = true
+        changed = true
+        this.logger.warn(`plugin ${record.id} disabled by compatibility: ${violations.join('；')}`)
+        record.status = 'disabled'
+        record.reason = 'compatibility-conflict'
+        if (record.origin !== 'static') {
+          try {
+            await this.store.writeStatus(record.id, {
+              ...this.statusRecord(record),
+              status: 'disabled',
+              reason: 'compatibility-conflict',
+            })
+          } catch (error) {
+            this.logger.warn(`plugin ${record.id} compatibility status persist failed: ${String(error)}`)
+          }
+        }
+        await this.auditRecovery('quarantine', record.id, 'compatibility-conflict', { violations })
+      }
+      if (!disabled) break
+    }
+    if (changed) this.refreshOrders()
   }
 
   private assertNoConflicts(id: string, definition: PluginDefinition, operation: 'install' | 'replace'): void {
@@ -1563,7 +2197,25 @@ export class LifecycleEngine {
         if (activation !== undefined) await activation
       }
     } catch (error) {
-      throw fail('staging-failed', { stage: 'staging', cause: String(error) }, definition.id, error)
+      const cause = String(error)
+      const hostConflict = /service "([^"]+)" has been registered/.exec(cause)
+      if (hostConflict !== null) {
+        // The plugin provides a host service the composition already owns
+        // (e.g. a SessionPersistence subclass next to the jsonl backend):
+        // staging can never succeed while the incumbent stays — fail loud
+        // with the conflict instead of a raw Cordis provide error.
+        throw fail('staging-failed', {
+          stage: 'staging',
+          cause: `插件提供宿主已注册的服务 ${hostConflict[1]}（host-conflict）；`
+            + `需要宿主组合移除同名服务，或该插件以替换模式部署`,
+        }, definition.id, error)
+      }
+      throw fail('staging-failed', { stage: 'staging', cause }, definition.id, error)
+    }
+    for (const [key, values] of Object.entries(definition.entrypoints ?? {})) {
+      for (const raw of values) {
+        registrations.push({ kind: 'entrypoint', pluginId: definition.id, key, raw })
+      }
     }
     for (const registration of registrations) {
       if (registration.kind === 'tool') assertToolOutputShape(registration.definition, definition.id)
@@ -1583,6 +2235,9 @@ export class LifecycleEngine {
       httpRoutes: new Map(),
       skills: new Map(),
       commands: new Map(),
+      entrypointTokens: [],
+      hostEffectDisposers: [],
+      settingsRegistrations: [],
       mounted: true,
     }
   }
@@ -1590,7 +2245,7 @@ export class LifecycleEngine {
   private existingScopes(id: string): string[] {
     const record = this.records.get(id)
     return [...new Set((record?.generations.at(-1)?.registrations ?? [])
-      .map(registration => registration.scope)
+      .map(registration => 'scope' in registration ? registration.scope : undefined)
       .filter((scope): scope is string => scope !== undefined))]
       .sort()
   }
@@ -1599,7 +2254,21 @@ export class LifecycleEngine {
     try {
       return definition.config(config ?? {})
     } catch (error) {
-      throw fail('manifest-invalid', { field: 'config', expected: String(error) }, definition.id, error)
+      // Surface the plugin's own schema description instead of the raw
+      // schemastery ValidationError: installers need to know WHICH fields the
+      // plugin requires (e.g. `{ type: 'sqlite', path }` or
+      // `{ type: 'postgres', connectionString }`) to fill the config form.
+      let expected = '插件配置 schema'
+      try {
+        const description = String(definition.config)
+        if (description !== '') expected = description
+      } catch {
+        // schema without a readable description: keep the generic label
+      }
+      throw fail('manifest-invalid', {
+        field: 'config',
+        expected: `配置不合法：插件要求 ${expected}；收到 ${JSON.stringify(config ?? {})}。请在安装时填写 config（面板“配置(JSON)”输入框）`,
+      }, definition.id, error)
     }
   }
 
@@ -1656,6 +2325,7 @@ export class LifecycleEngine {
       const table = String(error).includes('gens') ? 'gens' : 'status'
       throw fail('persist-failed', { operation: 'install', table }, id, error)
     }
+    await this.commitSettingsRegistrations(generation)
   }
 
   private async replaceWithDefinition(
@@ -1667,6 +2337,7 @@ export class LifecycleEngine {
   ): Promise<PluginHandleInfo> {
     const record = this.requireRecord(id, 'replace')
     this.validate(definition, record.origin === 'static' ? 'runtime-api' : record.origin, source)
+    if (!force) this.assertCompatibility(definition)
     if (!force) this.assertNoConflicts(id, definition, 'replace')
     const incumbent = record.generations.at(-1)
     const incumbentProvides = incumbent?.manifest.provides ?? []
@@ -1678,6 +2349,15 @@ export class LifecycleEngine {
     const newGeneration = (incumbent?.number ?? 0) + 1
 
     this.emit('plugin/replacing', this.eventPayload(id, definition, newGeneration))
+
+    // Fail fast on the new config before releasing the incumbent: an invalid
+    // config must not take the live generation down, even transiently.
+    try {
+      this.resolveConfig(definition, config)
+    } catch (error) {
+      this.emit('plugin/replace-failed', this.failurePayload(id, definition, newGeneration, errorCodeOf(error), String(error)))
+      throw error
+    }
 
     let state: unknown
     let snapshot: SnapshotMeta | undefined
@@ -1716,15 +2396,42 @@ export class LifecycleEngine {
     }
 
     const previous = incumbent === undefined ? null : { generation: incumbent.number, version: incumbent.manifest.version }
+
+    // Native HMR ordering (fiber.update semantics): quiesce, then release the
+    // incumbent generation fully BEFORE the replacement applies. Every global
+    // host seat the old generation held (settings namespaces, webserver
+    // upgrade/fallback routes, provider slots, ...) is free by the time the
+    // new apply runs, so no staged/deferred registration special case is
+    // needed and seat registries never observe two owners in one replace.
+    if (incumbent !== undefined && definition.swapPolicy !== 'immediate') {
+      try {
+        await this.waitForQuiescence(definition.swapPolicy, affectedEvents(incumbent), id)
+      } catch (error) {
+        this.emit('plugin/replace-failed', this.failurePayload(id, definition, newGeneration, errorCodeOf(error), String(error)))
+        throw error
+      }
+    }
+    if (incumbent !== undefined) {
+      await this.releaseGeneration(record, incumbent, affectedEvents(incumbent))
+    }
+
     let generation: EngineGeneration
     try {
       generation = await this.stageNew(definition, source, config, previous, state)
       this.assertToolNamesAvailable(generation, id)
       this.assertToolRegistryConflicts(generation, id)
-      if (definition.swapPolicy !== 'immediate') {
-        await this.waitForQuiescence(definition.swapPolicy, affectedEvents(incumbent), id)
-      }
     } catch (error) {
+      // The incumbent was already released; restore it (fresh apply of its
+      // own definition) so a failed replacement never strands the plugin.
+      if (incumbent !== undefined) {
+        try {
+          await this.restoreIncumbent(record, incumbent, 'staging')
+        } catch (rollbackError) {
+          record.status = 'quarantined'
+          record.reason = `rollback-failed: ${String(rollbackError)}`
+          this.logger.warn(`plugin ${id} replace rollback failed: ${String(rollbackError)}`)
+        }
+      }
       this.emit('plugin/replace-failed', this.failurePayload(id, definition, newGeneration, errorCodeOf(error), String(error)))
       throw error
     }
@@ -1762,11 +2469,20 @@ export class LifecycleEngine {
         ...(snapshot === undefined ? {} : { snapshot }),
       })
     } catch (error) {
-      this.compensate(id, generation, previousOrders, incumbent ?? null)
+      this.compensate(id, generation, previousOrders, null)
       record.generations = record.generations.filter(candidate => candidate.number !== generation.number)
       record.status = previousStatus
       if (previousSnapshot === undefined) delete record.snapshot
       else record.snapshot = previousSnapshot
+      if (incumbent !== undefined) {
+        try {
+          await this.restoreIncumbent(record, incumbent, 'persist')
+        } catch (rollbackError) {
+          record.status = 'quarantined'
+          record.reason = `rollback-failed: ${String(rollbackError)}`
+          this.logger.warn(`plugin ${id} persist rollback failed: ${String(rollbackError)}`)
+        }
+      }
       throw fail('persist-failed', { operation: 'replace', table: 'status' }, id, error)
     }
     this.crashAfterPersist()
@@ -1778,7 +2494,7 @@ export class LifecycleEngine {
       }
     }
     this.trimInMemoryHistory(record)
-    if (incumbent !== undefined) this.releaseGeneration(record, incumbent, affectedEvents(incumbent))
+    await this.commitSettingsRegistrations(generation)
     await this.auditMount(id, definition.version, generation.number, record.origin === 'static' ? 'runtime-api' : record.origin)
     const providesPath = lost.length > 0 ? 'dropped' : added.length > 0 ? 'added' : 'unchanged'
     this.emit('plugin/replaced', {
@@ -1807,28 +2523,79 @@ export class LifecycleEngine {
     }
   }
 
-  private releaseGeneration(record: ManagedRecord, generation: EngineGeneration, events: readonly string[]): void {
+  private async releaseGeneration(
+    record: ManagedRecord,
+    generation: EngineGeneration,
+    events: readonly string[],
+  ): Promise<void> {
     const inFlight = events.filter(event => this.dispatch.inFlightCount(event) > 0)
     if (inFlight.length === 0) {
       this.disposeGeneration(generation)
+      await generation.settingsOwnerDisposal
       this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
       return
     }
     generation.remainingEvents = new Set(inFlight)
-    const disposers: (() => void)[] = []
-    for (const event of inFlight) {
-      disposers.push(this.dispatch.onIdle(event, () => {
-        generation.remainingEvents.delete(event)
-        if (generation.remainingEvents.size > 0) return
+    await new Promise<void>((resolve) => {
+      const disposers: (() => void)[] = []
+      const settle = (): void => { resolve() }
+      for (const event of inFlight) {
+        disposers.push(this.dispatch.onIdle(event, async () => {
+          generation.remainingEvents.delete(event)
+          if (generation.remainingEvents.size > 0) return
+          for (const disposer of disposers) disposer()
+          this.idleDisposers.delete(record.id)
+          this.disposeGeneration(generation)
+          await generation.settingsOwnerDisposal
+          this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
+          settle()
+        }))
+      }
+      this.idleDisposers.set(record.id, () => {
         for (const disposer of disposers) disposer()
-        this.idleDisposers.delete(record.id)
-        this.disposeGeneration(generation)
-        this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
-      }))
-    }
-    this.idleDisposers.set(record.id, () => {
-      for (const disposer of disposers) disposer()
+        settle()
+      })
     })
+  }
+
+  /**
+   * Roll back a replace/adopt after the incumbent was already released:
+   * re-stage the incumbent definition (fresh apply, fresh host seats) and
+   * commit it in place under its original generation number. The store is
+   * untouched — it still points at the incumbent generation, so a restored
+   * record needs no write.
+   */
+  private async restoreIncumbent(
+    record: ManagedRecord,
+    incumbent: EngineGeneration,
+    stage: string,
+  ): Promise<void> {
+    const id = record.id
+    const previous = { generation: incumbent.number, version: incumbent.manifest.version }
+    let restored: EngineGeneration
+    try {
+      restored = await this.stageNew(incumbent.manifest, incumbent.source, incumbent.resolvedConfig, previous, record.state)
+      this.assertToolNamesAvailable(restored, id)
+      this.assertToolRegistryConflicts(restored, id)
+    } catch (error) {
+      throw fail('staging-failed', { stage: `rollback:${stage}`, cause: String(error) }, id, error)
+    }
+    this.applyRegistrations(restored)
+    this.replaceTables(id, null, restored)
+    this.syncToolPublishState()
+    this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
+    const index = record.generations.findIndex(candidate => candidate.number === incumbent.number)
+    if (index === -1) record.generations.push(restored)
+    else record.generations[index] = restored
+    record.status = 'enabled'
+    delete record.reason
+    this.refreshOrders()
+    await this.commitSettingsRegistrations(restored)
+    this.emit('plugin/activated', this.eventPayload(id, incumbent.manifest, incumbent.number))
   }
 
   private releaseRecord(record: ManagedRecord): void {
@@ -1865,8 +2632,33 @@ export class LifecycleEngine {
   }
 
   private disposeGeneration(generation: EngineGeneration): void {
+    // Host side effects first: they may be shared with the host (index taps,
+    // skill providers, upgrade routes) and must leave before the managed
+    // registrations. Both lists are drained so release is idempotent.
+    for (const disposer of generation.hostEffectDisposers) {
+      try {
+        disposer()
+      } catch (error) {
+        this.logger.warn(`plugin ${generation.manifest.id} host effect disposer failed: ${String(error)}`)
+      }
+    }
+    generation.hostEffectDisposers.length = 0
     for (const disposer of generation.disposers) disposer()
     generation.disposers.length = 0
+    // Entrypoint contributions are per-generation: withdraw exactly this
+    // generation's tokens so a replaced generation never steals the new one's
+    // contributions (same provider id, distinct tokens).
+    for (const token of generation.entrypointTokens) this.entrypoints.removeToken(token)
+    generation.entrypointTokens.length = 0
+    // Settings owner fiber: the namespace registration rides this fiber, so
+    // disposal removes it from the host settings service. Release paths that
+    // must sequence (replace) await `settingsOwnerDisposal`; every other path
+    // lets it settle in the background.
+    const owner = generation.settingsOwner
+    delete generation.settingsOwner
+    if (owner !== undefined) {
+      generation.settingsOwnerDisposal = Promise.resolve(owner.fiber.dispose()).catch(() => undefined)
+    }
     // Lifecycle sovereignty: the author hooks release resources the
     // registrations do not own. Both are best-effort (async results are
     // contained; failures only warn) so disposal never blocks the engine.
@@ -1892,6 +2684,47 @@ export class LifecycleEngine {
     }
   }
 
+  /**
+   * Commit staged settings namespaces on a per-generation host fiber. Runs
+   * after the incumbent is released (the replace protocol releases before
+   * the new generation applies), so the global namespace map never sees two
+   * owners. The fiber is disposed with the generation.
+   */
+  private async commitSettingsRegistrations(generation: EngineGeneration): Promise<void> {
+    if (generation.settingsRegistrations.length === 0) return
+    if (this.ctx.get('settings') === undefined) return
+    const items = [...generation.settingsRegistrations]
+    try {
+      const fiber = this.ctx.plugin({
+        inject: ['settings'],
+        apply(owner) {
+          const settings = (owner as unknown as {
+            settings: {
+              register(
+                ns: string,
+                schema: unknown,
+                options?: object,
+              ): { get(): unknown; watch(callback: (next: unknown, prev: unknown) => void | Promise<void>): () => void }
+            }
+          }).settings
+          for (const item of items) {
+            const scope = settings.register(item.ns, item.schema, item.options ?? {})
+            item.stagedScope.attach(scope)
+          }
+        },
+      })
+      generation.settingsOwner = { fiber }
+      // Settle the owner fiber load so the namespace is actually registered
+      // (or its startup error surfaced) before the caller reports success.
+      await fiber
+    } catch (error) {
+      this.logger.warn(
+        `plugin ${generation.manifest.id} settings namespace commit failed: ${String(error)}`,
+      )
+      delete generation.settingsOwner
+    }
+  }
+
   private applyRegistrations(generation: EngineGeneration): void {
     for (const registration of generation.registrations) {
       if (registration.kind === 'listener') {
@@ -1907,6 +2740,39 @@ export class LifecycleEngine {
           listener: registration.listener,
         })
         generation.disposers.push(disposer)
+      } else if (registration.kind === 'host-listener') {
+        // Zero-intrusion raw-facade surface: register directly on the raw
+        // host bus so the listener keeps real Cordis semantics (options,
+        // once, scope filters). The returned disposer is tracked per
+        // generation, so disable/uninstall/replace revoke it exactly once.
+        const host = this.ctx as unknown as {
+          on(
+            name: string,
+            listener: (...args: unknown[]) => unknown,
+            options?: { readonly prepend?: boolean },
+          ): () => boolean
+          once(
+            name: string,
+            listener: (...args: unknown[]) => unknown,
+            options?: { readonly prepend?: boolean },
+          ): () => boolean
+        }
+        try {
+          const options = registration.prepend === true ? { prepend: true } : undefined
+          const disposer = registration.once === true
+            ? host.once(registration.event, registration.listener, options)
+            : host.on(registration.event, registration.listener, options)
+          // Host listeners are hot-revocable: disable revokes them right
+          // away (unlike managed dispatch registrations, which keep the
+          // "stopped" interception semantics), and replace/uninstall drain
+          // them again through the host-effect list.
+          generation.hostEffectDisposers.push(disposer)
+        } catch (error) {
+          throw fail('staging-failed', {
+            stage: 'host-listener',
+            cause: String(error),
+          }, registration.pluginId, error)
+        }
       } else if (registration.kind === 'provide') {
         generation.provides.set(registration.capability, registration.value)
       } else if (registration.kind === 'prompt-section') {
@@ -1939,8 +2805,24 @@ export class LifecycleEngine {
           }, registration.pluginId)
         }
         generation.commands.set(registration.definition.name, registration.definition)
+      } else if (registration.kind === 'entrypoint') {
+        try {
+          const token = this.entrypoints.add(registration.pluginId, registration.key, registration.raw)
+          generation.entrypointTokens.push(token)
+        } catch (error) {
+          throw fail('staging-failed', {
+            stage: `entrypoint:${registration.key}`,
+            cause: String(error),
+          }, registration.pluginId, error)
+        }
+      } else if (registration.kind === 'host-effect') {
+        generation.hostEffectDisposers.push(registration.disposer)
       } else if (registration.kind === 'effect') {
         generation.disposers.push(registration.disposer)
+      } else if (registration.kind === 'settings-registration') {
+        // Registered on a per-generation host fiber at commit; the owner
+        // fiber's disposal removes the namespace with the generation.
+        generation.settingsRegistrations.push(registration)
       } else {
         // The registration union is closed: not a listener or provide is a tool.
         generation.tools.set(registration.definition.name, registration.definition)
@@ -2157,7 +3039,8 @@ export class LifecycleEngine {
     const outgoing = res as {
       statusCode: number
       setHeader(name: string, value: string): void
-      end(body: string | Buffer): void
+      write(chunk: string | Buffer): boolean
+      end(body?: string | Buffer): void
     }
     const body = await new Promise<string>((resolve) => {
       if (incoming.on === undefined) {
@@ -2187,6 +3070,16 @@ export class LifecycleEngine {
     outgoing.statusCode = managed.status
     for (const [name, value] of Object.entries(managed.headers ?? {})) {
       outgoing.setHeader(name, value)
+    }
+    // Live stream (SSE-style raw routes): forward every chunk as it arrives
+    // and end only when the managed stream closes (res.end / piped source end
+    // / idle timeout), so long-lived event streams do not buffer for 30s.
+    if (managed.stream !== undefined) {
+      for await (const chunk of managed.stream) {
+        outgoing.write(Buffer.from(chunk))
+      }
+      outgoing.end()
+      return
     }
     const responseBody: string | Buffer = typeof managed.body === 'string'
       ? managed.body
@@ -2235,16 +3128,7 @@ export class LifecycleEngine {
         const candidates: unknown[] = []
         for (const [name, entry] of this.skillIndirections) {
           if (entry.pluginId !== pluginId) continue
-          candidates.push({
-            name,
-            description: entry.definition.description,
-            ...(entry.definition.whenToUse === undefined ? {} : { whenToUse: entry.definition.whenToUse }),
-            invocation: { modelInvocable: true, userInvocable: true },
-            source: 'runtime',
-            provider: providerName,
-            rank: 0,
-            locator: name,
-          })
+          candidates.push(this.skillCandidateView(entry, name, providerName))
         }
         return candidates
       },
@@ -2257,11 +3141,36 @@ export class LifecycleEngine {
           description: entry.definition.description,
           content: entry.definition.content,
           ...(entry.definition.whenToUse === undefined ? {} : { whenToUse: entry.definition.whenToUse }),
-          invocation: { modelInvocable: true, userInvocable: true },
-          source: 'runtime',
-          provider: providerName,
+          invocation: entry.definition.invocation ?? { modelInvocable: true, userInvocable: true },
+          source: entry.definition.source ?? 'runtime',
+          provider: entry.definition.provider ?? providerName,
+          ...(entry.definition.resourceBase === undefined ? {} : { resourceBase: entry.definition.resourceBase }),
+          ...(entry.definition.path === undefined ? {} : { path: entry.definition.path }),
+          ...(entry.definition.metadata === undefined ? {} : { metadata: entry.definition.metadata }),
         }
       },
+    }
+  }
+
+  /** One provider-catalog candidate over a plugin's skill, preserving plugin-declared fields. */
+  private skillCandidateView(
+    entry: { readonly pluginId: string; readonly definition: PluginSkillDefinition },
+    name: string,
+    providerName: string,
+  ): unknown {
+    const definition = entry.definition
+    return {
+      name,
+      description: definition.description,
+      ...(definition.whenToUse === undefined ? {} : { whenToUse: definition.whenToUse }),
+      invocation: definition.invocation ?? { modelInvocable: true, userInvocable: true },
+      source: definition.source ?? 'runtime',
+      provider: definition.provider ?? providerName,
+      rank: definition.rank ?? 0,
+      locator: name,
+      ...(definition.resourceBase === undefined ? {} : { resourceBase: definition.resourceBase }),
+      ...(definition.path === undefined ? {} : { path: definition.path }),
+      ...(definition.metadata === undefined ? {} : { metadata: definition.metadata }),
     }
   }
 
@@ -2343,16 +3252,49 @@ export class LifecycleEngine {
       get parameters(): Record<string, unknown> {
         return current().input
       },
-      get output(): { readonly schema: Record<string, unknown>; render(args: unknown, value: unknown): unknown[] } {
+      get output(): {
+        readonly schema: Record<string, unknown>
+        render(args: unknown, value: unknown): unknown[]
+        readonly presentationMeta: ((args: unknown, value: unknown) => unknown) | undefined
+      } {
         return {
           get schema(): Record<string, unknown> {
             return current().output
           },
-          render: (_args: unknown, value: unknown) => [{
-            type: 'text',
-            text: typeof value === 'string' ? value : JSON.stringify(value),
-          }],
+          render: (args: unknown, value: unknown) => {
+            const render = current().outputRender
+            if (render !== undefined) {
+              const projected = render(args, value)
+              if (Array.isArray(projected)) return projected as unknown[]
+              return [{
+                type: 'text',
+                text: typeof projected === 'string' ? projected : JSON.stringify(projected),
+              }]
+            }
+            return [{
+              type: 'text',
+              text: typeof value === 'string' ? value : JSON.stringify(value),
+            }]
+          },
+          get presentationMeta(): ((args: unknown, value: unknown) => unknown) | undefined {
+            return current().outputPresentationMeta
+          },
         }
+      },
+      get presentCall(): ((args: unknown) => unknown) | undefined {
+        return current().presentCall
+      },
+      get presentResult(): ((args: unknown, result: unknown) => unknown) | undefined {
+        return current().presentResult
+      },
+      get timeoutMs(): number | undefined {
+        return current().timeoutMs
+      },
+      get isConcurrencySafe(): ((args: unknown) => boolean) | undefined {
+        return current().isConcurrencySafe
+      },
+      get finalizeContent(): ((exec: unknown, result: unknown) => unknown[] | undefined) | undefined {
+        return current().finalizeContent
       },
       execute: (args: unknown, exec: unknown) => {
         // Disabled plugins keep their tools in the registry (so callers see
@@ -2524,13 +3466,36 @@ export class LifecycleEngine {
   }
 
   private planState(): PlanState {
+    const bundleDeclarations: PluginDeclarationInput[] = (this.bundleRail?.members() ?? []).map(member => ({
+      id: member.id,
+      ...(member.version === undefined ? {} : { version: member.version }),
+      permissions: emptyPermissions(),
+      requires: [],
+      provides: member.provides ?? [],
+      enabled: member.enabled,
+      origin: 'static',
+      rail: 'bundle',
+      ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
+    }))
+    const managerDeclaration: PluginDeclarationInput = {
+      id: MYGO_MANAGER_ID,
+      version: MYGO_MANAGER_VERSION,
+      permissions: emptyPermissions(),
+      requires: [],
+      provides: [MYGO_MANAGER_CAPABILITY],
+      enabled: true,
+      origin: 'static',
+      rail: 'bridge',
+    }
     return {
       plugins: [...this.records.values()]
         // Shadowed rows are part of the managed set with empty placeholder
         // declarations; the derivation excludes them from orders (not enabled).
         .filter(record => record.status === 'enabled' || record.status === 'disabled' || record.status === 'shadowed')
-        .map(record => this.declarationOf(record)),
+        .map(record => this.declarationOf(record))
+        .concat(bundleDeclarations, [managerDeclaration]),
       slotKinds: this.slotKinds,
+      packageVersions: this.installedVersions(),
     }
   }
 
@@ -2544,6 +3509,27 @@ export class LifecycleEngine {
       scopes: this.existingScopes(record.id),
       enabled: record.status === 'enabled',
       origin: record.origin === 'static' ? 'static' : record.origin,
+      ...(generation?.manifest.version === undefined
+        ? {}
+        : { version: generation?.manifest.version }),
+      ...(generation?.manifest.compatibility === undefined
+        ? {}
+        : { compatibility: generation?.manifest.compatibility }),
+    }
+  }
+
+  /** Plan declaration for one resolved definition (assumed enabled). */
+  private declarationFromDefinition(definition: PluginDefinition): PluginDeclarationInput {
+    return {
+      id: definition.id,
+      ...(definition.version === undefined || definition.version === ''
+        ? {}
+        : { version: definition.version }),
+      permissions: definition.permissions,
+      requires: definition.requires,
+      provides: definition.provides,
+      enabled: true,
+      ...(definition.compatibility === undefined ? {} : { compatibility: definition.compatibility }),
     }
   }
 
@@ -2589,6 +3575,12 @@ export class LifecycleEngine {
       provides: generation?.manifest.provides ?? [],
       orderNeutral: this.neutral.get(record.id) ?? false,
       source: record.source,
+      ...(generation?.manifest.entrypoints === undefined
+        ? {}
+        : { entrypoints: Object.keys(generation.manifest.entrypoints) }),
+      ...(generation?.manifest.compatibility === undefined
+        ? {}
+        : { compatibility: generation.manifest.compatibility }),
     }
   }
 
@@ -2647,7 +3639,35 @@ function declarationOf(definition: PluginDefinition): PluginDeclarationInput {
     permissions: definition.permissions,
     requires: definition.requires,
     provides: definition.provides,
+    version: definition.version,
+    ...(definition.compatibility === undefined
+      ? {}
+      : { compatibility: definition.compatibility }),
   }
+}
+
+/** Merge optional declarative overrides (`dsh.mygo`) into a derived raw manifest. */
+function mergeRawDeclaration(
+  derived: PluginDefinition,
+  id: string | undefined,
+  declaration: RawPluginDeclaration | undefined,
+): PluginDefinition {
+  let definition = id === undefined || id === derived.id ? derived : { ...derived, id }
+  if (declaration === undefined) return definition
+  if (declaration.version !== undefined) {
+    definition = { ...definition, version: declaration.version }
+  }
+  if (declaration.entrypoints !== undefined) {
+    definition = { ...definition, entrypoints: declaration.entrypoints }
+  }
+  if (declaration.compatibility !== undefined) {
+    definition = { ...definition, compatibility: declaration.compatibility }
+  }
+  if (declaration.provides !== undefined && declaration.provides.length > 0) {
+    const merged = [...new Set([...definition.provides, ...declaration.provides])]
+    definition = { ...definition, provides: merged }
+  }
+  return definition
 }
 
 function emptyPermissions(): PluginDefinition['permissions'] {

@@ -6,7 +6,9 @@
  */
 
 import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
 import { z } from 'zod'
+import { normalizeCompatibility } from './compatibility.ts'
 
 const pluginId = z.string().regex(/^[a-z][a-z0-9-]*$/)
 const semverShape = z.string().regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/)
@@ -27,6 +29,18 @@ const interceptDeclaration = z.object({
 
 const permissionLevel = z.enum(['outermost', 'derived', 'innermost'])
 const fileAccessMode = z.enum(['read', 'write'])
+const entrypointContribution = z.union([
+  z.string().min(1),
+  z.object({ value: z.unknown() }).strict(),
+])
+const compatibilityBlock = z.object({
+  requires: z.record(z.string().min(1), z.string().min(1)).optional(),
+  depends: z.record(z.string().min(1), z.string().min(1)).optional(),
+  breaks: z.record(z.string().min(1), z.string().min(1)).optional(),
+  recommends: z.record(z.string().min(1), z.string().min(1)).optional(),
+  suggests: z.record(z.string().min(1), z.string().min(1)).optional(),
+  conflicts: z.record(z.string().min(1), z.string().min(1)).optional(),
+}).strict()
 
 /**
  * Strict manifest schema (§2/§5). Functions (hooks, the schemastery config
@@ -57,6 +71,8 @@ export const MANIFEST_SCHEMA = z.object({
     main: z.string().min(1),
     inject: z.array(z.string()).optional(),
   }).optional(),
+  entrypoints: z.record(z.string().min(1), z.array(entrypointContribution)).optional(),
+  compatibility: compatibilityBlock.optional(),
   sessionWriteAccess: z.boolean().optional(),
   hostPublishAccess: z.boolean().optional(),
   dynamicInstallAccess: z.boolean().optional(),
@@ -81,7 +97,20 @@ export const MANIFEST_SCHEMA = z.object({
  */
 export function validateManifest(manifest: unknown, pluginId?: string): void {
   const result = MANIFEST_SCHEMA.safeParse(manifest)
-  if (result.success) return
+  if (result.success) {
+    // The v1 `requires` alias must normalize cleanly into `depends`; a key
+    // declared in both is ambiguous and rejected as a manifest error.
+    const normalized = normalizeCompatibility(result.data.compatibility as PluginCompatibility | undefined)
+    if (normalized.issue !== undefined) {
+      throw new PluginError(
+        'manifest-invalid',
+        formatPluginError('manifest-invalid', { field: 'compatibility', expected: normalized.issue }),
+        { field: 'compatibility', expected: normalized.issue },
+        pluginId,
+      )
+    }
+    return
+  }
   // A failed safeParse always carries at least one issue.
   // A failed safeParse always carries at least one issue; the cast keeps the
   // narrow access without a runtime branch.

@@ -267,4 +267,155 @@ describe('fromCordisPlugin', () => {
       .hooks.activate?.(seeded)
     expect(seen).toBe(service)
   })
+
+  it('resolves raw inject services through ctx property access (facade-service-gap fix)', () => {
+    const settings = { get: (key: string) => `v:${key}` }
+    const env = createFakeEnv({
+      ...fixture('inject-services'),
+      requires: ['settings'],
+      services: { settings },
+    })
+    let seen: unknown
+    const raw = {
+      name: 'settings-plugin',
+      inject: ['settings'],
+      apply(ctx: { settings: { get(key: string): string } }) {
+        seen = ctx.settings.get('theme')
+      },
+    }
+    void fromCordisPlugin(raw, fixture('inject-services')).hooks.activate?.(env)
+    expect(seen).toBe('v:theme')
+  })
+
+  it('forwards unknown host-service members across every mediated service', () => {
+    const registerProvider = vi.fn(() => () => {})
+    const context = vi.fn(() => 'ctx')
+    const alias = vi.fn(() => 'aliased')
+    const schemas = vi.fn(() => [])
+    const tapIndex = vi.fn(() => () => {})
+    const env = createFakeEnv({
+      ...fixture('host-surfaces'),
+      requires: ['skills', 'systemPrompt', 'commands', 'tools', 'httpServer'],
+      services: {
+        skills: { registerProvider },
+        systemPrompt: { context },
+        commands: { alias },
+        tools: { schemas },
+        httpServer: { tapIndex },
+      },
+    })
+    const raw = {
+      name: 'surface-plugin',
+      apply(ctx: {
+        skills: { registerProvider(create: unknown): () => void }
+        systemPrompt: { context(section: unknown): string }
+        commands: { alias(name: string): string }
+        tools: { schemas(): unknown[] }
+        httpServer: { tapIndex(path: string, fn: unknown): () => void }
+      }) {
+        ctx.skills.registerProvider({ create: () => {} })
+        ctx.systemPrompt.context({})
+        ctx.commands.alias('x')
+        ctx.tools.schemas()
+        ctx.httpServer.tapIndex('/index.html', () => {})
+      },
+    }
+    void fromCordisPlugin(raw, fixture('host-surfaces')).hooks.activate?.(env)
+    expect(registerProvider).toHaveBeenCalledTimes(1)
+    expect(context).toHaveBeenCalledTimes(1)
+    expect(alias).toHaveBeenCalledTimes(1)
+    expect(schemas).toHaveBeenCalledTimes(1)
+    expect(tapIndex).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to raw host properties and tolerates Cordis inject-guard throws', () => {
+    const throwingHost = {
+      get baseUrl() {
+        return 'https://example.test'
+      },
+      get settings() {
+        throw new Error('cannot get property "settings" without inject')
+      },
+    }
+    const env = createFakeEnv({ ...fixture('host-fallback'), host: throwingHost })
+    const seen: unknown[] = []
+    const raw = {
+      name: 'host-fallback',
+      apply(ctx: { baseUrl: string; settings: unknown }) {
+        seen.push(ctx.baseUrl)
+        seen.push(ctx.settings)
+      },
+    }
+    void fromCordisPlugin(raw, fixture('host-fallback')).hooks.activate?.(env)
+    expect(seen).toEqual(['https://example.test', undefined])
+  })
+
+  it('records registration-class host method disposers as host effects', () => {
+    const registerProvider = vi.fn(() => () => {})
+    const context = vi.fn(() => () => {})
+    const env = createFakeEnv({
+      ...fixture('host-effects'),
+      requires: ['skills', 'systemPrompt'],
+      services: {
+        skills: { registerProvider },
+        systemPrompt: { context },
+      },
+    })
+    const raw = {
+      name: 'host-effects',
+      apply(ctx: {
+        skills: { registerProvider(create: unknown): () => void }
+        systemPrompt: { context(section: unknown): () => void }
+      }) {
+        // Plugin discards both disposers; the facade must still record them.
+        ctx.skills.registerProvider(() => ({}))
+        ctx.systemPrompt.context({ name: 'x', order: 1, text: 'x' })
+      },
+    }
+    void fromCordisPlugin(raw, fixture('host-effects')).hooks.activate?.(env)
+    expect(env.hostEffects).toHaveLength(2)
+    expect(env.hostEffects[0]?.name).toBe('host-effects:skills.registerProvider')
+    expect(env.hostEffects[1]?.name).toBe('host-effects:systemPrompt.context')
+  })
+
+  it('does not double-register a host effect passed through ctx.effect', () => {
+    const tapIndex = vi.fn(() => () => {})
+    const env = createFakeEnv({
+      ...fixture('host-effect-effect'),
+      requires: ['httpServer'],
+      services: { httpServer: { tapIndex } },
+    })
+    const raw = {
+      name: 'host-effect-effect',
+      apply(ctx: {
+        effect(callback: () => unknown, name?: string): void
+        httpServer: { tapIndex(transform: unknown): () => void }
+      }) {
+        ctx.effect(() => ctx.httpServer.tapIndex((html: string) => html), 'index')
+      },
+    }
+    void fromCordisPlugin(raw, fixture('host-effect-effect')).hooks.activate?.(env)
+    expect(env.hostEffects).toHaveLength(1)
+    // Only the facade's own timer-cleanup effect may be present — the host
+    // disposer must NOT be re-registered through the ordinary effect path.
+    expect(env.effects.map(record => record.name)).toEqual(['host-effect-effect:timers'])
+  })
+
+  it('does not record query-class host methods as host effects', () => {
+    const schemas = vi.fn(() => [])
+    const env = createFakeEnv({
+      ...fixture('host-query'),
+      requires: ['tools'],
+      services: { tools: { schemas } },
+    })
+    const raw = {
+      name: 'host-query',
+      apply(ctx: { tools: { schemas(): unknown[] } }) {
+        ctx.tools.schemas()
+      },
+    }
+    void fromCordisPlugin(raw, fixture('host-query')).hooks.activate?.(env)
+    expect(env.hostEffects).toHaveLength(0)
+    expect(schemas).toHaveBeenCalledTimes(1)
+  })
 })

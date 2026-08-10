@@ -8,7 +8,12 @@
  */
 
 import { formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+import type { ActivationAction, PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+import { transitiveUninstallViolations } from './compatibility.ts'
+import {
+  solveActivation,
+  type ActivationPlugin,
+} from './activation.ts'
 import { evaluateConflicts } from './conflicts.ts'
 import {
   buildScopeGraph,
@@ -49,7 +54,7 @@ export function planOperation(operation: PlanOperationInput, state: PlanState): 
       return planReplace(operation.id, operation.plugin, operation.force === true, state)
     case 'enable':
     case 'disable':
-      return planStatusChange(operation.op, operation.id, state)
+      return planStatusChange(operation.op, operation.id, state, operation.force === true)
   }
 }
 
@@ -65,12 +70,22 @@ function planInstall(candidate: PluginDeclarationInput, state: PlanState): Plugi
     return rejected('concurrent-operation', { id: candidate.id, operation: 'install' })
   }
   const next: PlanState = { ...state, plugins: [...state.plugins, candidate] }
-  const issues = evaluateConflicts(next)
+  const activation = solveActivation(activationPlugins(state), {
+    op: 'install',
+    plugin: activationPluginOf(candidate, true),
+  })
+  if (!activation.accepted || activation.error !== undefined) {
+    return activationRejected(activation)
+  }
+  const resolved = applyActivationActions(next, activation.actions)
+  const issues = evaluateConflicts(resolved)
   if (issues.length > 0) return rejectedFromIssue(issues[0] as ConflictIssue)
   return {
     accepted: true,
-    displaced: displacedBystanders(state, next, candidate),
+    displaced: displacedBystanders(state, resolved, candidate),
     wouldShadow: false,
+    ...(activation.warnings.length === 0 ? {} : { warnings: activation.warnings }),
+    ...(activation.actions.length === 0 ? {} : { actions: activation.actions }),
   }
 }
 
@@ -80,6 +95,12 @@ function planUninstall(id: string, state: PlanState): PluginOperationPlan {
   if (removed === undefined) return { accepted: true, displaced: [] }
   const dependents = requiringPlugins(state.plugins.filter(plugin => plugin.id !== id), removed.provides)
   if (dependents.length > 0) return rejected('dependent-exists', { dependents })
+  const blocked = transitiveUninstallViolations(state.plugins, {
+    id,
+    ...(removed.version === undefined ? {} : { version: removed.version }),
+    provides: removed.provides,
+  })
+  if (blocked.length > 0) return rejected('compatibility-conflict', { plugin: id, violations: blocked })
   const next: PlanState = { ...state, plugins: state.plugins.filter(plugin => plugin.id !== id) }
   return { accepted: true, displaced: displacedBystanders(state, next, removed) }
 }
@@ -98,18 +119,37 @@ function planReplace(id: string, candidate: PluginDeclarationInput, force: boole
     ...state,
     plugins: state.plugins.map(plugin => plugin.id === id ? candidate : plugin),
   }
+  const activation = solveActivation(activationPlugins(state), {
+    op: 'replace',
+    id,
+    plugin: activationPluginOf(candidate, incumbent.enabled !== false),
+  })
+  const warnings = activation.warnings
   if (!force) {
-    const issues = evaluateConflicts(next)
+    if (!activation.accepted || activation.error !== undefined) {
+      return activationRejected(activation)
+    }
+    const issues = evaluateConflicts(applyActivationActions(next, activation.actions))
     if (issues.length > 0) return rejectedFromIssue(issues[0] as ConflictIssue)
   }
   const lost = incumbent.provides.filter(service => !candidate.provides.includes(service))
   const dependents = requiringPlugins(state.plugins.filter(plugin => plugin.id !== id), lost)
   if (dependents.length > 0) return rejected('dependent-exists', { dependents })
-  return { accepted: true, displaced: displacedBystanders(state, next, candidate) }
+  return {
+    accepted: true,
+    displaced: displacedBystanders(state, next, candidate),
+    ...(warnings.length === 0 ? {} : { warnings }),
+    ...(activation.actions.length === 0 ? {} : { actions: activation.actions }),
+  }
 }
 
 /** Enable/disable: flip the participation flag and reorder; no-op when already in that state. */
-function planStatusChange(op: 'enable' | 'disable', id: string, state: PlanState): PluginOperationPlan {
+function planStatusChange(
+  op: 'enable' | 'disable',
+  id: string,
+  state: PlanState,
+  force: boolean,
+): PluginOperationPlan {
   const target = state.plugins.find(plugin => plugin.id === id)
   if (target === undefined) {
     // Caller bug (2026-08-08 ruling #1): the target must exist to change status.
@@ -117,11 +157,102 @@ function planStatusChange(op: 'enable' | 'disable', id: string, state: PlanState
   }
   const already = op === 'enable' ? target.enabled !== false : target.enabled === false
   if (already) return { accepted: true, displaced: [] }
-  const next: PlanState = {
-    ...state,
-    plugins: state.plugins.map(plugin => plugin.id === id ? { ...plugin, enabled: op === 'enable' } : plugin),
+  const activation = solveActivation(activationPlugins(state), {
+    op,
+    id,
+    ...(op === 'disable' ? { force } : {}),
+  })
+  if (!activation.accepted || activation.error !== undefined) {
+    return activationRejected(activation)
   }
-  return { accepted: true, displaced: displacedBystanders(state, next, target) }
+  const next = applyActivationActions(state, activation.actions)
+  return {
+    accepted: true,
+    displaced: displacedBystanders(state, next, target),
+    ...(activation.warnings.length === 0 ? {} : { warnings: activation.warnings }),
+    ...(activation.actions.length === 0 ? {} : { actions: activation.actions }),
+  }
+}
+
+/** Rejected plan with optional compatibility warnings attached. */
+function rejected(
+  code: PluginErrorCode,
+  details: Record<string, unknown>,
+  warnings: readonly string[] = [],
+): PluginOperationPlan {
+  return {
+    accepted: false,
+    error: { code, message: formatPluginError(code, details) },
+    displaced: [],
+    ...(warnings.length === 0 ? {} : { warnings }),
+  }
+}
+
+/** Activation view of one plan state (install order = list order). */
+function activationPlugins(state: PlanState): ActivationPlugin[] {
+  return state.plugins.map((plugin): ActivationPlugin => ({
+    id: plugin.id,
+    ...(plugin.version === undefined ? {} : { version: plugin.version }),
+    ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+    ...(plugin.provides === undefined ? {} : { provides: plugin.provides }),
+    enabled: plugin.enabled !== false,
+    ...(plugin.rail === undefined ? {} : { rail: plugin.rail }),
+  }))
+}
+
+/** Activation view of one candidate declaration. */
+function activationPluginOf(plugin: PluginDeclarationInput, enabled: boolean): ActivationPlugin {
+  return {
+    id: plugin.id,
+    ...(plugin.version === undefined ? {} : { version: plugin.version }),
+    ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+    ...(plugin.provides === undefined ? {} : { provides: plugin.provides }),
+    enabled,
+    ...(plugin.rail === undefined ? {} : { rail: plugin.rail }),
+  }
+}
+
+/** Apply solver enable/disable actions to a plan state. */
+function applyActivationActions(state: PlanState, actions: readonly ActivationAction[]): PlanState {
+  const enabled = new Map(state.plugins.map(plugin => [plugin.id, plugin.enabled !== false]))
+  for (const action of actions) {
+    if (action.op === 'enable') enabled.set(action.id, true)
+    else if (action.op === 'disable') enabled.set(action.id, false)
+  }
+  return {
+    ...state,
+    plugins: state.plugins.map(plugin => ({
+      ...plugin,
+      enabled: enabled.get(plugin.id) ?? plugin.enabled !== false,
+    })),
+  }
+}
+
+/** Rejected plan from a solver outcome (message already rendered). */
+function activationRejected(plan: {
+  readonly accepted: boolean
+  readonly actions?: readonly ActivationAction[]
+  readonly warnings?: readonly string[]
+  readonly error?: {
+    readonly code: PluginErrorCode
+    readonly message: string
+    readonly details?: Readonly<Record<string, unknown>>
+  }
+}): PluginOperationPlan {
+  const error = plan.error === undefined
+    ? { code: 'compatibility-conflict' as PluginErrorCode, message: 'activation plan rejected' }
+    : {
+        code: plan.error.code,
+        message: plan.error.message,
+        ...(plan.error.details === undefined ? {} : { details: plan.error.details }),
+      }
+  return {
+    accepted: false,
+    error,
+    displaced: [],
+    ...(plan.actions !== undefined && plan.actions.length > 0 ? { actions: plan.actions } : {}),
+    ...(plan.warnings !== undefined && plan.warnings.length > 0 ? { warnings: plan.warnings } : {}),
+  }
 }
 
 /**
@@ -257,14 +388,6 @@ function assertUniqueIds(plugins: readonly PluginDeclarationInput[]): void {
   for (const plugin of plugins) {
     if (ids.has(plugin.id)) throw new Error(`plan input has duplicate plugin id ${plugin.id}`)
     ids.add(plugin.id)
-  }
-}
-
-function rejected(code: PluginErrorCode, details: Record<string, unknown>): PluginOperationPlan {
-  return {
-    accepted: false,
-    error: { code, message: formatPluginError(code, details) },
-    displaced: [],
   }
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# dsh-mygo 首次安装脚本：把 mygo / mygo-api / mygo-panel 装进一个 dsh 0809 checkout，
-# 接线 tsconfig 与 web profile，并记录“已安装版本”供检查更新使用。
+# dsh-mygo 首次安装脚本：把 mygo / mygo-api / mygo-panel / BOM 脚手架装进一个
+# dsh 0809 checkout，接线 tsconfig 与 web profile，并记录“已安装版本”供检查更新使用。
 #
 # 用法：
 #   ./install.sh                          # 自动定位 dsh checkout（dsh 命令 / ~/.dsh/source/current）
@@ -180,9 +180,19 @@ echo "==> 已写入模块回退链接：$FALLBACK"
 
 # ---- 6. 记录 mygo 自身版本（供检查更新） -------------------------------------
 SELF_STATE="$DSH_HOME_DIR/mygo-self.json"
-printf '{"url":"%s","ref":"%s","commit":"%s","installedAt":%s}\n' \
-  "$MYGO_URL" "$MYGO_REF" "$MYGO_COMMIT" "$(date +%s)" > "$SELF_STATE"
-echo "==> 已记录 mygo 版本：$SELF_STATE（$MYGO_COMMIT）"
+MYGO_VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo unknown)"
+printf '{"url":"%s","ref":"%s","commit":"%s","version":"%s","installedAt":%s}\n' \
+  "$MYGO_URL" "$MYGO_REF" "$MYGO_COMMIT" "$MYGO_VERSION" "$(date +%s)" > "$SELF_STATE"
+echo "==> 已记录 mygo 版本：$SELF_STATE（$MYGO_VERSION @ $MYGO_COMMIT）"
+
+# ---- 6.5 BOM 目录与脚手架（P4 依赖参考物） -----------------------------------
+BOMS_DIR="$DSH_HOME_DIR/mygo-boms"
+mkdir -p "$BOMS_DIR"
+if [ -f "$HERE/scripts/bom-scaffold.mjs" ]; then
+  cp "$HERE/scripts/bom-scaffold.mjs" "$BOMS_DIR/bom-scaffold.mjs"
+  chmod +x "$BOMS_DIR/bom-scaffold.mjs"
+  echo "==> 已安装 BOM 脚手架：$BOMS_DIR/bom-scaffold.mjs"
+fi
 
 # ---- 7. 构建面板（可选） ------------------------------------------------------
 if [ -f "$CHECKOUT/vendor/dsh-mygo-panel/build.mjs" ]; then
@@ -197,3 +207,5 @@ echo "  1. 构建 dsh（如尚未构建）：cd $CHECKOUT && pnpm run build；�
 echo "  2. 重启：dsh web"
 echo "  3. 打开设置页查看“受管插件 / 外部应用”，或运行 dsh web 后直接使用"
 echo "  4. 检查 mygo 自身更新：面板 → 检查更新"
+echo "  5. 导出 BOM 依赖参考物：POST /api/mygo/bom/export（生成 $DSH_HOME_DIR/mygo-boms/$PROFILE/dsh.bom.{json,md}）"
+echo "  6. 新插件脚手架：node $DSH_HOME_DIR/mygo-boms/bom-scaffold.mjs <id> --bom $DSH_HOME_DIR/mygo-boms/$PROFILE/dsh.bom.json"

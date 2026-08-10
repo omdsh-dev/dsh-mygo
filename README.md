@@ -4,7 +4,7 @@
 > 名字致敬《BanG Dream! It's MyGO!!!!!》（迷途之子）——插件们各怀心思，
 > 但总有一个地方会把它们聚在一起。
 
-**版本：0.1.1 · 2026-08-09 快照**（0.1.1：install.sh 修复——空 profile 占位覆盖、set -e 兜底、模块回退链接）
+**版本：0.2.0 · 2026-08-10**（0.2.0：HMR 语义重构 + 依赖体系 + 持久化后端无关 + BOM；0.1.1：install.sh 修复——空 profile 占位覆盖、set -e 兜底、模块回退链接）
 
 mygo 是 DSH 的受管插件层：插件不再是裸的 Cordis 行，而是有安装/启停/卸载/替换/恢复语义、
 能热替换（HMR）、坏插件不会拖垮后端的“受管对象”。权限核心已移除，只保留 HMR 与插件管理两条主线，
@@ -54,8 +54,13 @@ cd dsh-mygo
 
 ## 它能做什么
 
-- **HMR 插件管理**：install / enable / disable / replace / uninstall / recover，七步替换协议
-  （capture → stage → swap → dispose）
+- **HMR 插件管理**：install / enable / disable / replace / uninstall / recover；
+  替换对齐宿主 `fiber.update` 语义（dispose-first：先完整释放旧代，再应用新代），
+  全局 seat 类注册不再重复；失败自动回滚重挂旧代
+- **兼容性检查与插件依赖**：Fabric 五级词汇（depends/recommends/suggests/
+  conflicts/breaks）+ 传递闭包链报告、激活求解器（连带启用/冲突消解）、
+  bundle 轨统一依赖图、声明式 manifest（package.json `dsh.mygo` 段 +
+  `ctx.entrypoints`）
 - **零侵入 raw 接入**：`fromCordisPlugin` / `adoptRaw` 直接把任意 Cordis 插件纳入管理，
   facade 拦截注册面（tools/systemPrompt/httpServer/skills/commands/effect/timers），其余透传宿主
 - **类插件支持**：Service 子类（token-meter / compact-basic 模式）按 `new raw(ctx, config)` 挂载
@@ -63,10 +68,14 @@ cd dsh-mygo
   重装自动清除，卸载后调用提示“插件不存在/已卸载”
 - **unknown-tool 零侵入**：不改 dsh-tools，监听 `tools/execute` waterfall 拦截
 - **启动守卫**：桥接动态导入 + `checkSupport`（入口形状 / requires 可用性），坏插件跳过挂载只记日志
-- **HTTP 桥**：流式 `pipe` 与二进制响应（按 content-type 返回字节），路由卸载/替换时 disposer 安全
+- **HTTP 桥**：流式 `pipe`、SSE 逐块转发与二进制响应（按 content-type 返回字节），
+  路由卸载/替换时 disposer 安全
 - **外部应用模式**：独立 `mygo-apps` 根，进程组启停，沙箱 `none` / `workspace`，
   `syncUninstall: false` 标识 + 操作审计
 - **远程更新**：记录安装 commit，`git ls-remote` 对比，插件走 `updateRaw` HMR 热替换
+- **P4 BOM（依赖参考物）**：把当前依赖图导出为 `dsh.bom/v1`（intent+lock 双段，
+  mygo 自身一等成员），只读 `bom check` 对账（missing/extra/drift/约束链），
+  离线脚手架生成新插件 `dsh.mygo` 声明骨架
 
 ## 原生支持 / 显式不支持
 
@@ -82,33 +91,51 @@ cd dsh-mygo
 
 ## 开发
 
+dsh-mygo 仓库是源树（无根 package.json），构建/测试在 **dsh 0809 checkout**
+里做（改完用 rsync 同步源码，排除 node_modules/lib）：
+
 ```sh
-pnpm install
-pnpm run typecheck   # tsc -b mygo-api + mygo
-pnpm run test        # 352 tests（vitest）
+cd <dsh checkout>
+node node_modules/typescript/bin/tsc -b packages/core/mygo-api packages/cordis/mygo --pretty false
+node node_modules/tsdown/dist/run.mjs --config packages/core/mygo-api/tsdown.config.ts
+node node_modules/tsdown/dist/run.mjs --config packages/cordis/mygo/tsdown.config.ts
+node node_modules/vitest/vitest.mjs run --config vitest.config.ts \
+  packages/core/mygo-api/tests packages/cordis/mygo/tests
 ```
+
+全量测试建议**拆小串行跑**（WSL 环境偶发 worker D 状态卡死）；运行实例用的是
+`~/.dsh/source/current`（staging）的构建产物，改完需同步 + 重建 lib + 重启。
 
 目录：
 
 - `packages/core/mygo-api`：Cordis-free 的上层插件契约（definePlugin / facade / PluginError / fake-env）
 - `packages/cordis/mygo`：管理器（生命周期引擎 / dispatch / registry / 审计）
+- `scripts/bom-scaffold.mjs`：P4 BOM 离线脚手架
 - `docs/development-memo.md`：开发备忘录（去权限层后的饼与已实现清单）
+- `CHANGELOG.md`：版本变更记录
 
 ## Roadmap（已评估项）
 
 | 方向 | 结论 |
 |---|---|
+| HMR 语义重构（dispose-first，取消 seat 特判） | ✅ 0.2.0 已做 |
+| 兼容性检查 + 插件依赖（五级词汇 / 求解器 / bundle 轨 / 声明式 manifest） | ✅ 0.2.0 已做 |
+| 持久化后端无关（mygo-rdb / store-provider / session 读取器） | ✅ 0.2.0 已做 |
+| 配置助手（临时对话） | ✅ 0.2.0 已做 |
+| P4 BOM 依赖参考物（导出 / 只读对账 / 脚手架） | ✅ 0.2.0 已做（套件生命周期留 P5） |
 | 外部应用模式（sandbox none/workspace、卸载不同步标识） | ✅ 已做 |
 | 远程更新 + HMR 热替换 | ✅ 已做 |
 | mygo 自身更新（检查 + Loader 热重载） | ✅ 已做 |
 | 启动支持检查 + 守卫桥接 | ✅ 已做 |
 | 类插件 / 零侵入 raw 接入 | ✅ 已做 |
+| facade 宿主透传通用化（hostPassthrough） | ✅ 已做 |
 | 旧受管权限 API 开发文档 | 不写（权限层已删，生态插件原生支持） |
 | `ctx.plugin` 子插件组合的真实支持 | 不做（显式不支持） |
 | storage-domain medium-reset 回补 | 不做（0 侵入冲突） |
 | 外部应用 sandbox `strict` 档 / systemd·launchd 托管 | 待办 |
 | 渲染器能力类插件的 0809 适配 | 待上游合入 |
-| 通用修复：facade 宿主透传 / pnpm 构建兜底 / 安装策略路由 | 待办 |
+| pnpm 构建兜底 / 安装策略路由 | 待办 |
+| BOM 套件生命周期（install/upgrade/apply） | P5 |
 | author-guide / catalog 等旧文档重写 | 待补（旧文档已清除） |
 
 ## 常见问题
@@ -119,6 +146,10 @@ pnpm run test        # 352 tests（vitest）
   mygo 暂不纳入生命周期；请作者改为直接注册或拆成独立插件。
 - **后端起不来？** 先看日志：守卫桥接会跳过导入失败/不支持的插件；
   若日志出现“包完全不存在”的 Loader 错误，那是 patch 行引用了缺失包，正常安装流程不会产生。
+- **日志报 `registry backend self-check failed ... 5432`？** rdb 注册表依赖
+  PostgreSQL（mygo-pg 容器 / Docker Desktop），先确认 5432 在线再重启。
+- **配置保存长时间不返回？** `immediate` 替换策略会等待该插件 in-flight 事件
+  结束（无超时）；插件有常驻事件监听时建议改用 `drain`（30s 超时，失败不动旧代）。
 - **注册表 sqlite 损坏？** 0808/0809 没有自动重建，删除 `~/.dsh/storages/registry.sqlite` 后重启。
 
 ---

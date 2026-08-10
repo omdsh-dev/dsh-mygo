@@ -7,16 +7,20 @@
  */
 
 import type {
+  CompatibilityReport,
   InstallOrigin,
   InstallOptions,
   PermissionsBlock,
+  PluginCompatibility,
   PluginDefinition,
   PluginErrorCode,
   PluginHandleInfo,
   PluginSource,
   RawCordisFunctionPlugin,
+  RawPluginDeclaration,
 } from '@deepseek-ai/dsh-mygo-api'
 import type { PluginEventVocabularyEntry } from './event-vocabulary.ts'
+import type { EntrypointsService } from './entrypoints.ts'
 
 /** Manager deployment Config. */
 export interface PluginManagerConfig {
@@ -45,13 +49,21 @@ export type PluginOperation =
   | { readonly op: 'install'; readonly source: PluginSource; readonly config?: unknown }
   | { readonly op: 'uninstall'; readonly id: string }
   | { readonly op: 'replace'; readonly id: string; readonly source: PluginSource; readonly force?: boolean }
-  | { readonly op: 'enable' | 'disable'; readonly id: string }
+  | { readonly op: 'enable' | 'disable'; readonly id: string; readonly force?: boolean }
 
 /** Plan preview for one operation against the current managed set (§15.3). */
 export interface PluginOperationPlan {
   readonly accepted: boolean
   /** The code the operation would throw, when rejected. */
-  readonly error?: { readonly code: PluginErrorCode; readonly message: string }
+  readonly error?: {
+    readonly code: PluginErrorCode
+    readonly message: string
+    readonly details?: Readonly<Record<string, unknown>>
+  }
+  /** Rendered soft / derived compatibility notes discovered while planning. */
+  readonly warnings?: readonly string[]
+  /** Activation actions the solver proposes (required-by / conflict-resolution / advisory). */
+  readonly actions?: readonly import('@deepseek-ai/dsh-mygo-api').ActivationAction[]
   /** Bystanders whose observable position changes, with the displacing edge. */
   readonly displaced: readonly {
     readonly id: string
@@ -74,13 +86,15 @@ export interface PluginManager {
   /** Enable a disabled plugin (create-class write order). */
   enable(id: string): Promise<void>
   /** Disable an enabled plugin (delete-class write order). */
-  disable(id: string, reason?: string): Promise<void>
+  disable(id: string, reason?: string, force?: boolean): Promise<void>
   /** Hot replacement seven-step protocol (HP:82-90). */
   replace(id: string, source: PluginSource, options?: { readonly force?: boolean; readonly config?: unknown }): Promise<PluginHandleInfo>
   /** Reuse the replace path with the same code (HP:98). */
   updateConfig(id: string, patch: unknown): Promise<void>
   /** Read-only view of the current managed set, including static/quarantined/shadowed. */
   plugins(): readonly PluginHandleInfo[]
+  /** Current resolved config of one managed plugin's live generation. */
+  configOf(id: string): unknown | undefined
   /**
    * Evaluate one operation without changing state (PO:242). Async since
    * install/replace sources resolve through the manager's resolver; source
@@ -88,6 +102,34 @@ export interface PluginManager {
    * ruling #4).
    */
   plan(operation: PluginOperation): Promise<PluginOperationPlan>
+  /**
+   * Plan one declarative install (`dsh.mygo` from a folder/archive/git
+   * source) against the live managed set, without resolving an inline/npm
+   * source. Panel installers call this to preview required-by actions and
+   * warnings before writing any bridge row.
+   */
+  planInstall(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: PluginCompatibility
+    readonly provides?: readonly string[]
+  }): Promise<PluginOperationPlan>
+  /** Bundle rail members (empty when the rail is not wired). */
+  bundleList(): readonly import('./bundle-rail.ts').BundleMember[]
+  /** P4 BOM：导出当前统一依赖图为 `dsh.bom/v1`（JSON + Markdown，原子写）。 */
+  bomExport(): Promise<{ readonly bom: import('./bom.ts').BomDocument; readonly jsonPath: string; readonly mdPath: string }>
+  /**
+   * P4 BOM：只读对账。无参数 = BOM lock vs 当前 profile 集合
+   * （missing/extra/drift/约束违例链，零修改）；`target` = 校验新插件
+   * 目录的 package.json 声明是否落在 BOM 生态带内。
+   */
+  bomCheck(options?: { readonly target?: string }): Promise<import('./bom.ts').BomCheckReport>
+  /** Install one profile bundle via the official CLI. */
+  bundleInstall(spec: string): Promise<import('./bundle-rail.ts').BundleInstallResult>
+  /** Uninstall one profile bundle (dependents block first). */
+  bundleUninstall(id: string): Promise<void>
+  /** Enable/disable one profile bundle through the unified graph. */
+  bundleSetEnabled(id: string, enabled: boolean, force?: boolean): Promise<void>
   /** Static-composition self-adoption; not persisted, `origin: 'static'` (#12). */
   adopt(definition: PluginDefinition, config: unknown): Promise<void>
   /**
@@ -97,8 +139,16 @@ export interface PluginManager {
    * @param raw - the raw cordis plugin module.
    * @param config - deployment config validated against the raw Config schema.
    * @param id - optional manager-side plugin id; defaults to the derived id.
+   * @param declaration - optional declarative overrides read from the
+   * installed package's `dsh.mygo` section (version / entrypoints /
+   * compatibility).
    */
-  adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo>
+  adoptRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id?: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginHandleInfo>
   /**
    * Live-update a previously adopted raw plugin: re-derive the manifest from
    * the new module and run the HMR replace protocol (capture → stage → swap
@@ -106,9 +156,15 @@ export interface PluginManager {
    * @param raw - the new raw Cordis plugin module.
    * @param config - deployment config for the new generation.
    * @param id - the existing manager-side plugin id (required).
+   * @param declaration - optional declarative overrides from the new package.
    * @returns the updated plugin handle.
    */
-  updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo>
+  updateRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginHandleInfo>
   /**
    * Remove an uninstall tombstone so a previously uninstalled static/bundle
    * plugin can be adopted again.
@@ -122,9 +178,26 @@ export interface PluginManager {
    * instead of letting one broken row fail the whole plugin tree.
    * @param raw - the raw Cordis plugin module.
    * @param id - optional manager-side plugin id; defaults to the derived id.
+   * @param declaration - optional declarative overrides to include in the
+   * support verdict (entrypoints need no host support; compatibility does).
    * @returns `{ ok: true }` or `{ ok: false, reason }`.
    */
-  checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck>
+  checkSupport(
+    raw: RawCordisFunctionPlugin,
+    id?: string,
+    declaration?: RawPluginDeclaration,
+  ): Promise<PluginSupportCheck>
+  /**
+   * Pure compatibility preflight against the live managed set: whether a
+   * plugin declaring `version`/`compatibility` would violate any
+   * `requires`/`breaks` constraint. The panel installer calls this before
+   * writing the bridge so a bad combination is refused early.
+   */
+  checkCompatibility(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: PluginCompatibility
+  }): CompatibilityReport
 }
 
 /** Result of a pre-mount support check. */
@@ -165,6 +238,8 @@ export type SlotKind = 'host-sorted' | 'chain-ordered'
 export interface PluginDeclarationInput {
   /** Plugin id; the ordering tie-break and registry identity. */
   readonly id: string
+  /** Manifest version; the package-constraint check anchor. */
+  readonly version?: string
   /** Validated §5 declaration block (observe/transform/intercept/position/claims). */
   readonly permissions: PermissionsBlock
   /** Service ids this plugin consumes; the dependent graph for uninstall/replace. */
@@ -177,6 +252,10 @@ export interface PluginDeclarationInput {
   readonly enabled?: boolean
   /** Static compositions win over dynamic installs of the same id (T2-4); default `runtime-api`. */
   readonly origin?: 'static' | InstallOrigin
+  /** Which management rail owns this member; defaults to the bridge rail. */
+  readonly rail?: 'bridge' | 'bundle'
+  /** Declared package-level constraints against sibling managed plugins. */
+  readonly compatibility?: PluginCompatibility
 }
 
 /** Pure derivation and plan input: the installed set plus deployment facts. */
@@ -190,6 +269,8 @@ export interface PlanState {
    * the caller; claims on these fail `claims-unmanaged-incumbent`.
    */
   readonly heldOutsideManager?: readonly string[]
+  /** Installed versions by plugin id for package-constraint evaluation. */
+  readonly packageVersions?: Readonly<Record<string, string>>
 }
 
 /** Derived dispatch order per scope (§9/§11). */
@@ -223,7 +304,7 @@ export type PlanOperationInput =
   | { readonly op: 'install'; readonly plugin: PluginDeclarationInput }
   | { readonly op: 'uninstall'; readonly id: string }
   | { readonly op: 'replace'; readonly id: string; readonly plugin: PluginDeclarationInput; readonly force?: boolean }
-  | { readonly op: 'enable' | 'disable'; readonly id: string }
+  | { readonly op: 'enable' | 'disable'; readonly id: string; readonly force?: boolean }
 
 /** Base payload of every `plugin/*` event (§15.5). */
 export interface PluginLifecycleEventPayload {
@@ -261,6 +342,13 @@ declare module 'cordis' {
      * @dshScopeScan unsupported - one process-global manager per profile.
      */
     pluginManager: PluginManager
+    /**
+     * Declarative contribution aggregation (entrypoints v1): the owner of an
+     * extension-point key registers its adapt function here; any plugin's
+     * static manifest contributions surface through `get(key)` in
+     * declaring-plugin order.
+     */
+    entrypoints: EntrypointsService
   }
   interface Events {
     /**

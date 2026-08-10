@@ -107,6 +107,17 @@ const CASES: readonly MessageCase[] = [
     named: ['plugin-c'],
   },
   {
+    code: 'compatibility-conflict',
+    details: {
+      plugin: 'memory-doctor',
+      violations: [
+        'requires old-memory-policy@<2.0.0: 已装 old-memory-policy@1.4.3（由 memory-doctor 声明）',
+        'breaks acme-legacy@>=1.0.0: 已装 acme-legacy@1.2.0（由 memory-doctor 声明）',
+      ],
+    },
+    named: ['memory-doctor', 'old-memory-policy@1.4.3', 'acme-legacy@1.2.0'],
+  },
+  {
     code: 'claims-unmanaged-incumbent',
     details: { slot: 'service:raw' },
     named: ['service:raw', 'manager authority covers only the set it registered'],
@@ -232,7 +243,7 @@ describe('PluginError message templates (§16.2)', () => {
   it('covers every transcribed code exactly once', () => {
     const codes = CASES.map(entry => entry.code)
     expect(new Set(codes).size).toBe(codes.length)
-    expect(codes).toHaveLength(42)
+    expect(codes).toHaveLength(43)
   })
 
   it('names every "naming X" entity for each code', () => {

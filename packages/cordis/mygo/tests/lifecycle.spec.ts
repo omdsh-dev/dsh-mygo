@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { Context } from 'cordis'
+import { Context, Service } from 'cordis'
 import z from 'schemastery'
 import type { PluginDefinition, PluginHandleInfo, PluginHooks, PluginSource } from '@deepseek-ai/dsh-mygo-api'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -248,9 +248,113 @@ class FakeSessionPersistence {
   append = vi.fn(async () => undefined)
 }
 
+/** Minimal host settings service faithful to the real per-fiber registration semantics. */
+class FakeSettingsService extends Service {
+  readonly namespaces = new Map<string, {
+    value: unknown
+    watchers: Set<(next: unknown, prev: unknown) => void>
+  }>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'settings')
+  }
+
+  register(
+    ns: string,
+    schema: z<any>,
+    options?: { readonly base?: unknown; readonly validate?: (value: unknown) => void },
+  ): {
+    get(): unknown
+    watch(callback: (next: unknown, prev: unknown) => void): () => void
+  } {
+    if (this.namespaces.has(ns)) throw new Error(`settings namespace "${ns}" is already registered`)
+    const value = schema(options?.base ?? {})
+    options?.validate?.(value)
+    const registration = { value, watchers: new Set<(next: unknown, prev: unknown) => void>() }
+    this.ctx.effect(() => {
+      this.namespaces.set(ns, registration)
+      return () => { this.namespaces.delete(ns) }
+    })
+    return {
+      get: () => registration.value,
+      watch: (callback) => {
+        registration.watchers.add(callback)
+        return () => { registration.watchers.delete(callback) }
+      },
+    }
+  }
+
+  get(ns: string): unknown {
+    return this.namespaces.get(ns)?.value
+  }
+}
+
+/** Minimal host webserver service faithful to the real per-fiber registration semantics. */
+class FakeHttpServerService extends Service {
+  readonly upgrades = new Map<string, unknown>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'httpServer')
+  }
+
+  registerUpgrade(route: { readonly path: string; readonly handler: unknown }): () => void {
+    if (this.upgrades.has(route.path)) {
+      throw new Error(`webserver: duplicate upgrade route "${route.path}"`)
+    }
+    const registration = { route }
+    this.ctx.effect(() => {
+      this.upgrades.set(route.path, registration)
+      return () => { this.upgrades.delete(route.path) }
+    })
+    return () => { this.upgrades.delete(route.path) }
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 describe('LifecycleEngine install', () => {
+  it('reports a host service conflict with a readable cause', async () => {
+    const h = harness()
+    class FakePersistence extends Service {
+      constructor(ctx: Context) {
+        super(ctx, 'conflictSvc')
+      }
+    }
+    h.ctx.provide('conflictSvc', {})
+    await expect(h.engine.adoptRaw(FakePersistence, {})).rejects.toMatchObject({
+      code: 'staging-failed',
+    })
+    try {
+      await h.engine.adoptRaw(FakePersistence, {})
+    } catch (error) {
+      expect((error as { message: string }).message).toContain('host-conflict')
+      expect((error as { message: string }).message).toContain('conflictSvc')
+    }
+  })
+
+  it('reports a missing required config with the plugin schema description', async () => {
+    const h = harness()
+    h.definitions.set('rdb', fixture('rdb', {
+      config: z.union([
+        z.object({ type: z.const('sqlite'), path: z.string().required() }),
+        z.object({ type: z.const('postgres'), connectionString: z.string().required() }),
+      ]),
+    }))
+    await expect(h.engine.install(source('rdb'))).rejects.toMatchObject({
+      code: 'manifest-invalid',
+      details: { field: 'config' },
+    })
+    try {
+      await h.engine.install(source('rdb'))
+    } catch (error) {
+      const message = (error as { message: string }).message
+      expect(message).toContain('配置不合法')
+      expect(message).toContain('path')
+      expect(message).toContain('connectionString')
+      expect(message).toContain('请在安装时填写')
+    }
+  })
+
   it('installs, activates, dispatches, and emits both events', async () => {
     const h = harness()
     const received: number[] = []
@@ -1154,7 +1258,7 @@ describe('LifecycleEngine swapPolicy', () => {
     expect(h.engine.plugins()[0]?.version).toBe('2.0.0')
   })
 
-  it('retains the old generation while dispatches are in flight and releases on idle (HP:138)', async () => {
+  it('waits for in-flight dispatches before releasing the old generation (native ordering)', async () => {
     const h = harness()
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -1182,15 +1286,18 @@ describe('LifecycleEngine swapPolicy', () => {
     }))
     const dispatch = h.ctx.parallel('lifecycle/parallel', { n: 1 })
     await sleep(5)
-    await h.engine.replace('p', source('p2'))
+    const replacement = h.engine.replace('p', source('p2'))
+    await sleep(10)
     expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(0)
+    expect(h.engine.plugins()[0]?.version).toBe('1.0.0')
     release()
     await dispatch
-    await sleep(10)
+    await replacement
     expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(1)
+    expect(h.engine.plugins()[0]?.version).toBe('2.0.0')
   })
 
-  it('releases retained generations progressively across multiple in-flight events', async () => {
+  it('releases only after every in-flight event settles', async () => {
     const h = harness()
     let releaseParallel!: () => void
     let releaseWaterfall!: () => void
@@ -1231,7 +1338,8 @@ describe('LifecycleEngine swapPolicy', () => {
     const parallel = h.ctx.parallel('lifecycle/parallel', { n: 1 })
     const waterfall = h.ctx.waterfall('lifecycle/waterfall', { n: 1 }, () => 1)
     await sleep(5)
-    await h.engine.replace('p', source('p2'))
+    const replacement = h.engine.replace('p', source('p2'))
+    await sleep(10)
     expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(0)
     releaseParallel()
     await parallel
@@ -1239,11 +1347,11 @@ describe('LifecycleEngine swapPolicy', () => {
     expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(0)
     releaseWaterfall()
     await waterfall
-    await sleep(10)
+    await replacement
     expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(1)
   })
 
-  it('dispose releases retained generations', async () => {
+  it('dispose releases generations even with dispatches in flight', async () => {
     const h = harness()
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -1258,17 +1366,15 @@ describe('LifecycleEngine swapPolicy', () => {
       },
     }))
     await h.engine.install(source('p'))
-    h.definitions.set('p2', fixture('p', { version: '2.0.0' }))
     const dispatch = h.ctx.parallel('lifecycle/parallel', { n: 1 })
     await sleep(5)
-    await h.engine.replace('p', source('p2'))
     h.engine.dispose()
     expect(h.engine.plugins()).toEqual([])
     release()
     await dispatch
   })
 
-  it('uninstall releases a retained generation immediately', async () => {
+  it('uninstall releases a generation immediately even with dispatches in flight', async () => {
     const h = harness()
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -1283,10 +1389,8 @@ describe('LifecycleEngine swapPolicy', () => {
       },
     }))
     await h.engine.install(source('p'))
-    h.definitions.set('p2', fixture('p', { version: '2.0.0' }))
     const dispatch = h.ctx.parallel('lifecycle/parallel', { n: 1 })
     await sleep(5)
-    await h.engine.replace('p', source('p2'))
     await h.engine.uninstall('p')
     expect(h.engine.plugins()).toEqual([])
     release()
@@ -1946,6 +2050,29 @@ describe('LifecycleEngine updateConfig, adoptStatic, dispose', () => {
     h.definitions.set('p', fixture('p', { config: z.object({ step: z.number() }) }))
     await h.engine.install(source('p'))
     await expect(h.engine.updateConfig('p', { step: 'bad' })).rejects.toMatchObject({ code: 'manifest-invalid' })
+  })
+
+  it('re-adopting a static row with a changed config hot-replaces the generation', async () => {
+    const h = harness()
+    let sawConfig: unknown
+    const raw = {
+      name: 'static-config',
+      Config: z.object({ marker: z.string().required(false) }),
+      apply(ctx: unknown, entry: unknown) {
+        sawConfig = entry
+      },
+    }
+    await h.engine.adoptRaw(raw, { marker: 'v1' }, 'static-config')
+    expect(h.engine.configOf('static-config')).toEqual({ marker: 'v1' })
+    // Same version, changed config: the idempotency guard must not
+    // short-circuit — the row re-adoption is a hot-config replace.
+    await h.engine.adoptRaw(raw, { marker: 'v2' }, 'static-config')
+    expect(h.engine.configOf('static-config')).toEqual({ marker: 'v2' })
+    expect(sawConfig).toEqual({ marker: 'v2' })
+    // Same version and same config: idempotent, no extra replace.
+    const before = h.events.filter(event => event.name === 'plugin/replaced').length
+    await h.engine.adoptRaw(raw, { marker: 'v2' }, 'static-config')
+    expect(h.events.filter(event => event.name === 'plugin/replaced').length).toBe(before)
   })
 
   it('disposes every registration and table entry', async () => {
@@ -2696,5 +2823,84 @@ describe('updateRaw', () => {
     expect(handle?.id).toBe('raw-update')
     expect(handle?.generation).toBe(2)
     expect(engine.plugins()).toHaveLength(1)
+  })
+})
+
+describe('settings namespace staging (raw-plugin facade)', () => {
+  const settingsRaw = (marker: string) => ({
+    name: 'settings-raw',
+    Config: z.object({ marker: z.string().required(false) }),
+    apply(ctx: any, entry: any) {
+      ctx.inject(['settings'], (sctx: any) => {
+        sctx.settings.register(
+          'settings-raw',
+          z.object({ marker: z.string().required(false) }),
+          { base: entry },
+        )
+      })
+    },
+  })
+
+  it('hot-config replaces a settings-registering raw plugin without duplicate registration', async () => {
+    const h = harness()
+    const settings = new FakeSettingsService(h.ctx)
+    await h.engine.adoptRaw(settingsRaw('v1'), { marker: 'v1' }, 'settings-raw')
+    expect(settings.namespaces.size).toBe(1)
+    expect(settings.get('settings-raw')).toMatchObject({ marker: 'v1' })
+
+    await h.engine.updateConfig('settings-raw', { marker: 'v2' })
+    expect(settings.namespaces.size).toBe(1)
+    expect(settings.get('settings-raw')).toMatchObject({ marker: 'v2' })
+  })
+
+  it('disabling drops the namespace and enabling remounts it', async () => {
+    const h = harness()
+    const settings = new FakeSettingsService(h.ctx)
+    await h.engine.adoptRaw(settingsRaw('v1'), {}, 'settings-raw')
+    expect(settings.namespaces.size).toBe(1)
+
+    await h.engine.disable('settings-raw')
+    expect(settings.namespaces.size).toBe(0)
+
+    await h.engine.enable('settings-raw')
+    expect(settings.namespaces.size).toBe(1)
+  })
+})
+
+describe('webserver upgrade-route staging (raw-plugin facade)', () => {
+  const upgradeRaw = () => ({
+    name: 'upgrade-raw',
+    apply(ctx: any) {
+      ctx.effect(
+        () => ctx.httpServer.registerUpgrade({
+          path: '/sidebar/ws/terminal',
+          handler: () => {},
+        }),
+        'upgrade-raw: terminal WebSocket',
+      )
+    },
+  })
+
+  it('hot-config replaces an upgrade-route plugin without duplicate route', async () => {
+    const h = harness()
+    const server = new FakeHttpServerService(h.ctx)
+    await h.engine.adoptRaw(upgradeRaw(), {}, 'upgrade-raw')
+    expect(server.upgrades.size).toBe(1)
+
+    await h.engine.updateConfig('upgrade-raw', {})
+    expect(server.upgrades.size).toBe(1)
+  })
+
+  it('disabling drops the upgrade route and enabling remounts it', async () => {
+    const h = harness()
+    const server = new FakeHttpServerService(h.ctx)
+    await h.engine.adoptRaw(upgradeRaw(), {}, 'upgrade-raw')
+    expect(server.upgrades.size).toBe(1)
+
+    await h.engine.disable('upgrade-raw')
+    expect(server.upgrades.size).toBe(0)
+
+    await h.engine.enable('upgrade-raw')
+    expect(server.upgrades.size).toBe(1)
   })
 })

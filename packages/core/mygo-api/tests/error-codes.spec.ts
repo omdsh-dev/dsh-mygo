@@ -32,6 +32,7 @@ const SPEC_GROUPS = {
     'ordering-cycle',
     'veto-position-conflict',
     'companion-conflict',
+    'compatibility-conflict',
     'claims-unmanaged-incumbent',
     'shadow-undeclared',
     'claims-conflict',
@@ -63,9 +64,9 @@ const SPEC_GROUPS = {
 const SPEC_CODES = Object.values(SPEC_GROUPS).flat() as readonly PluginErrorCode[]
 
 describe('PluginErrorCode table (§16.2)', () => {
-  it('transcribes 36 codes across six groups with the spec group sizes', () => {
-    expect(Object.values(SPEC_GROUPS).map(group => group.length)).toEqual([7, 5, 8, 9, 5, 2])
-    expect(SPEC_CODES).toHaveLength(36)
+  it('transcribes 37 codes across six groups with the spec group sizes', () => {
+    expect(Object.values(SPEC_GROUPS).map(group => group.length)).toEqual([7, 5, 9, 9, 5, 2])
+    expect(SPEC_CODES).toHaveLength(37)
   })
 
   it('has no duplicate codes', () => {

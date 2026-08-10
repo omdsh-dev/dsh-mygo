@@ -52,6 +52,8 @@ export type PluginErrorCode =
   | 'veto-position-conflict'
   /** returning to a cached generation conflicts with a newly installed companion; details: companion */
   | 'companion-conflict'
+  /** package-level requires/breaks constraint violated; details: plugin + violations */
+  | 'compatibility-conflict'
   /** claims targets a slot a raw Cordis plugin holds; details: slot */
   | 'claims-unmanaged-incumbent'
   /** scoped registration shadows a global name without a claims declaration; details: tool + holder */
@@ -179,6 +181,12 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     `veto position conflict between outermost intercept plugins ${render(details.a)} and ${render(details.b)}`,
   'companion-conflict': details =>
     `companion ${render(details.companion)} conflicts with the cached generation`,
+  'compatibility-conflict': details => {
+    const lines = Array.isArray(details.violations)
+      ? (details.violations as unknown[]).map(line => `  - ${String(line)}`).join('\n')
+      : String(details.violations)
+    return `compatibility constraints violated for plugin ${render(details.plugin)}:\n${lines}`
+  },
   'claims-unmanaged-incumbent': details =>
     `claims target ${render(details.slot)} is held by an unmanaged incumbent; manager authority covers only the set it registered`,
   'shadow-undeclared': details =>

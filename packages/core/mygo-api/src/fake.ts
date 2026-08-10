@@ -29,6 +29,7 @@ import type {
   PluginPromptSection,
   PluginSkillDefinition,
   PluginSkills,
+  StagedSettingsRegistration,
   PluginToolDefinition,
   PluginVars,
   PluginSource,
@@ -80,6 +81,18 @@ export interface FakeListenerRecord {
   // signatures at once, and no single parameter type can describe all of them.
   // oxlint-disable-next-line typescript/no-explicit-any -- erased-heterogeneous store; see comment above.
   readonly listener: (...args: any[]) => unknown
+}
+
+/** One recorded host-side listener registration (`env.onHost`). */
+export interface FakeHostListenerRecord {
+  /** Host event name the listener registered for. */
+  readonly event: string
+  /** Registered listener. */
+  readonly listener: (...args: unknown[]) => unknown
+  /** Whether the listener self-disposes after its first call. */
+  readonly once?: boolean
+  /** Whether the listener is prepended on the host bus. */
+  readonly prepend?: boolean
 }
 
 /** One recorded service provision. */
@@ -140,6 +153,8 @@ export interface FakePluginEnv extends PluginEnv {
   scope(agentId: SessionId): FakePluginEnv
   /** Recorded listener registrations, in registration order. */
   readonly listeners: readonly FakeListenerRecord[]
+  /** Recorded host-side listener registrations (`env.onHost`), in registration order. */
+  readonly hostListeners: readonly FakeHostListenerRecord[]
   /** Recorded tool registrations, in registration order. */
   readonly tools: readonly PluginToolDefinition[]
   /** Recorded prompt-section registrations, in registration order. */
@@ -178,6 +193,8 @@ export interface FakePluginEnv extends PluginEnv {
   readonly fetchCalls: readonly FakeFetchCallRecord[]
   /** Recorded `effect` disposers. */
   readonly effects: readonly FakeEffectRecord[]
+  /** Recorded host-side effect disposers (`env.hostEffect`). */
+  readonly hostEffects: readonly FakeEffectRecord[]
   /** Recorded `install` calls. */
   readonly installCalls: readonly { readonly source: PluginSource; readonly options?: InstallOptions }[]
   /** Recorded `uninstall` calls. */
@@ -201,6 +218,7 @@ export interface FakePluginEnv extends PluginEnv {
 /** Options plus the internal mutable record arrays of one fake env. */
 interface FakeEnvState {
   readonly listeners: FakeListenerRecord[]
+  readonly hostListeners: FakeHostListenerRecord[]
   readonly tools: PluginToolDefinition[]
   readonly promptSections: PluginPromptSection[]
   readonly provided: FakeProvidedRecord[]
@@ -220,6 +238,7 @@ interface FakeEnvState {
   readonly commandRegistrations: PluginCommandDefinition[]
   readonly fetchCalls: FakeFetchCallRecord[]
   readonly effects: FakeEffectRecord[]
+  readonly hostEffects: FakeEffectRecord[]
   readonly installCalls: Array<{ source: PluginSource; options?: InstallOptions }>
   readonly uninstallCalls: string[]
   readonly emitCalls: FakeEmitCallRecord[]
@@ -263,6 +282,7 @@ class FakePluginEnvImpl implements FakePluginEnv {
     this.installHandler = options.installHandler
     this.state = {
       listeners: [],
+      hostListeners: [],
       tools: [],
       promptSections: [],
       provided: [],
@@ -282,6 +302,7 @@ class FakePluginEnvImpl implements FakePluginEnv {
       commandRegistrations: [],
       fetchCalls: [],
       effects: [],
+      hostEffects: [],
       installCalls: [],
       uninstallCalls: [],
       emitCalls: [],
@@ -394,6 +415,10 @@ class FakePluginEnvImpl implements FakePluginEnv {
     return this.state.listeners
   }
 
+  get hostListeners(): readonly FakeHostListenerRecord[] {
+    return this.state.hostListeners
+  }
+
   get tools(): readonly PluginToolDefinition[] {
     return this.state.tools
   }
@@ -470,6 +495,10 @@ class FakePluginEnvImpl implements FakePluginEnv {
     return this.state.effects
   }
 
+  get hostEffects(): readonly FakeEffectRecord[] {
+    return this.state.hostEffects
+  }
+
   get installCalls(): readonly { source: PluginSource; options?: InstallOptions }[] {
     return this.state.installCalls
   }
@@ -494,6 +523,25 @@ class FakePluginEnvImpl implements FakePluginEnv {
     return () => {
       const index = this.state.listeners.indexOf(record)
       if (index !== -1) this.state.listeners.splice(index, 1)
+    }
+  }
+
+  onHost(
+    event: string,
+    listener: (...args: unknown[]) => unknown,
+    options?: { readonly once?: boolean; readonly prepend?: boolean },
+  ): Disposable {
+    this.assertRegistrable('onHost')
+    const record: FakeHostListenerRecord = {
+      event,
+      listener,
+      ...(options?.once === true ? { once: true } : {}),
+      ...(options?.prepend === true ? { prepend: true } : {}),
+    }
+    this.state.hostListeners.push(record)
+    return () => {
+      const index = this.state.hostListeners.indexOf(record)
+      if (index !== -1) this.state.hostListeners.splice(index, 1)
     }
   }
 
@@ -548,6 +596,15 @@ class FakePluginEnvImpl implements FakePluginEnv {
 
   effect(disposer: () => void, name?: string): void {
     this.state.effects.push(name === undefined ? { disposer } : { disposer, name })
+  }
+
+  hostEffect(disposer: () => void, name?: string): void {
+    this.state.hostEffects.push(name === undefined ? { disposer } : { disposer, name })
+  }
+
+  registerSettings(_registration: StagedSettingsRegistration): void {
+    // The fake env has no host settings service; staged namespace
+    // registrations are dropped so plugin tests keep working.
   }
 
   plugins(): readonly PluginHandleInfo[] {

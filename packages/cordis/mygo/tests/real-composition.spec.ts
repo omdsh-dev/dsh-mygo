@@ -634,17 +634,26 @@ describe('#18 deferred wirings: auto-disable and dispatch audit', () => {
   it('warns when the auto-disable protocol rejects under a concurrent operation', async () => {
     const { ctx, warns } = await loadComposition(bootRoot => managerRows('<root>', 'wiring3', ['    backend: sqlite'])
       .map(line => line.replace('<root>', bootRoot)))
+    // The first session/flush listener blocks forever (a parallel-band
+    // dispatch that never settles), while tools/change listeners spin 25ms
+    // to accumulate CPU-quota violations.
     const cpuCode = `module.exports = {
       id: 'cpu-bound',
       version: '1.0.0',
       kinds: ['fixture'],
       requires: [],
       provides: [],
-      permissions: { observe: ['tools/change'], transform: [], intercept: [], position: 'derived', claims: [] },
+      permissions: { observe: ['session/flush', 'tools/change'], transform: [], intercept: [], position: 'derived', claims: [] },
       stateful: false,
       swapPolicy: 'immediate',
       config: () => ({}),
-      hooks: { activate: (env) => { env.on('tools/change', () => { const start = Date.now(); while (Date.now() - start < 25) {} }) } },
+      hooks: { activate: (env) => {
+        let blocked = false
+        env.on('session/flush', async () => {
+          if (!blocked) { blocked = true; await new Promise(() => {}) }
+        })
+        env.on('tools/change', () => { const start = Date.now(); while (Date.now() - start < 25) {} })
+      } },
     }`
     await ctx.pluginManager.install({ type: 'inline', code: cpuCode })
     const hangingCode = `module.exports = {
@@ -659,6 +668,12 @@ describe('#18 deferred wirings: auto-disable and dispatch audit', () => {
       config: () => ({}),
       hooks: { activate: async () => { await new Promise(() => {}) } },
     }`
+    // Keep the old generation's listener live while the replace holds the
+    // per-id lock: the in-flight parallel dispatch makes releaseGeneration
+    // wait for idle before the (hanging) apply runs under the native
+    // dispose-first ordering.
+    ctx.emit('session/flush')
+    await sleep(30)
     const replacing = ctx.pluginManager.replace('cpu-bound', { type: 'inline', code: hangingCode })
     await sleep(30)
     for (let index = 0; index < 5; index += 1) {

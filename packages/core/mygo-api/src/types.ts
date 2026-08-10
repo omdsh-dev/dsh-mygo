@@ -9,9 +9,32 @@
 
 import type Schema from 'schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { PluginErrorCode } from './error.ts'
 
 /** A schemastery schema, the manifest config DSL every harness plugin shares. */
 export type Schemastery = Schema
+
+/** One action an activation solver proposes. */
+export interface ActivationAction {
+  readonly op: 'enable' | 'disable' | 'install' | 'replace' | 'suggest-update'
+  readonly id: string
+  readonly kind: 'user-requested' | 'required-by' | 'conflict-resolution' | 'advisory'
+  /** Human-readable reason; hard actions carry the constraint chain. */
+  readonly reason: string
+  readonly chain?: readonly CompatibilityEdge[]
+}
+
+/** Full outcome of one activation solve. */
+export interface ActivationPlan {
+  readonly accepted: boolean
+  readonly actions: readonly ActivationAction[]
+  readonly warnings: readonly string[]
+  readonly error?: {
+    readonly code: PluginErrorCode
+    readonly message: string
+    readonly details?: Readonly<Record<string, unknown>>
+  }
+}
 
 /** File-access mode vocabulary: `write` implies `read` on the same path. */
 export type FileAccessMode = 'read' | 'write'
@@ -78,6 +101,135 @@ export interface PluginDefinition {
   readonly config: Schemastery
   /** Lifecycle hooks (§4). */
   readonly hooks: PluginHooks
+  /**
+   * Declared static contributions to managed extension points
+   * (Fabric `entrypoints` 对照). Values are strings or `{ value }` objects —
+   * static data only, no module specifiers or code references. Contributions
+   * register with the generation and withdraw atomically with it.
+   */
+  readonly entrypoints?: PluginEntrypointsDeclaration
+  /**
+   * Declared package-level constraints against sibling managed plugins
+   * (Fabric `depends`/`breaks` 对照). Keys are managed plugin ids; ranges are
+   * semver ranges checked against the installed plugin versions. Validation
+   * only — the manager never selects or installs versions.
+   */
+  readonly compatibility?: PluginCompatibility
+}
+
+/** One static contribution to a managed extension point. */
+export type PluginEntrypointContribution =
+  | string
+  | { readonly value: unknown }
+
+/** Declared static contributions by extension-point key. */
+export type PluginEntrypointsDeclaration =
+  Readonly<Record<string, readonly PluginEntrypointContribution[]>>
+
+/** Package-level compatibility constraints against sibling managed plugins. */
+export interface PluginCompatibility {
+  /**
+   * Every key must resolve to an **enabled** managed plugin whose version
+   * satisfies the declared semver range. `requires` is the v1 alias and is
+   * normalized into `depends`; declaring the same key in both is invalid.
+   */
+  readonly depends?: Readonly<Record<string, string>>
+  /**
+   * No key may resolve to an enabled managed plugin whose version falls
+   * inside the declared semver range.
+   */
+  readonly breaks?: Readonly<Record<string, string>>
+  /**
+   * Soft positive: missing or version-mismatched targets produce warnings
+   * only. Never blocks, never participates in the transitive closure.
+   */
+  readonly recommends?: Readonly<Record<string, string>>
+  /**
+   * Soft positive, weaker than `recommends`: warnings only.
+   */
+  readonly suggests?: Readonly<Record<string, string>>
+  /**
+   * Soft negative: an enabled target whose version falls inside the declared
+   * range produces a warning only.
+   */
+  readonly conflicts?: Readonly<Record<string, string>>
+  /**
+   * v1 alias for `depends`; normalized at parse time. Kept for zero-migration
+   * compatibility with existing manifests.
+   */
+  readonly requires?: Readonly<Record<string, string>>
+}
+
+/** One directed dependency edge on the compatibility graph. */
+export interface CompatibilityEdge {
+  /** The plugin that declared the edge. */
+  readonly declarer: string
+  readonly kind: 'depends' | 'recommends' | 'suggests' | 'conflicts' | 'breaks'
+  readonly target: string
+  readonly range: string
+}
+
+/** One hard constraint violation with its full path from the checked root. */
+export interface CompatibilityViolation {
+  readonly kind: 'depends' | 'breaks'
+  readonly declarer: string
+  readonly target: string
+  readonly range: string
+  /** Installed version of the target when present. */
+  readonly installed?: string
+  /** Why the edge failed. */
+  readonly state?: 'missing' | 'installed-disabled' | 'version-mismatch'
+  /** The declared range itself failed to parse. */
+  readonly rangeInvalid?: boolean
+  /** Path from the checked plugin to the violating edge, inclusive. */
+  readonly chain: readonly CompatibilityEdge[]
+}
+
+/** One soft or derived incompatibility note. */
+export interface CompatibilityWarning {
+  readonly kind: 'recommends' | 'suggests' | 'conflicts' | 'derived-conflict'
+  readonly declarer: string
+  /** Derived warnings use `service:<id>` or `row:<id>` targets. */
+  readonly target: string
+  readonly range?: string
+  readonly installed?: string
+  readonly chain?: readonly CompatibilityEdge[]
+  readonly detail?: string
+}
+
+/** Full outcome of one compatibility evaluation. */
+export interface CompatibilityReport {
+  readonly plugin: string
+  readonly action: 'install' | 'replace' | 'enable' | 'uninstall' | 'reconcile' | 'preflight'
+  readonly violations: readonly CompatibilityViolation[]
+  readonly warnings: readonly CompatibilityWarning[]
+}
+
+/**
+ * Composition facts used to derive conflicts the manifest does not declare.
+ * The bridge rail implements `serviceProviders` from existing `provides`;
+ * `patchedRows` is enabled once the bundle rail (P3) can read profile layers.
+ */
+export interface CompositionFactProvider {
+  serviceProviders(): readonly { readonly service: string; readonly plugin: string }[]
+  patchedRows(): readonly { readonly rowId: string; readonly plugin: string }[]
+}
+
+/**
+ * Optional declarative overrides for a raw Cordis plugin adoption. The
+ * installer reads these from the installed package's `package.json`
+ * `dsh.mygo` section so stock ecosystem plugins declare entrypoints and
+ * compatibility without touching code.
+ */
+export interface RawPluginDeclaration {
+  /** Package version; the constraint-check anchor (defaults to `0.0.0-raw`). */
+  readonly version?: string
+  /** Static contributions to managed extension points. */
+  readonly entrypoints?: PluginEntrypointsDeclaration
+  /** Package-level constraints against sibling managed plugins. */
+  readonly compatibility?: PluginCompatibility
+  /** Capability / service aliases this plugin provides (`service:`, `cap:`). */
+  readonly provides?: readonly string[]
 }
 
 /**
@@ -101,6 +253,25 @@ export interface PluginEnv {
    */
   on<E extends PluginEventName>(event: E, listener: PluginEventListener<E>): Disposable
   /**
+   * Internal: register one listener directly on the raw host event bus
+   * (zero-intrusion raw-plugin surface). The raw-plugin facade routes
+   * `ctx.on` / `ctx.once` here for events the manager does not claim — host
+   * events outside the harness vocabulary and outside the plugin's declared
+   * custom `events` — so the listener keeps real Cordis semantics (options,
+   * `once`, scope filters). The manager tracks the returned disposer and
+   * revokes it on generation release (disable/uninstall/replace), unlike the
+   * raw `ctx.once` passthrough which would otherwise leak on the host fiber.
+   * @param event - host event name.
+   * @param listener - listener registered on the host context.
+   * @param options - optional Cordis listener options.
+   * @returns a disposer removing the host listener.
+   */
+  onHost(
+    event: string,
+    listener: (...args: unknown[]) => unknown,
+    options?: { readonly once?: boolean; readonly prepend?: boolean },
+  ): Disposable
+  /**
    * Register one teardown disposer for the plugin generation. Raw Cordis
    * plugins call this through `ctx.effect`; the manager runs every collected
    * disposer when the generation is released (replace/uninstall/dispose).
@@ -108,6 +279,28 @@ export interface PluginEnv {
    * @param name - optional human-readable label for diagnostics.
    */
   effect(disposer: () => void, name?: string): void
+  /**
+   * Internal: register one HOST-side side-effect disposer (a disposer
+   * returned by a host service method such as `httpServer.tapIndex` /
+   * `skills.registerProvider`). Plugin authors do not call this directly —
+   * the raw-plugin facade records it when a passthrough registration method
+   * returns a disposer. The manager executes host-effect disposers on
+   * release AND on disable (host side effects are hot-revocable), while
+   * ordinary `effect` disposers stay reserved for generation release.
+   * @param disposer - the host disposer to execute on release/disable.
+   * @param name - optional human-readable label for diagnostics.
+   */
+  hostEffect(disposer: () => void, name?: string): void
+  /**
+   * Internal: stage one settings-namespace registration for commit.
+   * Raw Cordis plugins register through `ctx.settings.register`; the
+   * zero-intrusion facade intercepts it so the manager owns the namespace
+   * through a per-generation Cordis fiber at commit and releases it with the
+   * generation (replace releases the incumbent before the new generation
+   * applies, so the global namespace map never sees two owners).
+   * @param registration - the pending namespace registration captured by the facade.
+   */
+  registerSettings(registration: StagedSettingsRegistration): void
   /**
    * Emit one plugin-declared custom event (an exact `events` entry or a
    * name matching a declared `namespace/*` pattern). The emit routes through
@@ -235,6 +428,37 @@ export interface PluginEnv {
   readonly commands: PluginCommands
 }
 
+/** One pending settings-namespace registration staged for commit. */
+export interface StagedSettingsRegistration {
+  readonly kind: 'settings-registration'
+  readonly pluginId: string
+  /** Branded settings namespace id (lowercase kebab-case). */
+  readonly ns: string
+  /** Schemastery schema resolving the namespace value. */
+  readonly schema: unknown
+  /** Registration options surfaced to the host settings service at commit. */
+  readonly options?: {
+    readonly base?: unknown
+    readonly applies?: 'live' | 'restart'
+    readonly validate?: (value: unknown) => void
+  }
+  /**
+   * Staging scope handed to the plugin during activation; `attach` wires it
+   * to the live host scope at commit so watchers and reads keep working.
+   */
+  readonly stagedScope: StagedSettingsScope
+}
+
+/** Scope returned by the staged settings surface during activation. */
+export interface StagedSettingsScope {
+  /** Current resolved value (schema defaults + base + stored user section). */
+  get(): unknown
+  /** Observe committed changes; callbacks run once attached to the live scope. */
+  watch(callback: (next: unknown, prev: unknown) => void | Promise<void>): () => void
+  /** Attach this staging scope to the live host scope after commit. */
+  attach(live: unknown): void
+}
+
 /** Env-var capability exposed through `PluginEnv.vars`; denial precedes any host access. */
 export interface PluginVars {
   /**
@@ -357,6 +581,14 @@ export interface PluginHttpResponse {
   readonly body?: string | Record<string, unknown> | Uint8Array
   /** Response headers. */
   readonly headers?: Readonly<Record<string, string>>
+  /**
+   * Live response stream (SSE-style routes). When present the host pipeline
+   * writes the headers immediately, forwards every emitted chunk as it
+   * arrives, and ends the response only when the stream closes. The bridge
+   * closes the stream when the raw handler calls `res.end()`, a piped source
+   * ends, or no chunk has arrived for `streamIdleMs` (default 30s).
+   */
+  readonly stream?: AsyncIterable<Uint8Array>
 }
 
 /** One managed HTTP route registration. */
@@ -369,6 +601,8 @@ export interface PluginHttpRouteSpec {
   readonly kind?: 'exact' | 'prefix'
   /** Route handler owning the response. */
   readonly handler: (request: PluginHttpRequest) => PluginHttpResponse | Promise<PluginHttpResponse>
+  /** Idle timeout (no writes) after which an open response stream closes; default 30s. */
+  readonly streamIdleMs?: number
 }
 
 /** HTTP route-registration capability exposed through `PluginEnv.http`; denial precedes staging. */
@@ -391,6 +625,20 @@ export interface PluginSkillDefinition {
   readonly content: string
   /** Optional extra routing guidance. */
   readonly whenToUse?: string
+  /** Optional model/user invocation policy; omission defaults both to true. */
+  readonly invocation?: { readonly modelInvocable: boolean; readonly userInvocable: boolean }
+  /** Optional discovery source label; omission uses the manager's runtime label. */
+  readonly source?: string
+  /** Optional provider label; omission uses the manager-owned provider. */
+  readonly provider?: string
+  /** Optional duplicate-resolution rank; lower ranks win (default 0). */
+  readonly rank?: number
+  /** Optional provider-specific base for relative resources. */
+  readonly resourceBase?: { readonly kind: string; readonly path?: string; readonly url?: string; readonly description?: string }
+  /** Optional absolute file path when the skill came from disk. */
+  readonly path?: string
+  /** Optional parsed provider metadata. */
+  readonly metadata?: Readonly<Record<string, unknown>>
 }
 
 /** Skill-contribution capability exposed through `PluginEnv.skills`. */
@@ -561,6 +809,20 @@ export interface PluginToolDefinition {
   readonly input: Record<string, unknown>
   /** Output JSON Schema node for the canonical result value. */
   readonly output: Record<string, unknown>
+  /** Host `output.render` projection: canonical value → content blocks. */
+  readonly outputRender?: (args: unknown, value: unknown) => unknown
+  /** Host `output.presentationMeta` projection: value → persisted replay meta. */
+  readonly outputPresentationMeta?: (args: unknown, value: unknown) => unknown
+  /** Host `presentCall` projection for the in-flight call presentation. */
+  readonly presentCall?: (args: unknown) => unknown
+  /** Host `presentResult` projection for the settled result presentation. */
+  readonly presentResult?: (args: unknown, result: unknown) => unknown
+  /** Cooperative tool-call timeout budget in milliseconds (host `ToolDefinition.timeoutMs`). */
+  readonly timeoutMs?: number
+  /** Pure synchronous classifier for parallel overlap (host `ToolDefinition.isConcurrencySafe`). */
+  readonly isConcurrencySafe?: (args: unknown) => boolean
+  /** Synchronous last-mile content transform (host `ToolDefinition.finalizeContent`). */
+  readonly finalizeContent?: (exec: unknown, result: unknown) => unknown[] | undefined
   /**
    * Run one accepted call and return its canonical value.
    * @param args - parsed model arguments.
@@ -716,6 +978,8 @@ export interface InstallOptions {
   readonly origin?: InstallOrigin
   /** Initial config validated against the manifest config schema. */
   readonly config?: unknown
+  /** Resolve required-by activation actions (e.g. enable disabled deps) before installing. */
+  readonly autoResolve?: boolean
 }
 
 /** Read-only handle for one managed plugin (§15.2). */
@@ -742,4 +1006,8 @@ export interface PluginHandleInfo {
   readonly orderNeutral: boolean
   /** Source the plugin came from. */
   readonly source: PluginSource | { readonly type: 'static' }
+  /** Extension-point keys this plugin contributes to (entrypoints). */
+  readonly entrypoints?: readonly string[]
+  /** Declared package-level constraints. */
+  readonly compatibility?: PluginCompatibility
 }

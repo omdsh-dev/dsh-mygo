@@ -65,6 +65,11 @@ export interface RegistryStore {
   deletePlugin(id: string): Promise<void>
   /** Durable-row estimate for the T6 registry quotas. */
   usage(): Promise<{ readonly rows: number; readonly bytes: number }>
+  /**
+   * Optional backend self-check (round-trip smoke). External stores implement
+   * it so schema drift is detected at manager init instead of mid-recovery.
+   */
+  check?(): Promise<void>
 }
 
 /** In-memory registry store for #15 tests and the failure-injection report. */

@@ -9,6 +9,7 @@
  * @module @dsh-external/dsh-mygo-panel
  */
 import { execFile, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { openSync } from 'node:fs'
 import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -17,7 +18,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import type { Context } from 'cordis'
 import type { PluginManager } from '@deepseek-ai/dsh-mygo'
-import type { PluginHandleInfo, RawCordisFunctionPlugin } from '@deepseek-ai/dsh-mygo-api'
+import { compatibilityViolationLines, compatibilityWarningLines } from '@deepseek-ai/dsh-mygo'
+import type {
+  PluginCompatibility,
+  PluginHandleInfo,
+  RawCordisFunctionPlugin,
+  RawPluginDeclaration,
+} from '@deepseek-ai/dsh-mygo-api'
 
 const execFileAsync = promisify(execFile)
 
@@ -95,12 +102,23 @@ interface InstallManifest {
   readonly method: 'github' | 'folder' | 'archive'
   readonly source: string
   readonly entry: string
+  /** Installed package version; the compatibility-check anchor. */
+  readonly version?: string
+  /** Declarative `dsh.mygo` section read from the installed package.json. */
+  readonly declarative?: DeclarativeSection
   /** Remote repository provenance when installed from GitHub. */
   readonly remote?: RemoteRef
   skillFile?: string
   readonly config?: unknown
   readonly installDeps?: boolean
   readonly installedAt: number
+}
+
+/** The `dsh.mygo` section of an installed plugin's package.json (v1). */
+interface DeclarativeSection {
+  readonly entrypoints?: Readonly<Record<string, readonly (string | { readonly value: unknown })[]>>
+  readonly compatibility?: PluginCompatibility
+  readonly provides?: readonly string[]
 }
 
 interface InstallRequest {
@@ -111,6 +129,8 @@ interface InstallRequest {
   readonly config?: unknown
   /** Install the plugin's runtime `dependencies` with npm (opt-in). */
   readonly installDeps?: boolean
+  /** Resolve required-by activation actions (enable disabled deps) before adopting. */
+  readonly autoResolve?: boolean
 }
 
 /** Remote repository provenance recorded for GitHub-installed plugins/apps. */
@@ -177,6 +197,31 @@ function bridgeNameOf(id: string): string {
   return `@dsh-external/${id}-mygo`
 }
 
+/** Client service id → provider package map for bridge dependency completion. */
+const CLIENT_SERVICE_PACKAGES: Readonly<Record<string, string>> = {
+  slots: '@deepseek-ai/dsh-client-ui-slots',
+}
+
+/**
+ * Extract the client bundle's fiber-level inject list (`exports.inject` /
+ * `const inject = [...]`) and map the service ids to provider packages. The
+ * bridge's `dshClient.inject` must name the provider packages (host client
+ * composition loads them as dependency edges); a bundle declaring
+ * `inject: ['slots']` without the package edge fails with
+ * "cannot get property 'slots' without inject" in the browser.
+ */
+function clientServicePackagesOf(clientText: string): string[] {
+  const match = /(?:exports\.inject|const inject)\s*=\s*\[([^\]]*)\]/.exec(clientText)
+  if (match === null || match[1] === undefined) return []
+  const names = new Set<string>()
+  for (const raw of match[1].split(',')) {
+    const id = raw.trim().replace(/^['"]|['"]$/g, '')
+    const pkg = CLIENT_SERVICE_PACKAGES[id]
+    if (pkg !== undefined) names.add(pkg)
+  }
+  return [...names]
+}
+
 /** Derive a manifest-safe plugin id from a package name. */
 function pluginIdOf(packageName: string): string {
   const base = packageName.includes('/') ? packageName.slice(packageName.lastIndexOf('/') + 1) : packageName
@@ -214,9 +259,53 @@ async function resolveEntry(root: string): Promise<string> {
   throw new Error('未找到插件入口（package.json main / lib/index.js / src/index.ts）')
 }
 
-/** Import one plugin entry and unwrap CJS default exports. */
-async function importEntry(entry: string): Promise<RawCordisFunctionPlugin> {
-  const mod = await import(pathToFileURL(entry).href) as {
+/**
+ * Resolve a plugin entry from the package's declared surface, even before the
+ * build artifact exists: the official repository-plugin format
+ * (`package.json#dsh.entry`) ships source only and must be built during
+ * install, so the declared path is the install-time contract.
+ */
+async function resolveEntryDeclared(root: string): Promise<string> {
+  try {
+    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      readonly dsh?: { readonly entry?: unknown }
+      readonly main?: unknown
+    }
+    const declared = typeof pkg.dsh?.entry === 'string' && pkg.dsh.entry.length > 0
+      ? pkg.dsh.entry
+      : typeof pkg.main === 'string' && pkg.main.length > 0
+        ? pkg.main
+        : undefined
+    if (declared !== undefined) return resolve(root, declared)
+  } catch {
+    // unreadable manifest: fall through to the built-artifact resolver
+  }
+  return resolveEntry(root)
+}
+
+/** Whether one package root follows the official `.dsh-plugin` repository format. */
+async function isRepositoryPluginPackage(root: string): Promise<boolean> {
+  try {
+    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      readonly dsh?: { readonly entry?: unknown }
+    }
+    return typeof pkg.dsh?.entry === 'string' && pkg.dsh.entry.length > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Import one plugin entry and unwrap CJS default exports. `fresh` appends a
+ * unique query to the file URL: Node's ESM registry caches modules by URL, so
+ * reinstalling the same plugin id in one process would otherwise hand the
+ * manager the previous version's module. The query is stripped by
+ * `fileURLToPath` and relative-URL resolution, so `import.meta.url` users are
+ * unaffected.
+ */
+async function importEntry(entry: string, fresh = false): Promise<RawCordisFunctionPlugin> {
+  const base = pathToFileURL(entry).href
+  const mod = await import(fresh ? `${base}?mygo=${Date.now()}` : base) as {
     readonly default?: RawCordisFunctionPlugin
     readonly apply?: unknown
     readonly name?: string
@@ -226,6 +315,94 @@ async function importEntry(entry: string): Promise<RawCordisFunctionPlugin> {
     throw new Error(`插件入口 ${entry} 没有 apply 函数`)
   }
   return raw
+}
+
+/**
+ * Read the declarative `dsh.mygo` section from an installed package's
+ * package.json: `{ entrypoints, compatibility }` plus the package version
+ * (the compatibility-check anchor). Unknown/ill-shaped sections are ignored —
+ * a stock ecosystem plugin without the section keeps the old derived
+ * manifest behaviour.
+ */
+async function readDeclarativeManifest(
+  root: string,
+): Promise<{ readonly version: string; readonly declarative?: DeclarativeSection } | undefined> {
+  let pkg: { readonly version?: unknown; readonly dsh?: { readonly mygo?: unknown } }
+  try {
+    pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as typeof pkg
+  } catch {
+    return undefined
+  }
+  if (typeof pkg.version !== 'string' || pkg.version.trim() === '') return undefined
+  const section = pkg.dsh?.mygo
+  const declarative: {
+    entrypoints?: DeclarativeSection['entrypoints']
+    compatibility?: PluginCompatibility
+    provides?: readonly string[]
+  } = {}
+  if (typeof section === 'object' && section !== null && !Array.isArray(section)) {
+    const record = section as Record<string, unknown>
+    if (typeof record.entrypoints === 'object' && record.entrypoints !== null && !Array.isArray(record.entrypoints)) {
+      declarative.entrypoints = record.entrypoints as NonNullable<DeclarativeSection['entrypoints']>
+    }
+    if (typeof record.compatibility === 'object' && record.compatibility !== null && !Array.isArray(record.compatibility)) {
+      const compat = record.compatibility as Record<string, unknown>
+      const block: {
+        requires?: PluginCompatibility['requires']
+        depends?: PluginCompatibility['depends']
+        breaks?: PluginCompatibility['breaks']
+        recommends?: PluginCompatibility['recommends']
+        suggests?: PluginCompatibility['suggests']
+        conflicts?: PluginCompatibility['conflicts']
+      } = {}
+      if (typeof compat.requires === 'object' && compat.requires !== null && !Array.isArray(compat.requires)) {
+        block.requires = compat.requires as NonNullable<PluginCompatibility['requires']>
+      }
+      if (typeof compat.depends === 'object' && compat.depends !== null && !Array.isArray(compat.depends)) {
+        block.depends = compat.depends as NonNullable<PluginCompatibility['depends']>
+      }
+      if (typeof compat.breaks === 'object' && compat.breaks !== null && !Array.isArray(compat.breaks)) {
+        block.breaks = compat.breaks as NonNullable<PluginCompatibility['breaks']>
+      }
+      if (typeof compat.recommends === 'object' && compat.recommends !== null && !Array.isArray(compat.recommends)) {
+        block.recommends = compat.recommends as NonNullable<PluginCompatibility['recommends']>
+      }
+      if (typeof compat.suggests === 'object' && compat.suggests !== null && !Array.isArray(compat.suggests)) {
+        block.suggests = compat.suggests as NonNullable<PluginCompatibility['suggests']>
+      }
+      if (typeof compat.conflicts === 'object' && compat.conflicts !== null && !Array.isArray(compat.conflicts)) {
+        block.conflicts = compat.conflicts as NonNullable<PluginCompatibility['conflicts']>
+      }
+      if (Object.keys(block).length > 0) declarative.compatibility = block
+    }
+    if (Array.isArray(record.provides)) {
+      const provides = record.provides.filter((entry): entry is string => typeof entry === 'string')
+      if (provides.length > 0) declarative.provides = provides
+    }
+  }
+  return {
+    version: pkg.version,
+    ...(Object.keys(declarative).length === 0 ? {} : { declarative: declarative as DeclarativeSection }),
+  }
+}
+
+/** Build the manager-facing declaration from an InstallManifest's stored section. */
+function toDeclaration(
+  value: { readonly version?: string; readonly declarative?: DeclarativeSection } | undefined,
+): RawPluginDeclaration | undefined {
+  if (value === undefined) return undefined
+  return {
+    ...(value.version === undefined ? {} : { version: value.version }),
+    ...(value.declarative?.entrypoints === undefined
+      ? {}
+      : { entrypoints: value.declarative.entrypoints }),
+    ...(value.declarative?.compatibility === undefined
+      ? {}
+      : { compatibility: value.declarative.compatibility }),
+    ...(value.declarative?.provides === undefined
+      ? {}
+      : { provides: value.declarative.provides }),
+  }
 }
 
 /** Copy a plugin directory, excluding node_modules/.git so deps resolve from the harness. */
@@ -364,6 +541,260 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Structural schemastery schema surface (no runtime dependency on the package). */
+interface ConfigSchemaLike {
+  readonly type?: string
+  readonly meta?: {
+    readonly required?: boolean
+    readonly default?: unknown
+    readonly description?: string | Record<string, string>
+    readonly role?: string
+    readonly extra?: unknown
+    readonly min?: number
+    readonly max?: number
+    readonly step?: number
+    readonly pattern?: { readonly source?: string; readonly flags?: string }
+  }
+  readonly dict?: Record<string, ConfigSchemaLike>
+  readonly list?: readonly ConfigSchemaLike[]
+  readonly inner?: ConfigSchemaLike
+  readonly value?: unknown
+  readonly builder?: () => ConfigSchemaLike
+}
+
+/** One user-editable config field surfaced by the panel. */
+interface ConfigFieldInfo {
+  readonly name: string
+  readonly type: string
+  readonly required: boolean
+  readonly description?: string
+  readonly role?: string
+  readonly extra?: unknown
+  readonly min?: number
+  readonly max?: number
+  readonly step?: number
+  readonly pattern?: string
+  readonly default?: unknown
+  readonly literal?: unknown
+  readonly enumValues?: readonly unknown[]
+  readonly children?: readonly ConfigFieldInfo[]
+}
+
+/** Schema summary + a JSON-safe starter template for one plugin config. */
+interface ConfigSchemaInfo {
+  readonly description: string
+  readonly fields: readonly ConfigFieldInfo[]
+  readonly template: unknown
+}
+
+/** Resolve lazy schemastery nodes so introspection sees the real shape. */
+function resolveConfigSchema(schema: ConfigSchemaLike): ConfigSchemaLike {
+  if (schema.type === 'lazy' && schema.builder !== undefined) {
+    try {
+      return resolveConfigSchema(schema.builder())
+    } catch {
+      return schema
+    }
+  }
+  return schema
+}
+
+/** JSON-safe starter value for one schema node (placeholder, never a live path). */
+function configSchemaTemplateOf(schema: ConfigSchemaLike): unknown {
+  const node = resolveConfigSchema(schema)
+  switch (node.type) {
+    case 'object': {
+      const out: Record<string, unknown> = {}
+      for (const [name, field] of Object.entries(node.dict ?? {})) {
+        const child = resolveConfigSchema(field)
+        if (child.meta?.default !== undefined) {
+          out[name] = child.meta.default
+        } else {
+          out[name] = configSchemaTemplateOf(child)
+        }
+      }
+      return out
+    }
+    case 'union': {
+      const branches = node.list ?? []
+      const preferred = branches.find(branch => resolveConfigSchema(branch).meta?.default !== undefined) ?? branches[0]
+      return preferred === undefined ? undefined : configSchemaTemplateOf(preferred)
+    }
+    case 'array':
+      return []
+    case 'dict':
+      return {}
+    case 'const':
+      return node.value
+    case 'string':
+      return ''
+    case 'number':
+    case 'integer':
+      return 0
+    case 'boolean':
+      return false
+    case 'transform':
+      return node.inner === undefined ? undefined : configSchemaTemplateOf(node.inner)
+    default:
+      return node.meta?.default
+  }
+}
+
+/** Describe one object field for the panel's expandable config surface. */
+function configFieldInfoOf(name: string, field: ConfigSchemaLike): ConfigFieldInfo {
+  const node = resolveConfigSchema(field)
+  const description = node.meta?.description
+  return {
+    name,
+    type: node.type ?? 'any',
+    required: node.meta?.required ?? false,
+    ...(description === undefined
+      ? {}
+      : { description: typeof description === 'string' ? description : JSON.stringify(description) }),
+    ...(node.meta?.role === undefined ? {} : { role: node.meta.role }),
+    ...(node.meta?.extra === undefined ? {} : { extra: node.meta.extra }),
+    ...(node.meta?.min === undefined ? {} : { min: node.meta.min }),
+    ...(node.meta?.max === undefined ? {} : { max: node.meta.max }),
+    ...(node.meta?.step === undefined ? {} : { step: node.meta.step }),
+    ...(node.meta?.pattern === undefined || node.meta.pattern.source === undefined
+      ? {}
+      : { pattern: node.meta.pattern.source }),
+    ...(node.meta?.default === undefined ? {} : { default: node.meta.default }),
+    ...(node.type === 'const' ? { literal: node.value } : {}),
+    ...(node.type === 'union'
+      ? {
+          enumValues: (node.list ?? [])
+            .filter(branch => resolveConfigSchema(branch).type === 'const')
+            .map(branch => (resolveConfigSchema(branch) as { value?: unknown }).value),
+        }
+      : {}),
+    ...(node.type === 'object'
+      ? {
+          children: Object.entries(node.dict ?? {}).map(([childName, child]) => configFieldInfoOf(childName, child)),
+        }
+      : {}),
+  }
+}
+
+/** Schema summary + starter template for one schemastery Config schema. */
+function configSchemaInfoOf(schema: ConfigSchemaLike): ConfigSchemaInfo | undefined {
+  const root = resolveConfigSchema(schema)
+  let description = ''
+  try {
+    const text = String(schema)
+    if (text !== '') description = text
+  } catch {
+    // unreadable description: keep empty
+  }
+  let fields: ConfigFieldInfo[] = []
+  if (root.type === 'object') {
+    fields = Object.entries(root.dict ?? {}).map(([name, field]) => configFieldInfoOf(name, field))
+  } else if (root.type === 'union') {
+    const firstObject = (root.list ?? []).find(branch => resolveConfigSchema(branch).type === 'object')
+    if (firstObject !== undefined) {
+      fields = Object.entries(resolveConfigSchema(firstObject).dict ?? {}).map(([name, field]) => configFieldInfoOf(name, field))
+    }
+  }
+  const template = configSchemaTemplateOf(root)
+  if (typeof template !== 'object' || template === null || Array.isArray(template)) return undefined
+  return { description, fields, template }
+}
+
+/** Read the declared Config schema of one plugin root by importing its entry. */
+async function readConfigSchemaInfo(root: string): Promise<ConfigSchemaInfo | undefined> {
+  let entry: string
+  try {
+    entry = await (await isRepositoryPluginPackage(root) ? resolveEntryDeclared(root) : resolveEntry(root))
+  } catch {
+    return undefined
+  }
+  let raw: unknown
+  try {
+    raw = await importEntry(entry, true)
+  } catch {
+    return undefined
+  }
+  const Config = (raw as { Config?: unknown } | undefined)?.Config
+  if (typeof Config !== 'function') return undefined
+  return configSchemaInfoOf(Config as ConfigSchemaLike)
+}
+
+/** Deep-merge one example object into a template, touching schema-known keys only. */
+function mergeKnownConfigKeys(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (!(key in target)) continue
+    const current = target[key]
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)
+      && typeof current === 'object' && current !== null && !Array.isArray(current)) {
+      mergeKnownConfigKeys(current as Record<string, unknown>, value as Record<string, unknown>)
+    } else {
+      target[key] = value
+    }
+  }
+}
+
+/** Bounded scan for JSON config examples inside one plugin root. */
+async function findConfigJsonExamples(root: string): Promise<unknown[]> {
+  const out: unknown[] = []
+  const scan = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 2) return
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      if (entry.isDirectory()) {
+        await scan(join(dir, entry.name), depth + 1)
+      } else if (entry.isFile() && /(?:^|[.-])config[^/]*\.json$/i.test(entry.name)) {
+        try {
+          const parsed = JSON.parse(await readFile(join(dir, entry.name), 'utf8'))
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) out.push(parsed)
+        } catch {
+          // unreadable example: skip
+        }
+      }
+    }
+  }
+  await scan(root, 0)
+  return out
+}
+
+/** Build the starter config for one plugin root: schema template + JSON examples, schema-validated. */
+async function buildConfigTemplate(root: string): Promise<ConfigSchemaInfo | undefined> {
+  const info = await readConfigSchemaInfo(root)
+  if (info === undefined) return undefined
+  const template = info.template as Record<string, unknown>
+  for (const example of await findConfigJsonExamples(root)) {
+    mergeKnownConfigKeys(template, example as Record<string, unknown>)
+  }
+  // The schema is callable: validate the merged template and keep its
+  // normalized form; on failure fall back to the plain schema template.
+  try {
+    const raw = await (async () => {
+      let entry: string
+      try {
+        entry = await (await isRepositoryPluginPackage(root) ? resolveEntryDeclared(root) : resolveEntry(root))
+      } catch {
+        return undefined
+      }
+      const module = await importEntry(entry, true)
+      return (module as { Config?: unknown }).Config
+    })()
+    if (typeof raw === 'function') {
+      const normalized = (raw as (value: unknown) => unknown)(template)
+      if (typeof normalized === 'object' && normalized !== null && !Array.isArray(normalized)) {
+        return { ...info, template: normalized }
+      }
+    }
+  } catch {
+    // keep the un-normalized template
+  }
+  return info
 }
 
 /** Build-time env: expose the dsh checkout and its toolchain on PATH. */
@@ -545,8 +976,12 @@ async function withInstallableManifest(
     const deps = pkg[field]
     if (deps === null || typeof deps !== 'object' || Array.isArray(deps)) continue
     const entries = Object.entries(deps as Record<string, unknown>)
-    const kept = entries.filter(([, spec]) => !(
-      typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('workspace:'))
+    // Drop `link:`/`workspace:` specs AND every `@deepseek-ai/*` entry: the
+    // checkout links those packages from the workspace (they do not exist on
+    // the npm registry, so npm install fails with 404 otherwise).
+    const kept = entries.filter(([name, spec]) => !(
+      name.startsWith('@deepseek-ai/')
+      || (typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('workspace:')))
     ))
     if (kept.length === entries.length) continue
     pkg[field] = Object.fromEntries(kept)
@@ -590,6 +1025,7 @@ async function installRuntimeDependencies(
   dependencies: Record<string, string>,
   allDependencies: Record<string, string>,
   buildClientTarget?: string,
+  options: { readonly ignoreScripts?: boolean; readonly buildTarget?: string } = {},
 ): Promise<void> {
   const commandErrorText = (error: unknown): string => {
     if (error instanceof Error) {
@@ -602,12 +1038,20 @@ async function installRuntimeDependencies(
   await rm(link, { force: true, recursive: true })
   await mkdir(link, { recursive: true })
   await linkWorkspaceDependencies(target, allDependencies)
-  if (buildClientTarget === undefined) {
+  const probe = options.buildTarget ?? buildClientTarget
+  if (probe === undefined) {
     await withInstallableManifest(
       target,
       () => execFileAsync(
         'npm',
-        ['install', '--omit=dev', '--no-audit', '--no-fund', '--legacy-peer-deps'],
+        [
+          'install',
+          '--omit=dev',
+          '--no-audit',
+          '--no-fund',
+          '--legacy-peer-deps',
+          ...(options.ignoreScripts === true ? ['--ignore-scripts'] : []),
+        ],
         { cwd: target, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
       ),
     )
@@ -620,7 +1064,13 @@ async function installRuntimeDependencies(
       target,
       () => execFileAsync(
         'npm',
-        ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'],
+        [
+          'install',
+          '--no-audit',
+          '--no-fund',
+          '--legacy-peer-deps',
+          ...(options.ignoreScripts === true ? ['--ignore-scripts'] : []),
+        ],
         { cwd: target, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
       ),
       true,
@@ -631,7 +1081,9 @@ async function installRuntimeDependencies(
   // (the git-install path), so the artifact may already exist. Only run the
   // declared build when it does not, falling back to `prepare` for repos
   // whose `build` assumes a sibling harness checkout.
-  if (!(await fileExists(join(target, buildClientTarget)))) {
+  const probeMissing = !(await fileExists(join(target, probe)))
+  const clientMissing = buildClientTarget !== undefined && !(await fileExists(join(target, buildClientTarget)))
+  if (probeMissing || clientMissing) {
     try {
       await execFileAsync(
         'npm',
@@ -639,6 +1091,12 @@ async function installRuntimeDependencies(
         { cwd: target, timeout: 600_000, maxBuffer: 64 * 1024 * 1024, env: buildEnv() },
       )
     } catch (buildError) {
+      if (options.ignoreScripts === true) {
+        // Official `.dsh-plugin` packages run `dsh-plugin-prepare` in
+        // `prepare`/`prepack`; that helper is a devDependency we do not
+        // install, so the declared build is the only valid fallback.
+        throw new Error(`构建失败（npm run build: ${commandErrorText(buildError)}）`)
+      }
       await execFileAsync(
         'npm',
         ['run', 'prepare'],
@@ -651,7 +1109,10 @@ async function installRuntimeDependencies(
     }
   }
   await linkWorkspaceDependencies(target, allDependencies)
-  if (!(await fileExists(join(target, buildClientTarget)))) {
+  if (options.ignoreScripts === true && !(await fileExists(join(target, probe)))) {
+    throw new Error(`构建完成但插件入口产物缺失: ${probe}`)
+  }
+  if (buildClientTarget !== undefined && !(await fileExists(join(target, buildClientTarget)))) {
     throw new Error(`构建完成但 client half 产物缺失: ${buildClientTarget}`)
   }
 }
@@ -662,6 +1123,11 @@ async function locatePluginRoot(tree: string): Promise<string> {
     await resolveEntry(tree)
     return tree
   } catch {
+    // Official repository-plugin format: the actual package lives in the
+    // `.dsh-plugin` subdirectory and may ship source only (`dsh.entry` is
+    // the declared build target), so accept the manifest even without lib.
+    const official = join(tree, '.dsh-plugin')
+    if (await isRepositoryPluginPackage(official)) return official
     const entries = (await readdir(tree, { withFileTypes: true })).filter(entry => entry.isDirectory())
     if (entries.length === 1) {
       const inner = join(tree, entries[0]!.name)
@@ -669,7 +1135,8 @@ async function locatePluginRoot(tree: string): Promise<string> {
         await resolveEntry(inner)
         return inner
       } catch {
-        // not the plugin root
+        const innerOfficial = join(inner, '.dsh-plugin')
+        if (await isRepositoryPluginPackage(innerOfficial)) return innerOfficial
       }
     }
     const unsupported = await detectOldWorkspacePlugin(tree)
@@ -698,6 +1165,17 @@ async function ensureProjectedBridge(manifest: InstallManifest): Promise<void> {
   }
   const originalName = typeof pluginPkg.name === 'string' ? pluginPkg.name : bridgeName
   const clientTarget = await clientTargetOf(pluginDir)
+  const declaredClientInject = pluginPkg.dshClient?.inject ?? []
+  let completedClientInject: readonly string[] = declaredClientInject
+  if (clientTarget !== undefined) {
+    try {
+      const clientText = await readFile(join(pluginDir, clientTarget), 'utf8')
+      const extra = clientServicePackagesOf(clientText)
+      if (extra.length > 0) completedClientInject = [...new Set([...declaredClientInject, ...extra])]
+    } catch {
+      // unreadable client bundle: keep the declared edges
+    }
+  }
 
   const bridgePackage = {
     name: bridgeName,
@@ -711,18 +1189,26 @@ async function ensureProjectedBridge(manifest: InstallManifest): Promise<void> {
       './package.json': './package.json',
     },
     ...(clientTarget !== undefined
-      ? { dshClient: { platform: 'web' as const, inject: pluginPkg.dshClient?.inject ?? [] } }
+      ? { dshClient: { platform: 'web' as const, inject: completedClientInject } }
       : {}),
   }
   await writeFile(join(bridgeDir, 'package.json'), JSON.stringify(bridgePackage, null, 2))
 
+  const rawDeclaration = toDeclaration(manifest)
+  const declarationLiteral = rawDeclaration === undefined
+    ? 'undefined'
+    : JSON.stringify(rawDeclaration)
   const bridgeSource = `/**
  * Generated dsh-mygo bridge for installed plugin ${manifest.id} (do not edit).
+ * bridge template v3: host-service retry + stale-install recovery.
  */
 import type { PluginManager } from '@deepseek-ai/dsh-mygo'
 
 export const name = ${JSON.stringify(`${manifest.id}-mygo`)}
 export const inject = ['pluginManager']
+
+const DECLARATION = ${declarationLiteral}
+const MAX_SUPPORT_TRIES = 5
 
 export function apply(ctx: { readonly pluginManager: PluginManager }, config: unknown): void {
   void (async () => {
@@ -734,12 +1220,23 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
       return
     }
     const raw = (rawModule as { default?: unknown }).default ?? rawModule
-    const support = await ctx.pluginManager.checkSupport(raw, ${JSON.stringify(manifest.id)})
+    let support = await ctx.pluginManager.checkSupport(raw, ${JSON.stringify(manifest.id)}, DECLARATION)
+    // Boot order may mount a required plugin or host service after this row
+    // (alphabetical row order vs declared requires; async host services such
+    // as 'workspace' finish activation later): retry a short window before
+    // skipping, so a dependency arriving later in the same boot still lands.
+    let attempt = 1
+    while (!support.ok && attempt < MAX_SUPPORT_TRIES
+      && (String(support.reason).includes('兼容性冲突') || String(support.reason).includes('宿主缺少服务'))) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      support = await ctx.pluginManager.checkSupport(raw, ${JSON.stringify(manifest.id)}, DECLARATION)
+      attempt += 1
+    }
     if (!support.ok) {
       console.warn('[dsh-mygo-panel] 插件 ${manifest.id} 不受支持，跳过挂载:', support.reason)
       return
     }
-    await ctx.pluginManager.adoptRaw(raw, config ?? {}, ${JSON.stringify(manifest.id)})
+    await ctx.pluginManager.adoptRaw(raw, config ?? {}, ${JSON.stringify(manifest.id)}, DECLARATION)
   })().catch((error: unknown) => {
     console.error('[dsh-mygo-panel] bridge adopt failed:', error)
   })
@@ -752,11 +1249,54 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
     const sourceMap = `${sourceClient}.map`
     await mkdir(join(bridgeDir, 'lib'), { recursive: true })
     let clientText = await readFile(sourceClient, 'utf8')
-    const marker = `id: ${JSON.stringify(originalName)}`
-    if (clientText.includes(marker)) {
-      clientText = clientText.replace(marker, `id: ${JSON.stringify(bridgeName)}`)
+    // Strip the sourceMappingURL comment: appending the gate after it would
+    // comment out the gate (a line comment runs to the end of the line).
+    clientText = clientText.replace(/\/\/# sourceMappingURL=.*$/m, '')
+    // Keep the original bundle's registration id (raw id) and append a
+    // mygo status gate that registers the BRIDGE id: the gate materializes
+    // the original factory and applies it only while the managed plugin is
+    // enabled. This makes a disabled plugin's browser half stop on reload
+    // (the browser side of sfw/ads-style plugins has no node-side dispatch
+    // gate and previously kept running off its local default config).
+    const rawId = JSON.stringify(originalName)
+    const bridgeId = JSON.stringify(bridgeName)
+    const pluginId = JSON.stringify(manifest.id)
+    const gate = `
+;(function () {
+  /* mygo-generated status gate v2 (do not edit) */
+  var rawId = ${rawId}
+  var bridgeId = ${bridgeId}
+  var pluginId = ${pluginId}
+  var enabled = true
+  try {
+    var xhr = new XMLHttpRequest()
+    xhr.open('GET', '/api/mygo/plugins?t=' + Date.now(), false)
+    xhr.send(null)
+    if (xhr.status >= 200 && xhr.status < 300) {
+      var data = JSON.parse(xhr.responseText)
+      var row = (data.plugins || []).filter(function (p) { return p.id === pluginId })[0]
+      if (row) enabled = row.status === 'enabled'
     }
-    await writeFile(join(bridgeDir, 'lib', 'client.js'), clientText)
+  } catch (e) {
+    enabled = true
+  }
+  window.__ModuleLoader__.load({
+    id: bridgeId,
+    factory: function (require) {
+      var raw = require(rawId)
+      return {
+        name: raw.name || pluginId,
+        inject: raw.inject,
+        apply: function (ctx) {
+          if (!enabled) return
+          return raw.apply(ctx)
+        }
+      }
+    }
+  })
+})();
+`
+    await writeFile(join(bridgeDir, 'lib', 'client.js'), clientText + gate)
     try {
       await copyFile(sourceMap, join(bridgeDir, 'lib', 'client.js.map'))
     } catch {
@@ -789,8 +1329,58 @@ async function removeProjectedBridge(id: string): Promise<void> {
   })
 }
 
-/** Collect bridge rows from every installed plugin with a generated bridge. */
-async function collectBridgeRows(): Promise<Array<{ readonly id: string; readonly name: string; readonly config: unknown }>> {
+/**
+ * Remove the `mygo-rdb-store` composition row from the profile patch. Called
+ * when the owning extension (mygo-rdb) is uninstalled: without the store
+ * provider row, the manager automatically falls back to the built-in sqlite
+ * registry route on the next boot.
+ */
+async function removeStoreProviderRows(): Promise<void> {
+  let text = ''
+  try {
+    text = await readFile(PROFILE_PATCH, 'utf8')
+  } catch {
+    return
+  }
+  const lines = text.split('\n')
+  const out: string[] = []
+  let inEntry = false
+  for (const line of lines) {
+    if (!inEntry && /^\s*- id:\s+mygo-rdb-store\s*$/.test(line)) {
+      inEntry = true
+      continue
+    }
+    if (inEntry) {
+      // Entry body is indented deeper than the sibling `- id:` rows; stop at
+      // the next sibling row or any top-level line.
+      if (/^    - id:/.test(line) || /^[^\s]/.test(line)) inEntry = false
+      else continue
+    }
+    out.push(line)
+  }
+  const next = out.join('\n')
+  if (next !== text) await writeFile(PROFILE_PATCH, next)
+}
+
+/** One profile bridge row plus the ordering facts needed for dependency-first layout. */
+interface BridgeRow {
+  readonly id: string
+  readonly name: string
+  readonly config: unknown
+  readonly installedAt: number
+  /** Declared `compatibility.requires` keys that name other installed plugins. */
+  readonly requires: readonly string[]
+}
+
+/**
+ * Collect bridge rows from every installed plugin with a generated bridge.
+ * When `liveConfigs` is provided, a plugin's current manager config wins
+ * over the install-time manifest config, so hot-config updates survive a
+ * restart (the row is the boot-time authority).
+ */
+async function collectBridgeRows(
+  liveConfigs?: Readonly<Record<string, unknown>>,
+): Promise<BridgeRow[]> {
   let ids: string[]
   try {
     ids = (await readdir(INSTALL_DIR, { withFileTypes: true }))
@@ -799,7 +1389,7 @@ async function collectBridgeRows(): Promise<Array<{ readonly id: string; readonl
   } catch {
     return []
   }
-  const rows: Array<{ readonly id: string; readonly name: string; readonly config: unknown }> = []
+  const rows: BridgeRow[] = []
   for (const dirName of ids) {
     if (dirName.endsWith('-mygo')) continue
     try {
@@ -809,18 +1399,62 @@ async function collectBridgeRows(): Promise<Array<{ readonly id: string; readonl
       rows.push({
         id: `${manifest.id}-mygo`,
         name: bridgeNameOf(manifest.id),
-        config: manifest.config ?? {},
+        config: liveConfigs?.[manifest.id] ?? manifest.config ?? {},
+        installedAt: manifest.installedAt ?? 0,
+        requires: Object.keys(manifest.declarative?.compatibility?.requires ?? {}),
       })
     } catch {
       // no manifest or no bridge: skip
     }
   }
-  return rows.sort((a, b) => a.id.localeCompare(b.id))
+  return orderBridgeRows(rows)
+}
+
+/**
+ * Dependency-first bridge-row layout: a plugin declaring
+ * `compatibility.requires` on another installed plugin must mount after it,
+ * so boot-time `checkSupport` sees the dependency. Pure topo sort over the
+ * declared requires; cycles and unknown targets fall back to install order,
+ * and the generated bridge additionally retries a short window as a safety
+ * net for indirect ordering gaps.
+ */
+function orderBridgeRows(rows: BridgeRow[]): BridgeRow[] {
+  if (rows.length < 2) return rows
+  const byId = new Map(rows.map(row => [row.id, row]))
+  const pending = new Map(rows.map(row => [
+    row.id,
+    new Set(row.requires.filter(target => byId.has(`${target}-mygo`))),
+  ]))
+  const byInstalledThenId = (left: BridgeRow, right: BridgeRow): number => {
+    if (left.installedAt !== right.installedAt) return left.installedAt - right.installedAt
+    return left.id.localeCompare(right.id)
+  }
+  const ordered: BridgeRow[] = []
+  const ready = rows
+    .filter(row => (pending.get(row.id)?.size ?? 0) === 0)
+    .sort(byInstalledThenId)
+  while (ready.length > 0) {
+    const row = ready.shift() as BridgeRow
+    ordered.push(row)
+    for (const other of rows) {
+      const deps = pending.get(other.id)
+      if (deps === undefined || !deps.has(row.id)) continue
+      deps.delete(row.id)
+      if (deps.size === 0) {
+        ready.push(other)
+        ready.sort(byInstalledThenId)
+      }
+    }
+  }
+  const remaining = rows.filter(row => !ordered.includes(row)).sort(byInstalledThenId)
+  return [...ordered, ...remaining]
 }
 
 /** Rewrite the web profile patch, preserving any user content before the managed block. */
-async function syncBridgeRows(): Promise<void> {
-  const rows = await collectBridgeRows()
+async function syncBridgeRows(
+  liveConfigs?: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const rows = await collectBridgeRows(liveConfigs)
   let existing = ''
   try {
     existing = await readFile(PROFILE_PATCH, 'utf8')
@@ -883,7 +1517,19 @@ async function regenerateBridges(): Promise<void> {
       const manifest = JSON.parse(await readFile(join(INSTALL_DIR, dirName, MANIFEST), 'utf8')) as InstallManifest
       const bridgeSrc = join(bridgeDirOf(manifest.id), 'src', 'index.ts')
       const text = await readFile(bridgeSrc, 'utf8')
-      if (text.includes('checkSupport')) continue
+      if (text.includes('bridge template v3')) {
+        // Node half is current; also require the client status gate when the
+        // plugin ships a browser half (sfw/ads-style UI plugins otherwise
+        // keep their browser effects after disable).
+        const clientPath = join(bridgeDirOf(manifest.id), 'lib', 'client.js')
+        try {
+          const clientText = await readFile(clientPath, 'utf8')
+          if (clientText.includes('mygo-generated status gate v2')) continue
+        } catch {
+          // no client half: nothing to upgrade
+          continue
+        }
+      }
       await ensureProjectedBridge(manifest)
     } catch {
       // unreadable or already upgraded; keep whatever bridge exists
@@ -1397,17 +2043,40 @@ async function updatePluginFromRemote(
   try {
     await cloneFromGitHub(remote.url, remote.ref === 'HEAD' ? undefined : remote.ref, tmp)
     const root = await locatePluginRoot(tmp)
-    const entry = await resolveEntry(root)
-    const raw = await importEntry(entry)
+    const repositoryPlugin = await isRepositoryPluginPackage(root)
+    const entry = repositoryPlugin ? await resolveEntryDeclared(root) : await resolveEntry(root)
+    const raw = repositoryPlugin
+      ? await (async () => {
+        // Official `.dsh-plugin` sources ship uncompiled: build the fresh
+        // tree in the temp checkout before the HMR swap imports the entry.
+        const dependencies = await runtimeDependenciesOf(root)
+        const allDependencies = await allDependenciesOf(root)
+        const clientTarget = await clientTargetOf(root)
+        await installRuntimeDependencies(root, dependencies, allDependencies, clientTarget, {
+          ignoreScripts: true,
+          buildTarget: relative(root, entry),
+        })
+        return await importEntry(entry)
+      })()
+      : await importEntry(entry)
+    const declarative = await readDeclarativeManifest(root)
+    const declaration = toDeclaration(declarative)
     // HMR live swap first: the old generation stays live on any failure.
-    await ctx.pluginManager.updateRaw(raw, manifest.config ?? {}, id)
+    await ctx.pluginManager.updateRaw(raw, manifest.config ?? {}, id, declaration)
     // Refresh the installed tree to match the new generation.
     await rm(join(INSTALL_DIR, id), { recursive: true, force: true })
-    await preparePluginFiles(root, join(INSTALL_DIR, id), manifest.installDeps === true)
+    await preparePluginFiles(
+      root,
+      join(INSTALL_DIR, id),
+      manifest.installDeps === true || repositoryPlugin,
+      entry,
+    )
     const entryRelative = relative(root, entry)
     const next: InstallManifest = {
       ...manifest,
       entry: entryRelative,
+      ...(declarative === undefined ? {} : { version: declarative.version }),
+      ...(declarative?.declarative === undefined ? {} : { declarative: declarative.declarative }),
       remote: { ...remote, commit: latestCommit },
       installedAt: Date.now(),
     }
@@ -1468,13 +2137,27 @@ async function updateAppFromRemote(
 }
 
 /** Install one plugin from a prepared root directory. */
-async function preparePluginFiles(root: string, target: string, installDeps: boolean): Promise<void> {
+async function preparePluginFiles(
+  root: string,
+  target: string,
+  installDeps: boolean,
+  entry?: string,
+): Promise<void> {
   await mkdir(target, { recursive: true })
   await copyPluginTree(root, target)
   const dependencies = await runtimeDependenciesOf(root)
   const allDependencies = await allDependenciesOf(root)
   const clientTarget = await clientTargetOf(root)
-  if (installDeps && (Object.keys(dependencies).length > 0 || clientTarget !== undefined)) {
+  const repositoryPlugin = await isRepositoryPluginPackage(root)
+  if (repositoryPlugin) {
+    // The official format requires a build: install devDependencies with
+    // lifecycle scripts disabled (the repo's `prepare` needs the unpublished
+    // dsh-plugin-prepare helper), then run the declared build.
+    await installRuntimeDependencies(target, dependencies, allDependencies, clientTarget, {
+      ignoreScripts: true,
+      ...(entry === undefined ? {} : { buildTarget: relative(root, entry) }),
+    })
+  } else if (installDeps && (Object.keys(dependencies).length > 0 || clientTarget !== undefined)) {
     await installRuntimeDependencies(target, dependencies, allDependencies, clientTarget)
   } else {
     await ensureNodeModulesLink(target)
@@ -1487,6 +2170,74 @@ async function preparePluginFiles(root: string, target: string, installDeps: boo
   }
 }
 
+/** A resolved install source ready for manifest reading. */
+interface PreparedSource {
+  readonly root: string
+  readonly remote?: RemoteRef
+  readonly cleanup: () => Promise<void>
+}
+
+/** Clone/extract/locate one install source (folder stays in place). */
+async function prepareInstallSource(body: InstallRequest): Promise<PreparedSource> {
+  if (body.method === 'github') {
+    const url = body.url?.trim()
+    if (url === undefined || url.length === 0) throw new Error('缺少 GitHub 仓库地址')
+    const tmp = await mkdtemp(join(tmpdir(), 'dsh-install-'))
+    try {
+      await cloneFromGitHub(url, body.ref, tmp)
+      const root = await locatePluginRoot(tmp)
+      const commit = await gitHeadOf(tmp)
+      return {
+        root,
+        remote: { url, ref: body.ref?.trim() || 'HEAD', commit },
+        cleanup: () => rm(tmp, { recursive: true, force: true }),
+      }
+    } catch (error) {
+      await rm(tmp, { recursive: true, force: true })
+      throw error
+    }
+  }
+  if (body.method === 'folder') {
+    const folder = body.path?.trim()
+    if (folder === undefined || folder.length === 0) throw new Error('缺少文件夹路径')
+    const root = resolve(folder)
+    if ((await stat(root)).isDirectory() !== true) throw new Error(`不是文件夹: ${root}`)
+    return {
+      root: await locatePluginRoot(root),
+      cleanup: () => Promise.resolve(),
+    }
+  }
+  if (body.method === 'archive') {
+    const file = body.path?.trim()
+    if (file === undefined || file.length === 0) throw new Error('缺少压缩包路径')
+    const archive = resolve(file)
+    if ((await stat(archive)).isFile() !== true) throw new Error(`不是文件: ${archive}`)
+    const tmp = await mkdtemp(join(tmpdir(), 'dsh-install-'))
+    try {
+      await extractArchive(archive, tmp)
+      return {
+        root: await locatePluginRoot(tmp),
+        cleanup: () => rm(tmp, { recursive: true, force: true }),
+      }
+    } catch (error) {
+      await rm(tmp, { recursive: true, force: true })
+      throw error
+    }
+  }
+  throw new Error('method 必须是 github / folder / archive')
+}
+
+/** Derive the manager-side plugin id from a located plugin root. */
+async function pluginIdFromRoot(pluginRoot: string): Promise<string> {
+  try {
+    const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')) as { readonly name?: unknown }
+    if (typeof pkg.name === 'string' && pkg.name.trim() !== '') return pluginIdOf(pkg.name)
+  } catch {
+    // fall through to the directory name
+  }
+  return pluginIdOf(basename(pluginRoot))
+}
+
 async function installFromRoot(
   pluginManager: PluginManager,
   pluginRoot: string,
@@ -1496,8 +2247,8 @@ async function installFromRoot(
   installDeps = false,
   idOverride?: string,
   remote?: RemoteRef,
+  autoResolve = false,
 ): Promise<{ readonly ok: true; readonly id: string; readonly message: string }> {
-  const entry = await resolveEntry(pluginRoot)
   let id = idOverride
   if (id === undefined || id.length === 0) {
     try {
@@ -1508,10 +2259,21 @@ async function installFromRoot(
     }
     if (id === undefined) id = pluginIdOf(basename(pluginRoot))
   }
+  const repositoryPlugin = await isRepositoryPluginPackage(pluginRoot)
+  const entry = repositoryPlugin ? await resolveEntryDeclared(pluginRoot) : await resolveEntry(pluginRoot)
   const target = join(INSTALL_DIR, id)
   try {
     await stat(target)
-    throw new Error(`插件 ${id} 已安装，请先卸载或清理安装目录`)
+    // The install directory exists. Block only when the plugin is live in the
+    // manager; orphaned/skipped installs (a bridge row whose node half failed
+    // support preflight at boot, or a crashed install) are replaced so a retry
+    // lands instead of dead-ending.
+    const live = pluginManager.plugins().some(plugin => plugin.id === id)
+    if (live) throw new Error(`插件 ${id} 已安装，请先卸载或清理安装目录`)
+    console.warn(`[dsh-mygo-panel] 插件 ${id} 存在未挂载的残留安装，覆盖重装`)
+    await rm(target, { recursive: true, force: true })
+    await removeProjectedBridge(id)
+    await syncBridgeRows()
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) || (error as { code?: string }).code !== 'ENOENT') {
       throw error
@@ -1519,16 +2281,75 @@ async function installFromRoot(
   }
   await mkdir(target, { recursive: true })
   try {
-    await preparePluginFiles(pluginRoot, target, installDeps)
+    await preparePluginFiles(pluginRoot, target, installDeps || repositoryPlugin, entry)
+    // First-install config template: when the caller did not provide config,
+    // derive a starter object from the plugin's Config schema (plus any JSON
+    // config examples in the repo), so a required-field schema does not turn
+    // into a chicken-and-egg "请在安装时填写 config" error.
+    let resolvedConfig = config
+    if (resolvedConfig === undefined) {
+      const template = await buildConfigTemplate(target)
+      if (template !== undefined) {
+        console.info(`[dsh-mygo-panel] 插件 ${id} 未提供配置，已按 schema 自动生成模板配置`)
+        resolvedConfig = template.template
+      }
+    }
+    const declarative = await readDeclarativeManifest(target)
+    const declaration = toDeclaration(declarative)
+    if (autoResolve) {
+      // The solver previews the whole activation plan; on confirmation the
+      // panel enables required-by dependencies before the bridge adopts the
+      // new plugin.
+      const plan = await pluginManager.planInstall({
+        id,
+        ...(declaration === undefined
+          ? {}
+          : {
+              ...(declaration.version === undefined ? {} : { version: declaration.version }),
+              ...(declaration.compatibility === undefined ? {} : { compatibility: declaration.compatibility }),
+              ...(declaration.provides === undefined ? {} : { provides: declaration.provides }),
+            }),
+      })
+      if (!plan.accepted || plan.error !== undefined) {
+        throw new Error(`兼容性冲突，拒绝安装：\n${plan.error?.message ?? 'plan 未通过'}`)
+      }
+      for (const action of plan.actions ?? []) {
+        if (action.op === 'enable' && action.kind === 'required-by') {
+          await pluginManager.enable(action.id)
+        }
+      }
+    } else {
+      // Compatibility preflight against the live managed set before any bridge
+      // row is written: a broken combination is refused with the constraint
+      // chain instead of surfacing at the next boot.
+      const preflight = pluginManager.checkCompatibility({
+        id,
+        ...(declaration === undefined
+          ? {}
+          : {
+              version: declaration.version,
+              compatibility: declaration.compatibility,
+            }),
+      })
+      if (preflight.violations.length > 0) {
+        throw new Error(`兼容性冲突，拒绝安装：\n${compatibilityViolationLines(preflight).join('\n')}`)
+      }
+      const warnings = compatibilityWarningLines(preflight)
+      if (warnings.length > 0) {
+        console.warn(`[dsh-mygo-panel] 兼容性警告（不阻塞安装）：\n${warnings.join('\n')}`)
+      }
+    }
     const entryRelative = relative(pluginRoot, entry)
     const manifest: InstallManifest = {
       id,
       method,
       source,
       entry: entryRelative,
+      ...(declarative === undefined ? {} : { version: declarative.version }),
+      ...(declarative?.declarative === undefined ? {} : { declarative: declarative.declarative }),
       ...(remote === undefined ? {} : { remote }),
       installedAt: Date.now(),
-      ...(config === undefined ? {} : { config }),
+      ...(resolvedConfig === undefined ? {} : { config: resolvedConfig }),
       ...(installDeps ? { installDeps: true } : {}),
     }
     // A flat SKILL.md at the plugin root is synced into the user skill root so
@@ -1552,13 +2373,16 @@ async function installFromRoot(
       // no SKILL.md: nothing to sync
     }
     await writeFile(join(target, MANIFEST), JSON.stringify(manifest, null, 2))
-    // Generate the projected bridge and register the loader row, then adopt
-    // the node half live (the bridge row re-adopts on the next boot).
+    await pluginManager.clearUninstallTombstone(id)
+    const raw = await importEntry(join(target, manifest.entry), true)
+    // Adopt the node half BEFORE publishing the bridge row: writing the row
+    // first lets the loader's patch HMR mount the bridge concurrently, which
+    // double-stages the same plugin and leaves host registrations (settings
+    // namespaces) behind on failure. Publish only after adoption succeeds;
+    // the row then re-adopts idempotently on the next boot.
+    await pluginManager.adoptRaw(raw, resolvedConfig ?? {}, id, declaration)
     await ensureProjectedBridge(manifest)
     await syncBridgeRows()
-    await pluginManager.clearUninstallTombstone(id)
-    const raw = await importEntry(join(target, manifest.entry))
-    await pluginManager.adoptRaw(raw, config ?? {}, id)
     return { ok: true, id, message: `插件 ${id} 已安装` }
   } catch (error) {
     await rm(target, { recursive: true, force: true })
@@ -1630,6 +2454,571 @@ function readBody(req: RawRequest, limit = 16 * 1024 * 1024): Promise<string> {
   })
 }
 
+/** One in-flight config-helper session (per plugin). */
+/** One config-helper chat message. */
+interface ConfigHelperMessage {
+  readonly role: 'user' | 'assistant'
+  readonly content: string
+}
+
+/** One config-helper session: a durable continuable temporary conversation. */
+interface ConfigHelperState {
+  readonly pluginId: string
+  readonly startedAt: number
+  readonly messages: ConfigHelperMessage[]
+  readonly pendingTurns: string[]
+  readonly debugSessions: Array<{ readonly id: string; readonly cwd: string }>
+  readonly controller: AbortController
+  childId?: string
+  parentAgent?: unknown
+  parentHandle?: { dispose(): Promise<void> }
+  parentCwd?: string
+  lastSeq: number
+  runStartedAt?: number
+  status: 'idle' | 'running' | 'done' | 'error' | 'stopped'
+  reply?: string
+  error?: string
+}
+
+/** Panel-held helper sessions; `stop` disposes the run and clears the entry. */
+const configHelpers = new Map<string, ConfigHelperState>()
+/** Single global conversation: the user does NOT pre-select a plugin. */
+const CONFIG_HELPER_SESSION = 'global'
+let helperSurfaceRefs = 0
+let helperSurfaceDisposers: Array<() => void> = []
+
+/** Tool names visible inside a config-helper child: the mygo surface + read-only analysis tools. */
+const CONFIG_HELPER_TOOL_ALLOW: readonly string[] = [
+  'mygo_helper_status',
+  'mygo_helper_check',
+  'mygo_helper_install',
+  'mygo_helper_config',
+  'mygo_helper_update_config',
+  'skill',
+  'read',
+  'glob',
+  'grep',
+]
+
+/** The helper-only skill body: the default install/check/config workflow. */
+const CONFIG_HELPER_SKILL = `# mygo 配置助手
+
+你是 mygo 插件管理器的配置助手专用技能。当用户请求安装、检查或配置插件时，按下面的默认流程执行：
+
+1. 需要安装插件（用户给了 GitHub 地址 / 本地目录 / 压缩包）：
+   - 先调用 mygo_helper_check（method/url/path）检查安装源：拿到插件 id、入口、requires、配置模板与兼容性计划；
+   - 与用户确认后调用 mygo_helper_install 安装（可传 config；不传时安装器会自动按 schema 生成模板配置，installDeps 建议 true）；
+   - 安装完成后用 mygo_helper_status 确认插件已启用。
+  2. 需要配置已安装插件：
+   - 调用 mygo_helper_config 读取 schema 字段、默认值与当前配置；
+   - 用 read/glob/grep 补充阅读 README 或配置样例确认字段含义；
+   - 与用户逐项确认后调用 mygo_helper_update_config 应用。
+3. 不要修改任何插件文件；安装与更新一律通过 mygo 工具完成，不要手写文件；
+   严禁自己执行 pnpm/npm/git 安装依赖（宿主安装器会处理），不要请求沙箱升级。
+
+输出保持简洁中文；需要用户决定的事项明确提问。`
+
+/** Register the helper-only tools + skill while at least one helper session is active. */
+function registerHelperSurface(ctx: PanelContext): void {
+  if (helperSurfaceRefs > 0) {
+    helperSurfaceRefs += 1
+    return
+  }
+  helperSurfaceRefs += 1
+  const disposers: Array<() => void> = []
+  const tools = ctx.get('tools') as { register(tool: unknown): () => void } | undefined
+  if (tools !== undefined) {
+    for (const tool of helperToolSurface(ctx)) {
+      try {
+        disposers.push(tools.register(tool))
+      } catch (error) {
+        console.warn(`[dsh-mygo-panel] 配置助手工具注册失败: ${String(error)}`)
+      }
+    }
+  }
+  const skills = ctx.get('skills') as { register(skill: unknown): () => void } | undefined
+  if (skills !== undefined) {
+    disposers.push(skills.register({
+      name: 'mygo-config-helper',
+      description: 'mygo 插件配置助手专用：远端拉取/本地检查插件、读取配置项并调用 mygo 安装',
+      content: CONFIG_HELPER_SKILL,
+      source: 'runtime',
+      invocation: { modelInvocable: true, userInvocable: false },
+    }))
+  }
+  helperSurfaceDisposers = disposers
+}
+
+/** Release the helper-only surface when the last active helper closes. */
+function releaseHelperSurface(): void {
+  helperSurfaceRefs = Math.max(0, helperSurfaceRefs - 1)
+  if (helperSurfaceRefs > 0) return
+  for (const disposer of helperSurfaceDisposers) {
+    try {
+      disposer()
+    } catch {
+      // best effort
+    }
+  }
+  helperSurfaceDisposers = []
+}
+
+/** The `mygo_helper_*` tool set: guarded to config-helper child sessions only. */
+function helperToolSurface(ctx: PanelContext): unknown[] {
+  const holder = (
+    name: string,
+    description: string,
+    parameters: Record<string, unknown>,
+    handler: (args: Record<string, unknown>) => Promise<unknown>,
+  ): unknown => ({
+    name,
+    description,
+    parameters,
+    output: {
+      schema: { type: 'string' },
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
+    },
+    timeoutMs: name === 'mygo_helper_install' ? 600_000 : 120_000,
+    execute: async (args: unknown, exec: { agent?: { id?: string } }): Promise<string> => {
+      const caller = exec.agent?.id
+      const allowed = [...configHelpers.values()].some(state => state.childId === caller)
+      if (!allowed) throw new Error(`${name} 仅配置助手会话可用`)
+      return JSON.stringify(await handler((args ?? {}) as Record<string, unknown>))
+    },
+  })
+  return [
+    holder('mygo_helper_status', '列出受管插件；传 pluginId 时同时返回该插件的当前配置', {
+      type: 'object',
+      properties: { pluginId: { type: 'string' } },
+      additionalProperties: false,
+    }, async (args) => {
+      const pluginId = typeof args.pluginId === 'string' && args.pluginId !== '' ? args.pluginId : undefined
+      return {
+        plugins: ctx.pluginManager.plugins().map(plugin => ({
+          id: plugin.id,
+          version: plugin.version,
+          status: plugin.status,
+          ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+        })),
+        ...(pluginId === undefined ? {} : { config: ctx.pluginManager.configOf(pluginId) }),
+      }
+    }),
+    holder('mygo_helper_check', '检查一个安装源（github/folder/archive）：插件 id、入口、requires、配置模板与兼容性计划', {
+      type: 'object',
+      properties: {
+        method: { type: 'string', enum: ['github', 'folder', 'archive'] },
+        url: { type: 'string' },
+        path: { type: 'string' },
+      },
+      required: ['method'],
+      additionalProperties: false,
+    }, async (args) => {
+      const method = args.method === 'folder' || args.method === 'archive' ? args.method : 'github'
+      const prepared = await prepareInstallSource({
+        method,
+        ...(typeof args.url === 'string' && args.url !== '' ? { url: args.url } : {}),
+        ...(typeof args.path === 'string' && args.path !== '' ? { path: args.path } : {}),
+      } as InstallRequest)
+      try {
+        const id = await pluginIdFromRoot(prepared.root)
+        const declarative = await readDeclarativeManifest(prepared.root)
+        const configTemplate = await buildConfigTemplate(prepared.root)
+        const plan = await ctx.pluginManager.planInstall({
+          id,
+          ...(declarative === undefined ? {} : { version: declarative.version }),
+          ...(declarative?.declarative?.compatibility === undefined
+            ? {}
+            : { compatibility: declarative.declarative.compatibility }),
+        })
+        return {
+          id,
+          entry: await (async () => {
+            try {
+              return await (await isRepositoryPluginPackage(prepared.root)
+                ? resolveEntryDeclared(prepared.root)
+                : resolveEntry(prepared.root))
+            } catch {
+              return undefined
+            }
+          })(),
+          requires: Object.keys(declarative?.declarative?.compatibility?.requires ?? {}),
+          configTemplate: configTemplate?.template,
+          plan: { accepted: plan.accepted, error: plan.error?.message },
+        }
+      } finally {
+        await prepared.cleanup()
+      }
+    }),
+    holder('mygo_helper_install', '安装插件（github/folder/archive）；未传 config 时自动使用 schema 模板', {
+      type: 'object',
+      properties: {
+        method: { type: 'string', enum: ['github', 'folder', 'archive'] },
+        url: { type: 'string' },
+        path: { type: 'string' },
+        config: { type: 'object' },
+        installDeps: { type: 'boolean' },
+        autoResolve: { type: 'boolean' },
+      },
+      required: ['method'],
+      additionalProperties: false,
+    }, async (args) => {
+      const method = args.method === 'folder' || args.method === 'archive' ? args.method : 'github'
+      const prepared = await prepareInstallSource({
+        method,
+        ...(typeof args.url === 'string' && args.url !== '' ? { url: args.url } : {}),
+        ...(typeof args.path === 'string' && args.path !== '' ? { path: args.path } : {}),
+      } as InstallRequest)
+      try {
+        return await installFromRoot(
+          ctx.pluginManager,
+          prepared.root,
+          method,
+          method === 'github'
+            ? (typeof args.url === 'string' ? args.url : '')
+            : (typeof args.path === 'string' ? args.path : ''),
+          args.config,
+          args.installDeps === true,
+          undefined,
+          prepared.remote,
+          args.autoResolve === true,
+        )
+      } finally {
+        await prepared.cleanup()
+      }
+    }),
+    holder('mygo_helper_config', '读取已安装插件的配置：schema 字段、默认值、模板与当前值', {
+      type: 'object',
+      properties: { pluginId: { type: 'string' } },
+      required: ['pluginId'],
+      additionalProperties: false,
+    }, async (args) => {
+      const pluginId = String(args.pluginId ?? '')
+      const info = await buildConfigTemplate(join(INSTALL_DIR, pluginId))
+      return {
+        pluginId,
+        current: ctx.pluginManager.configOf(pluginId) ?? {},
+        ...(info === undefined
+          ? {}
+          : { schema: { description: info.description, fields: info.fields }, template: info.template }),
+      }
+    }),
+    holder('mygo_helper_update_config', '更新已安装插件配置（HMR 生效）', {
+      type: 'object',
+      properties: {
+        pluginId: { type: 'string' },
+        config: { type: 'object' },
+      },
+      required: ['pluginId', 'config'],
+      additionalProperties: false,
+    }, async (args) => {
+      const pluginId = String(args.pluginId ?? '')
+      await ctx.pluginManager.updateConfig(pluginId, args.config)
+      return { pluginId, ok: true }
+    }),
+  ]
+}
+
+/** How long one helper turn may take before it is treated as stuck. */
+const HELPER_RUN_TIMEOUT_MS = 5 * 60_000
+
+/** Initial instructions for the continuable helper child (its first prompt). */
+const HELPER_INITIAL_PROMPT = [
+  '你是 mygo 插件管理器的配置助手，帮助用户安装/检查/配置插件。',
+  '安装、检查、配置一律使用 mygo-config-helper 技能与 mygo_helper_* 工具。',
+  '用户不会预先选择插件：你需要从对话中识别目标插件（需要时可先调用 mygo_helper_status 列出已安装插件），',
+  '不确定插件 id 或安装源时直接向用户提问，不要臆测。',
+  '严禁自己执行 pnpm/npm/git 安装依赖或请求沙箱升级：依赖安装由 mygo_helper_install 在宿主完成。',
+  '',
+  '这是一段临时对话：每轮你会收到用户的新消息，回复保持简洁中文；',
+  '需要用户决定的事项明确提问。现在不要输出欢迎语，等待用户第一条消息。',
+].join('\n')
+
+/** Await one promise with a wall-clock deadline. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('timeout')), ms)
+      timer.unref?.()
+    }),
+  ])
+}
+
+/** Whether the helper was closed (avoids TS narrowing across async boundaries). */
+function isHelperStopped(state: ConfigHelperState): boolean {
+  return state.status === 'stopped'
+}
+
+/** Extract text content from assistant/message session events. */
+function assistantTextOf(events: readonly unknown[]): string {
+  const blocks: unknown[] = []
+  for (const raw of events) {
+    const event = raw as {
+      readonly type?: string
+      readonly data?: {
+        readonly content?: unknown
+        readonly message?: { readonly content?: unknown }
+      }
+    }
+    if (event.type !== 'assistant/message') continue
+    const content = event.data?.message?.content ?? event.data?.content
+    if (Array.isArray(content)) blocks.push(...content)
+  }
+  return blocks
+    .filter((block): block is { readonly type: 'text'; readonly text: string } => {
+      return typeof block === 'object' && block !== null
+        && (block as { readonly type?: string }).type === 'text'
+        && typeof (block as { readonly text?: unknown }).text === 'string'
+    })
+    .map(block => block.text)
+    .join('\n')
+    .trim()
+}
+
+/** Resolve the live child Agent, waiting a short window for publication. */
+async function waitForAgent(ctx: PanelContext, childId: string): Promise<{ whenIdle(): Promise<void> }> {
+  const agents = ctx.get('agents') as { get(id: string): unknown } | undefined
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const agent = agents?.get(childId) as { whenIdle(): Promise<void> } | undefined
+    if (agent !== undefined && typeof agent.whenIdle === 'function') return agent
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error('助手子会话未就绪')
+}
+
+/** Highest seq currently persisted for one session. */
+async function currentMaxSeq(ctx: PanelContext, childId: string): Promise<number> {
+  const persistence = ctx.get('sessionPersistence') as
+    | { inspect(id: string): Promise<{ events: readonly { readonly seq: number }[] }> }
+    | undefined
+  if (persistence === undefined) return 0
+  const inspected = await persistence.inspect(childId)
+  return inspected.events.at(-1)?.seq ?? 0
+}
+
+/** Create the durable continuable helper conversation (dedicated temp parent + child). */
+async function ensureHelperConversation(ctx: PanelContext, state: ConfigHelperState): Promise<void> {
+  if (state.childId !== undefined && state.parentAgent !== undefined) return
+  const agents = ctx.get('agents') as
+    | {
+        create(options: {
+          sessionId: string
+          meta?: { cwd?: string; origin?: 'subagent' }
+        }): Promise<{ agent: unknown; dispose(): Promise<void> }>
+      }
+    | undefined
+  const subagents = ctx.get('subagents') as
+    | {
+        startContinuable(spec: unknown): Promise<{ childId: string; messageId: string }>
+      }
+    | undefined
+  if (agents === undefined || subagents === undefined) {
+    state.status = 'error'
+    state.error = '宿主缺少 agents / subagents 服务，配置助手不可用'
+    throw new Error(state.error)
+  }
+  const defaultModel = (ctx.get('agentDefaultModel') as
+    | { currentSelection(): { provider?: string; model?: string } }
+    | undefined)?.currentSelection()
+  const agentOptions = defaultModel?.provider !== undefined && defaultModel?.model !== undefined
+    ? { provider: defaultModel.provider, model: defaultModel.model }
+    : undefined
+  const tempSessionId = `session-${randomUUID()}`
+  const handle = await agents.create({
+    sessionId: tempSessionId,
+    meta: { cwd: process.cwd(), origin: 'subagent' },
+    ...(agentOptions === undefined ? {} : { agentOptions }),
+  })
+  state.parentHandle = handle
+  state.parentAgent = handle.agent
+  state.parentCwd = process.cwd()
+  state.debugSessions.push({ id: tempSessionId, cwd: state.parentCwd })
+  const started = await subagents.startContinuable({
+    provider: 'spawn',
+    label: 'mygo-config-helper',
+    request: {
+      prompt: [{ type: 'text', text: HELPER_INITIAL_PROMPT }],
+      parent: handle.agent,
+      persona: '你是严谨、只读、善于分析插件配置的 mygo 配置助手；安装/检查必须走 mygo-config-helper 技能与 mygo_helper_* 工具。',
+      toolFilter: { allow: CONFIG_HELPER_TOOL_ALLOW },
+      ...(agentOptions === undefined ? {} : { agentOptions }),
+    },
+    signal: state.controller.signal,
+  })
+  state.childId = started.childId
+  state.debugSessions.push({ id: started.childId, cwd: state.parentCwd })
+  // Discard the child's greeting to the initial instructions.
+  try {
+    const agent = await waitForAgent(ctx, started.childId)
+    await withTimeout(agent.whenIdle(), HELPER_RUN_TIMEOUT_MS)
+    state.lastSeq = await currentMaxSeq(ctx, started.childId)
+  } catch {
+    // Greeting read is best-effort; the first user reply still works.
+  }
+}
+
+/** Deliver one queued turn to the continuable child and read its reply. */
+async function runHelperTurn(ctx: PanelContext, state: ConfigHelperState): Promise<void> {
+  const message = state.pendingTurns.shift()
+  if (message === undefined) return
+  const subagents = ctx.get('subagents') as
+    | {
+        followup(parent: unknown, childId: string, content: unknown[], options: unknown): Promise<unknown>
+        interrupt(childId: string, authority: unknown): void
+      }
+    | undefined
+  const persistence = ctx.get('sessionPersistence') as
+    | { inspect(id: string): Promise<{ events: readonly { readonly seq: number }[] }> }
+    | undefined
+  if (subagents === undefined || state.childId === undefined || state.parentAgent === undefined) {
+    state.status = 'error'
+    state.error = '助手会话未就绪，请关闭后重新打开'
+    return
+  }
+  state.status = 'running'
+  state.error = undefined
+  state.reply = undefined
+  state.runStartedAt = Date.now()
+  try {
+    await subagents.followup(state.parentAgent, state.childId, [{ type: 'text', text: message }], {
+      source: { kind: 'user' },
+      signal: state.controller.signal,
+    })
+    const agent = await waitForAgent(ctx, state.childId)
+    await withTimeout(agent.whenIdle(), HELPER_RUN_TIMEOUT_MS)
+    if (isHelperStopped(state)) return
+    const inspected = persistence === undefined
+      ? { events: [] as readonly { readonly seq: number }[] }
+      : await persistence.inspect(state.childId)
+    const fresh = inspected.events.filter(event => event.seq > state.lastSeq)
+    state.lastSeq = inspected.events.at(-1)?.seq ?? state.lastSeq
+    const reply = assistantTextOf(fresh)
+    state.status = 'done'
+    state.error = undefined
+    state.reply = reply
+    if (reply !== '') state.messages.push({ role: 'assistant', content: reply })
+    if (state.pendingTurns.length > 0) void runHelperTurn(ctx, state)
+  } catch (error) {
+    if (isHelperStopped(state)) return
+    const timedOut = error instanceof Error && error.message === 'timeout'
+    if (timedOut) {
+      try {
+        subagents.interrupt(state.childId, { kind: 'ancestor', agent: state.parentAgent })
+      } catch {
+        // best effort
+      }
+    }
+    state.status = 'error'
+    state.error = timedOut
+      ? '助手长时间未响应，已中止，请重新发送'
+      : error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** One config-helper chat message: queue into the durable conversation and drive turns. */
+async function chatWithConfigHelper(
+  ctx: PanelContext,
+  message: string,
+): Promise<{ ok: true; runId: string; startedAt: number; queued: boolean }> {
+  let state = configHelpers.get(CONFIG_HELPER_SESSION)
+  if (state === undefined || state.status === 'stopped') {
+    state = {
+      pluginId: CONFIG_HELPER_SESSION,
+      startedAt: Date.now(),
+      messages: [],
+      pendingTurns: [],
+      debugSessions: [],
+      controller: new AbortController(),
+      lastSeq: 0,
+      status: 'idle',
+    }
+    configHelpers.set(CONFIG_HELPER_SESSION, state)
+    registerHelperSurface(ctx)
+  }
+  const text = message.trim()
+  if (text === '') throw new Error('消息不能为空')
+  state.messages.push({ role: 'user', content: text })
+  const queued = state.status === 'running'
+  state.pendingTurns.push(text)
+  if (queued) {
+    return { ok: true, runId: state.childId ?? '', startedAt: state.startedAt, queued: true }
+  }
+  try {
+    await ensureHelperConversation(ctx, state)
+    if (state.status === 'error') throw new Error(state.error ?? '助手初始化失败')
+    void runHelperTurn(ctx, state)
+  } catch (error) {
+    state.status = 'error'
+    state.error = error instanceof Error ? error.message : String(error)
+    throw error
+  }
+  return { ok: true, runId: state.childId ?? '', startedAt: state.startedAt, queued: false }
+}
+
+/** Stop the config helper: close the continuable child, dispose the temp parent, clear records. */
+async function stopConfigHelper(ctx: PanelContext): Promise<{ ok: true; cleared: boolean }> {
+  const state = configHelpers.get(CONFIG_HELPER_SESSION)
+  if (state === undefined) return { ok: true, cleared: false }
+  state.status = 'stopped'
+  state.pendingTurns.length = 0
+  state.controller.abort()
+  const subagents = ctx.get('subagents') as
+    | {
+        interrupt(childId: string, authority: unknown): void
+        drainDescendants(parents: readonly unknown[]): Promise<void>
+      }
+    | undefined
+  if (subagents !== undefined && state.childId !== undefined && state.parentAgent !== undefined) {
+    try {
+      subagents.interrupt(state.childId, { kind: 'ancestor', agent: state.parentAgent })
+    } catch {
+      // best effort
+    }
+    try {
+      await subagents.drainDescendants([state.parentAgent])
+    } catch {
+      // best effort
+    }
+  }
+  if (state.parentHandle !== undefined) {
+    try {
+      await state.parentHandle.dispose()
+    } catch {
+      // best effort
+    }
+    state.parentHandle = undefined
+  }
+  configHelpers.delete(CONFIG_HELPER_SESSION)
+  releaseHelperSurface()
+  await cleanupHelperDebugSessions(ctx, state.debugSessions)
+  return { ok: true, cleared: true }
+}
+
+/** Remove the durable sessions a helper created (best-effort; jsonl artifacts are per-session dirs). */
+async function cleanupHelperDebugSessions(
+  ctx: PanelContext,
+  sessions: ReadonlyArray<{ readonly id: string; readonly cwd: string }>,
+): Promise<void> {
+  if (sessions.length === 0) return
+  const persistence = ctx.get('sessionPersistence') as
+    | {
+        locate(meta: { readonly id: string; readonly cwd?: string }):
+          { readonly kind?: string; readonly path?: string } | undefined
+      }
+    | undefined
+  if (persistence === undefined) return
+  for (const session of sessions) {
+    try {
+      const location = persistence.locate({ id: session.id, cwd: session.cwd })
+      if (location?.path === undefined || location.path === '') continue
+      const target = /\.(?:zstd|jsonl|log)$/.test(location.path) ? dirname(location.path) : location.path
+      await rm(target, { recursive: true, force: true })
+    } catch {
+      // best effort
+    }
+  }
+}
+
 export function apply(ctx: PanelContext): void {
   void (async () => {
     await syncBridgeRows()
@@ -1648,64 +3037,270 @@ export function apply(ctx: PanelContext): void {
       const json = (status: number, body: unknown): void => {
         res.statusCode = status
         res.setHeader('content-type', 'application/json')
+        // The client status gate reads this endpoint synchronously at page
+        // boot; a cached stale row would gate the browser half on an old
+        // enable/disable state.
+        res.setHeader('cache-control', 'no-store')
         res.end(JSON.stringify(body))
       }
       try {
         if (method === 'GET' && (path === '/api/mygo/plugins' || path === '/api/mygo/plugins/')) {
-          const plugins = ctx.pluginManager.plugins().map((plugin: PluginHandleInfo) => ({
+          const bridgePlugins = ctx.pluginManager.plugins().map((plugin: PluginHandleInfo) => ({
             id: plugin.id,
             version: plugin.version,
             status: plugin.status,
             origin: plugin.origin,
             generation: plugin.generation,
+            rail: 'bridge',
+            ...(plugin.entrypoints === undefined ? {} : { entrypoints: plugin.entrypoints }),
+            ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
           }))
-          json(200, { ok: true, plugins })
+          const bundlePlugins = ctx.pluginManager.bundleList().map(member => ({
+            id: member.id,
+            version: member.version ?? '',
+            status: member.enabled ? 'enabled' : 'disabled',
+            origin: 'bundle',
+            generation: 0,
+            rail: 'bundle',
+            ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
+            ...(member.hostConflicts.length === 0 ? {} : { hostConflicts: member.hostConflicts }),
+          }))
+          json(200, { ok: true, plugins: [...bridgePlugins, ...bundlePlugins] })
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/bundles/install') {
+          const body = JSON.parse(await readBody(req)) as { readonly spec?: string }
+          const spec = body.spec?.trim()
+          if (spec === undefined || spec.length === 0) throw new Error('缺少 bundle spec')
+          const result = await ctx.pluginManager.bundleInstall(spec)
+          json(200, {
+            ok: true,
+            id: result.member.id,
+            message: `bundle ${result.member.id} 已安装`,
+            plan: {
+              accepted: result.plan.accepted,
+              ...(result.plan.error === undefined ? {} : { error: result.plan.error }),
+              ...(result.plan.warnings === undefined || result.plan.warnings.length === 0 ? {} : { warnings: result.plan.warnings }),
+              ...(result.plan.actions === undefined || result.plan.actions.length === 0 ? {} : { actions: result.plan.actions }),
+            },
+            ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
+          })
           return
         }
         if (method === 'POST' && path === '/api/mygo/install') {
+          const body2 = JSON.parse(await readBody(req)) as InstallRequest
+          const prepared = await prepareInstallSource(body2)
+          try {
+            json(200, await installFromRoot(
+              ctx.pluginManager,
+              prepared.root,
+              body2.method as InstallManifest['method'],
+              body2.method === 'github'
+                ? (body2.url?.trim() ?? '')
+                : body2.method === 'folder'
+                  ? (body2.path?.trim() ?? '')
+                  : (body2.path?.trim() ?? ''),
+              body2.config,
+              body2.installDeps === true,
+              undefined,
+              prepared.remote,
+              body2.autoResolve === true,
+            ))
+          } finally {
+            await prepared.cleanup()
+          }
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/install-plan') {
           const body = JSON.parse(await readBody(req)) as InstallRequest
-          if (body.method === 'github') {
-            const url = body.url?.trim()
-            if (url === undefined || url.length === 0) throw new Error('缺少 GitHub 仓库地址')
-            const tmp = await mkdtemp(join(tmpdir(), 'dsh-install-'))
-            try {
-              await cloneFromGitHub(url, body.ref, tmp)
-              const root = await locatePluginRoot(tmp)
-              const commit = await gitHeadOf(tmp)
-              const remote: RemoteRef = { url, ref: body.ref?.trim() || 'HEAD', commit }
-              json(200, await installFromRoot(
-                ctx.pluginManager, root, 'github', url, body.config, body.installDeps === true, undefined, remote,
-              ))
-            } finally {
-              await rm(tmp, { recursive: true, force: true })
+          const prepared = await prepareInstallSource(body)
+          try {
+            const id = await pluginIdFromRoot(prepared.root)
+            const declarative = await readDeclarativeManifest(prepared.root)
+            const plan = await ctx.pluginManager.planInstall({
+              id,
+              ...(declarative === undefined
+                ? {}
+                : {
+                    ...(declarative.version === undefined ? {} : { version: declarative.version }),
+                    ...(declarative.declarative?.compatibility === undefined
+                      ? {}
+                      : { compatibility: declarative.declarative.compatibility }),
+                    ...(declarative.declarative?.provides === undefined
+                      ? {}
+                      : { provides: declarative.declarative.provides }),
+                  }),
+            })
+            const configInfo = await buildConfigTemplate(prepared.root)
+            json(200, {
+              ok: true,
+              id,
+              ...(configInfo === undefined
+                ? {}
+                : {
+                    configTemplate: configInfo.template,
+                    configSchema: {
+                      description: configInfo.description,
+                      fields: configInfo.fields,
+                    },
+                  }),
+              plan: {
+                accepted: plan.accepted,
+                ...(plan.error === undefined ? {} : { error: plan.error }),
+                ...(plan.warnings === undefined || plan.warnings.length === 0 ? {} : { warnings: plan.warnings }),
+                ...(plan.actions === undefined || plan.actions.length === 0 ? {} : { actions: plan.actions }),
+              },
+            })
+          } finally {
+            await prepared.cleanup()
+          }
+          return
+        }
+        const configMatch = /^\/api\/mygo\/plugins\/([^/]+)\/config$/.exec(path)
+        if (method === 'GET' && configMatch !== null) {
+          const id = configMatch[1]
+          let manifest: InstallManifest
+          try {
+            manifest = JSON.parse(await readFile(join(INSTALL_DIR, id, MANIFEST), 'utf8')) as InstallManifest
+          } catch {
+            throw new Error(`插件 ${id} 未安装或不是面板托管插件`)
+          }
+          const info = await buildConfigTemplate(join(INSTALL_DIR, id))
+          json(200, {
+            ok: true,
+            id,
+            current: ctx.pluginManager.configOf(id) ?? manifest.config ?? {},
+            ...(info === undefined
+              ? {}
+              : {
+                  schema: { description: info.description, fields: info.fields },
+                  template: info.template,
+                }),
+          })
+          return
+        }
+        if (method === 'POST' && configMatch !== null) {
+          const id = configMatch[1]
+          const body = JSON.parse(await readBody(req)) as { readonly config?: unknown }
+          if (typeof body.config !== 'object' || body.config === null || Array.isArray(body.config)) {
+            throw new Error('config 必须是 JSON 对象')
+          }
+          await ctx.pluginManager.updateConfig(id, body.config)
+          // Persist the updated config into the bridge row: the profile patch
+          // is the boot-time authority, so a restart must see the new value.
+          await syncBridgeRows({ [id]: ctx.pluginManager.configOf(id) })
+          json(200, { ok: true, id, message: `插件 ${id} 配置已更新（HMR 生效）` })
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/bom/export') {
+          const result = await ctx.pluginManager.bomExport()
+          json(200, {
+            ok: true,
+            jsonPath: result.jsonPath,
+            mdPath: result.mdPath,
+            generated: result.bom.generated,
+            members: result.bom.lock.members.length,
+          })
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/bom/check') {
+          const body = JSON.parse(await readBody(req)) as { readonly target?: string }
+          const report = await ctx.pluginManager.bomCheck(body.target === undefined ? {} : { target: body.target })
+          json(200, { ok: report.ok, clean: report.clean, report })
+          return
+        }
+        const helperMatch = /^\/api\/mygo\/config-helper$/.exec(path)
+        if (method === 'POST' && helperMatch !== null) {
+          const body = JSON.parse(await readBody(req)) as {
+            readonly action?: string
+            readonly message?: string
+            readonly sessionId?: string
+          }
+          if (body.action === 'start') {
+            let state = configHelpers.get(CONFIG_HELPER_SESSION)
+            if (state === undefined || state.status === 'stopped') {
+              state = {
+                pluginId: CONFIG_HELPER_SESSION,
+                startedAt: Date.now(),
+                messages: [],
+                debugSessions: [],
+                pendingTurns: [],
+                controller: new AbortController(),
+                lastSeq: 0,
+                status: 'idle',
+              }
+              configHelpers.set(CONFIG_HELPER_SESSION, state)
+              registerHelperSurface(ctx)
             }
-            return
-          }
-          if (body.method === 'folder') {
-            const folder = body.path?.trim()
-            if (folder === undefined || folder.length === 0) throw new Error('缺少文件夹路径')
-            const root = resolve(folder)
-            if ((await stat(root)).isDirectory() !== true) throw new Error(`不是文件夹: ${root}`)
-            const pluginRoot = await locatePluginRoot(root)
-            json(200, await installFromRoot(ctx.pluginManager, pluginRoot, 'folder', root, body.config, body.installDeps === true))
-            return
-          }
-          if (body.method === 'archive') {
-            const file = body.path?.trim()
-            if (file === undefined || file.length === 0) throw new Error('缺少压缩包路径')
-            const archive = resolve(file)
-            if ((await stat(archive)).isFile() !== true) throw new Error(`不是文件: ${archive}`)
-            const tmp = await mkdtemp(join(tmpdir(), 'dsh-install-'))
-            try {
-              await extractArchive(archive, tmp)
-              const root = await locatePluginRoot(tmp)
-              json(200, await installFromRoot(ctx.pluginManager, root, 'archive', archive, body.config, body.installDeps === true))
-            } finally {
-              await rm(tmp, { recursive: true, force: true })
+            json(200, { ok: true, startedAt: state.startedAt })
+          } else if (body.action === 'chat') {
+            if (typeof body.message !== 'string' || body.message.trim() === '') {
+              throw new Error('message 不能为空')
             }
-            return
+            json(200, await chatWithConfigHelper(ctx, body.message))
+          } else if (body.action === 'stop') {
+            json(200, await stopConfigHelper(ctx))
+          } else if (body.action === 'status') {
+            const state = configHelpers.get(CONFIG_HELPER_SESSION)
+            if (state?.status === 'running' && state.runStartedAt !== undefined
+              && Date.now() - state.runStartedAt > HELPER_RUN_TIMEOUT_MS) {
+              const subagents = ctx.get('subagents') as
+                | { interrupt(childId: string, authority: unknown): void }
+                | undefined
+              if (subagents !== undefined && state.childId !== undefined && state.parentAgent !== undefined) {
+                try {
+                  subagents.interrupt(state.childId, { kind: 'ancestor', agent: state.parentAgent })
+                } catch {
+                  // best effort
+                }
+              }
+              state.pendingTurns.length = 0
+              state.status = 'error'
+              state.error = '助手长时间未响应，已中止，请重新发送'
+            }
+            json(200, state === undefined
+              ? { ok: true, status: 'idle' }
+              : {
+                  ok: true,
+                  status: state.status,
+                  startedAt: state.startedAt,
+                  ...(state.childId === undefined ? {} : { runId: state.childId }),
+                  messages: state.messages,
+                  ...(state.reply === undefined ? {} : { reply: state.reply }),
+                  ...(state.error === undefined ? {} : { error: state.error }),
+                })
+          } else {
+            throw new Error('action 必须是 start / chat / stop / status')
           }
-          throw new Error('method 必须是 github / folder / archive')
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/plan') {
+          const body = JSON.parse(await readBody(req)) as {
+            readonly op?: 'enable' | 'disable'
+            readonly id?: string
+            readonly force?: unknown
+          }
+          if (body.op !== 'enable' && body.op !== 'disable') {
+            throw new Error('op 必须是 enable / disable')
+          }
+          if (body.id === undefined || body.id.length === 0) {
+            throw new Error('缺少插件 id')
+          }
+          const plan = await ctx.pluginManager.plan({
+            op: body.op,
+            id: body.id,
+            ...(body.op === 'disable' && body.force === true ? { force: true } : {}),
+          } as never)
+          json(200, {
+            ok: true,
+            plan: {
+              accepted: plan.accepted,
+              ...(plan.error === undefined ? {} : { error: plan.error }),
+              ...(plan.warnings === undefined || plan.warnings.length === 0 ? {} : { warnings: plan.warnings }),
+              ...(plan.actions === undefined || plan.actions.length === 0 ? {} : { actions: plan.actions }),
+            },
+          })
+          return
         }
         if (method === 'GET' && (path === '/api/mygo/apps' || path === '/api/mygo/apps/')) {
           const apps = (await listExternalApps()).map(app => ({
@@ -1817,8 +3412,39 @@ export function apply(ctx: PanelContext): void {
         if (method === 'POST' && match !== null) {
           const id = match[1]
           const action = match[2]
+          if (ctx.pluginManager.bundleList().some(member => member.id === id)) {
+            if (action === 'enable') {
+              await ctx.pluginManager.bundleSetEnabled(id, true)
+            } else if (action === 'disable') {
+              let force = false
+              try {
+                const body = JSON.parse(await readBody(req)) as { readonly force?: unknown }
+                force = body.force === true
+              } catch {
+                // no body: keep the default
+              }
+              await ctx.pluginManager.bundleSetEnabled(id, false, force)
+            } else {
+              await ctx.pluginManager.bundleUninstall(id)
+            }
+            json(200, {
+              ok: true,
+              id,
+              message: action === 'enable' ? '插件已启用' : action === 'disable' ? '插件已停用' : '插件已卸载',
+            })
+            return
+          }
+          let force = false
+          if (action === 'disable') {
+            try {
+              const body = JSON.parse(await readBody(req)) as { readonly force?: unknown }
+              force = body.force === true
+            } catch {
+              // no body / invalid JSON: keep the non-force default
+            }
+          }
           if (action === 'enable') await ctx.pluginManager.enable(id)
-          else if (action === 'disable') await ctx.pluginManager.disable(id)
+          else if (action === 'disable') await ctx.pluginManager.disable(id, undefined, force)
           else {
             let skillFile: string | undefined
             try {
@@ -1835,6 +3461,10 @@ export function apply(ctx: PanelContext): void {
               await rm(skillFile, { force: true })
             }
             await syncBridgeRows()
+            // Uninstalling the mygo-rdb extension also removes its store
+            // provider row, so the manager automatically falls back to the
+            // built-in sqlite registry route on the next boot.
+            if (id === 'mygo-rdb') await removeStoreProviderRows()
           }
           json(200, {
             ok: true,
@@ -1845,7 +3475,12 @@ export function apply(ctx: PanelContext): void {
         }
         json(404, { ok: false, error: 'not found' })
       } catch (error) {
-        json(400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        const details = (error as { readonly details?: unknown }).details
+        json(400, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(details === undefined ? {} : { details }),
+        })
       }
     },
   })

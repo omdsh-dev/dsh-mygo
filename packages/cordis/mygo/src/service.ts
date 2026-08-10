@@ -24,12 +24,31 @@ import type {
   PluginSource,
 } from '@deepseek-ai/dsh-mygo-api'
 import { PluginManagerConfigSchema, resolvePluginManagerConfig } from './config.ts'
+import {
+  buildBom,
+  checkBom,
+  checkTarget,
+  loadBomTarget,
+  renderBomMarkdown,
+  type BomCheckReport,
+  type BomCurrentMember,
+  type BomDocument,
+} from './bom.ts'
+import { BundleRail } from './bundle-rail.ts'
 import { DispatchMachine } from './dispatch.ts'
 import type { DispatchViolation } from './dispatch.ts'
 import { EVENT_VOCABULARY } from './event-vocabulary.ts'
-import { LifecycleEngine } from './lifecycle.ts'
+import { EntrypointsTable } from './entrypoints.ts'
+import { LifecycleEngine, MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from './lifecycle.ts'
 import { RegistryPersistence } from './persistence.ts'
 import type { AuditClass } from './audit.ts'
+import type { RegistryStore } from './store.ts'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dshHomePath } from '@deepseek-ai/dsh-paths'
 import type {
   PluginManager,
   PluginManagerConfig,
@@ -82,12 +101,17 @@ export class PluginManagerService extends Service implements PluginManager {
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
+    const entrypoints = new EntrypointsTable(ctx)
+    const externalStore = ctx.get('mygoRegistryStore') as RegistryStore | undefined
+    if (externalStore !== undefined) {
+      ctx.logger.info('[dsh-mygo] 使用外部注册表存储（mygoRegistryStore）')
+    }
     const persistence = await RegistryPersistence.open(ctx.storageDomain, {
       profile: this.config.profile,
       stateRoot: this.resolved.stateRoot,
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
-    })
+    }, externalStore)
     const holder: { engine?: LifecycleEngine } = {}
     const hostLlm = ctx.get('llm') as
       | { stream(options: unknown): AsyncIterable<unknown> }
@@ -196,6 +220,9 @@ export class PluginManagerService extends Service implements PluginManager {
     const hostCommands = ctx.get('commands') as
       | { register(definition: unknown): () => void }
       | undefined
+    const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+    const checkout = resolveCheckout(dirname(fileURLToPath(import.meta.url)))
+    const bundleRail = new BundleRail({ dshHome, profile: this.config.profile, checkout })
     const machine = new DispatchMachine(ctx, {
       vocabulary: new Map(EVENT_VOCABULARY.map(entry => [entry.name, entry.mode])),
       cpuBudgetMs: this.config.cpuBudgetMs,
@@ -221,6 +248,7 @@ export class PluginManagerService extends Service implements PluginManager {
       dispatch: machine,
       store: persistence.store,
       config: this.resolved,
+      entrypoints,
       eventVocabulary: EVENT_VOCABULARY,
       persistence,
       ...(llm === undefined ? {} : { llm }),
@@ -228,6 +256,7 @@ export class PluginManagerService extends Service implements PluginManager {
       ...(hostHttpServer === undefined ? {} : { httpServer: hostHttpServer }),
       ...(hostSkills === undefined ? {} : { skillService: hostSkills }),
       ...(hostCommands === undefined ? {} : { commandService: hostCommands }),
+      bundleRail,
       hostService: (capability: string) => ctx.get(capability),
       hostProvide: (name: string, value: unknown) => ctx.provide(name, value),
       resolveSource: (source) => {
@@ -248,6 +277,9 @@ export class PluginManagerService extends Service implements PluginManager {
     await engine.recover()
     this.engine = engine
     this.persistence = persistence
+    // Publish the aggregation service so host-shaped raw plugins can own
+    // (`define`) and consume (`get`) extension-point keys without mygo code.
+    const entrypointsDisposer = ctx.provide('entrypoints', entrypoints)
     // Zero-intrusion unknown-tool attribution: the harness wraps every tool
     // dispatch in the `tools/execute` waterfall, so intercepting there lets a
     // call to an uninstalled plugin's old tool return a friendly failure
@@ -265,6 +297,7 @@ export class PluginManagerService extends Service implements PluginManager {
     }) as never)
     ctx.effect(() => () => {
       holder.engine?.dispose()
+      entrypointsDisposer()
       void persistence.close()
     }, 'pluginManager.teardown')
   }
@@ -281,8 +314,8 @@ export class PluginManagerService extends Service implements PluginManager {
     return this.requireEngine().enable(id)
   }
 
-  disable(id: string, reason?: string): Promise<void> {
-    return this.requireEngine().disable(id, reason)
+  disable(id: string, reason?: string, force?: boolean): Promise<void> {
+    return this.requireEngine().disable(id, reason, force)
   }
 
   replace(
@@ -301,8 +334,110 @@ export class PluginManagerService extends Service implements PluginManager {
     return this.requireEngine().plugins()
   }
 
+  configOf(id: string): unknown | undefined {
+    return this.requireEngine().configOf(id)
+  }
+
   async plan(operation: PluginOperation): Promise<PluginOperationPlan> {
     return this.requireEngine().plan(operation)
+  }
+
+  planInstall(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: import('@deepseek-ai/dsh-mygo-api').PluginCompatibility
+    readonly provides?: readonly string[]
+  }): Promise<PluginOperationPlan> {
+    return this.requireEngine().planInstall(declaration)
+  }
+
+  bundleList(): readonly import('./bundle-rail.ts').BundleMember[] {
+    return this.requireEngine().bundleList()
+  }
+
+  /**
+   * P4 BOM：把统一依赖图导出为 `dsh.bom/v1`（JSON + Markdown），
+   * 原子写并保留上一次文件。
+   */
+  async bomExport(): Promise<{ readonly bom: BomDocument; readonly jsonPath: string; readonly mdPath: string }> {
+    const engine = this.requireEngine()
+    const bom = buildBom({
+      profile: this.config.profile,
+      bridgePlugins: engine.plugins().filter(plugin => plugin.status === 'enabled'),
+      bundles: this.bundleList().filter(member => member.enabled),
+    })
+    const dir = join(dshHomePath('mygo-boms'), this.config.profile)
+    await mkdir(dir, { recursive: true })
+    const jsonPath = join(dir, 'dsh.bom.json')
+    const mdPath = join(dir, 'dsh.bom.md')
+    const tmpJson = `${jsonPath}.tmp`
+    const tmpMd = `${mdPath}.tmp`
+    await writeFile(tmpJson, JSON.stringify(bom, null, 2))
+    await writeFile(tmpMd, renderBomMarkdown(bom))
+    await rename(tmpJson, jsonPath)
+    await rename(tmpMd, mdPath)
+    return { bom, jsonPath, mdPath }
+  }
+
+  /**
+   * P4 BOM：只读对账。无 `target` 时对比 BOM lock 与当前 profile 集合
+   * （missing / extra / drift / 约束违例链）；带 `target` 时校验一个
+   * 新插件目录的 package.json 声明是否落在 BOM 生态带内。零修改。
+   */
+  async bomCheck(options: { readonly target?: string } = {}): Promise<BomCheckReport> {
+    const bom = await this.readBom()
+    if (options.target !== undefined) {
+      const target = await loadBomTarget(options.target)
+      return checkTarget(bom, target)
+    }
+    const current: BomCurrentMember[] = [
+      ...this.requireEngine().plugins().map((plugin): BomCurrentMember => ({
+        id: plugin.id,
+        version: plugin.version,
+        status: plugin.status,
+        ...(plugin.provides.length === 0 ? {} : { provides: plugin.provides }),
+        ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+      })),
+      ...this.bundleList().map((member): BomCurrentMember => ({
+        id: member.id,
+        version: member.version ?? '*',
+        status: member.enabled ? 'enabled' : 'disabled',
+        ...(member.provides === undefined ? {} : { provides: member.provides }),
+        ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
+      })),
+      {
+        id: MYGO_MANAGER_ID,
+        version: MYGO_MANAGER_VERSION,
+        status: 'enabled',
+        provides: [MYGO_MANAGER_CAPABILITY],
+      },
+    ]
+    return checkBom(bom, current)
+  }
+
+  private async readBom(): Promise<BomDocument> {
+    const path = join(dshHomePath('mygo-boms'), this.config.profile, 'dsh.bom.json')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(path, 'utf8'))
+    } catch (error) {
+      throw new Error(`未找到 BOM（先执行导出）: ${path}（${String(error)}）`)
+    }
+    const bom = parsed as BomDocument
+    if (bom.format !== 'dsh.bom/v1') throw new Error(`不是有效的 dsh.bom/v1 文件: ${path}`)
+    return bom
+  }
+
+  bundleInstall(spec: string): Promise<import('./bundle-rail.ts').BundleInstallResult> {
+    return this.requireEngine().bundleInstall(spec)
+  }
+
+  bundleUninstall(id: string): Promise<void> {
+    return this.requireEngine().bundleUninstall(id)
+  }
+
+  bundleSetEnabled(id: string, enabled: boolean, force?: boolean): Promise<void> {
+    return this.requireEngine().bundleSetEnabled(id, enabled, force)
   }
 
   /**
@@ -337,18 +472,41 @@ export class PluginManagerService extends Service implements PluginManager {
   }
 
   /** Zero-intrusion static adoption of a raw Cordis plugin (see {@link PluginManager.adoptRaw}). */
-  async adoptRaw(raw: RawCordisFunctionPlugin, config: unknown, id?: string): Promise<PluginHandleInfo> {
-    return this.requireEngine().adoptRaw(raw, config, id)
+  async adoptRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id?: string,
+    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+  ): Promise<PluginHandleInfo> {
+    return this.requireEngine().adoptRaw(raw, config, id, declaration)
   }
 
   /** Live-update an adopted raw plugin through the HMR replace protocol. */
-  updateRaw(raw: RawCordisFunctionPlugin, config: unknown, id: string): Promise<PluginHandleInfo> {
-    return this.requireEngine().updateRaw(raw, config, id)
+  updateRaw(
+    raw: RawCordisFunctionPlugin,
+    config: unknown,
+    id: string,
+    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+  ): Promise<PluginHandleInfo> {
+    return this.requireEngine().updateRaw(raw, config, id, declaration)
   }
 
   /** Pre-mount support check (see {@link PluginManager.checkSupport}). */
-  checkSupport(raw: RawCordisFunctionPlugin, id?: string): Promise<PluginSupportCheck> {
-    return this.requireEngine().checkSupport(raw, id)
+  checkSupport(
+    raw: RawCordisFunctionPlugin,
+    id?: string,
+    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+  ): Promise<PluginSupportCheck> {
+    return this.requireEngine().checkSupport(raw, id, declaration)
+  }
+
+  /** Pure compatibility preflight (see {@link PluginManager.checkCompatibility}). */
+  checkCompatibility(declaration: {
+    readonly id: string
+    readonly version?: string
+    readonly compatibility?: import('@deepseek-ai/dsh-mygo-api').PluginCompatibility
+  }): import('@deepseek-ai/dsh-mygo-api').CompatibilityReport {
+    return this.requireEngine().checkCompatibility(declaration)
   }
 
   /** Remove an uninstall tombstone (see {@link PluginManager.clearUninstallTombstone}). */
@@ -392,6 +550,27 @@ function evaluateInlineDefinition(code: string): PluginDefinition {
     return value as PluginDefinition
   }
   throw new Error('inline plugin source did not export a PluginDefinition')
+}
+
+/**
+ * Walk up from a module directory until the dsh checkout root is found.
+ * The depth to `packages/cordis/mygo/src` (3) differs from the built
+ * `packages/cordis/mygo/lib` (4), so a fixed `../../..` is wrong in lib.
+ */
+function resolveCheckout(from: string): string {
+  let dir = from
+  for (let depth = 0; depth < 8; depth++) {
+    if (
+      existsSync(join(dir, 'packages', 'client', 'tsdown.client.ts'))
+      || existsSync(join(dir, 'apps', 'cli', 'src', 'bin.ts'))
+    ) {
+      return dir
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  throw new Error('无法定位 dsh checkout（未找到 packages/client/tsdown.client.ts）')
 }
 
 /** Map one dispatch violation code to the §22.3 audit class. */
