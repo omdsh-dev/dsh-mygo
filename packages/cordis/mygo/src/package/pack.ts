@@ -9,15 +9,15 @@
  */
 
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { constraintsOf, isEscapingPath, parsePackageManifest, pathProblemsOf, type PluginManifestV2 } from './manifest-v2.ts'
 import { lockfilePath, packageDir, type MygoPaths } from './paths.ts'
 import { installPackageToStore, readInstalledPackage } from './package-store.ts'
-import { sha256Text, writeLockfile, readLockfile, type Lockfile } from './lockfile.ts'
+import { sha256Text, writeLockfile, readLockfile, type Lockfile, type LockedPlugin } from './lockfile.ts'
 import { resolve, type PluginCandidate } from './resolver.ts'
 import type { ConflictEntry, ResolutionReport } from './report.ts'
 import { isValidRange, matchesVersionRange } from '../semver-range.ts'
@@ -85,6 +85,11 @@ const ID_RE = /^[a-z][a-z0-9-]*$/
 const SHA512_RE = /^[0-9a-f]{128}$/
 const SHA256_RE = /^[0-9a-f]{64}$/
 const FILE_PATH_RE = /^files\/\d+\.tgz$/
+
+/** gzip 解压上限（A7）：单条 gzip 流解压后 ≤ 256 MiB，超限 → pack-invalid。 */
+export const MAX_GUNZIP_BYTES = 256 * 1024 * 1024
+/** 单 archive 成员数上限（A7）：≤ 10000，超限 → pack-invalid。 */
+export const MAX_TAR_MEMBERS = 10000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -330,8 +335,11 @@ export function normalizeTarName(name: string): string {
   return name.startsWith('./') ? name.slice(2) : name
 }
 
-/** 遍历 tar 头部（不验证内容哈希；gzip 已解压）。 */
-export function listTarMembers(tar: Uint8Array): {
+/** 遍历 tar 头部（不验证内容哈希；gzip 已解压）。成员数受 maxMembers 上限（A7）。 */
+export function listTarMembers(
+  tar: Uint8Array,
+  maxMembers = MAX_TAR_MEMBERS,
+): {
   readonly members: readonly TarMember[]
   readonly problems: readonly string[]
 } {
@@ -364,24 +372,35 @@ export function listTarMembers(tar: Uint8Array): {
       size,
       dataOffset: offset + 512,
     })
+    if (members.length >= maxMembers) {
+      problems.push(`tar 成员数超过上限 ${maxMembers}（实际 ≥ ${maxMembers}）`)
+      break
+    }
     offset += 512 + Math.ceil(size / 512) * 512
   }
   return { members, problems }
 }
 
-/** 解压 gzip + 遍历成员（失败返回 problems）。 */
+/** 解压 gzip + 遍历成员（失败返回 problems）；解压受 MAX_GUNZIP_BYTES 上限（A7）。 */
 export function listGzipTarMembers(bytes: Uint8Array): {
   readonly tar?: Uint8Array
   readonly members?: readonly TarMember[]
   readonly problems: readonly string[]
 } {
   try {
-    const tar = gunzipSync(bytes)
+    const tar = gunzipSync(bytes, { maxOutputLength: MAX_GUNZIP_BYTES })
     const result = listTarMembers(tar)
     if (result.problems.length > 0) return { problems: result.problems }
     return { tar, members: result.members, problems: [] }
   } catch (error) {
-    return { problems: [error instanceof Error ? error.message : String(error)] }
+    const message = error instanceof Error ? error.message : String(error)
+    if (error instanceof Error && (error as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') {
+      // Node 不返回流的实际解压大小；如实报告超限事实与上限值（A7）。
+      return {
+        problems: [`gzip 解压后超过上限 ${MAX_GUNZIP_BYTES} 字节（流实际大小无法在拒绝点测得，仅知超过上限）`],
+      }
+    }
+    return { problems: [message] }
   }
 }
 
@@ -391,6 +410,15 @@ function memberBytes(tar: Uint8Array, member: TarMember): Uint8Array {
 
 function findMember(members: readonly TarMember[], name: string): TarMember | undefined {
   return members.find(member => member.name === name)
+}
+
+async function dirExists(path: string): Promise<boolean> {
+  try {
+    await readdir(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +704,26 @@ export async function installPluginPack(
   if (manifestMember === undefined || manifestMember.typeflag !== '0') {
     return { ok: false, report: packReport('pack 缺少 mygo-pack.json 成员', []) }
   }
-  const manifestRaw = JSON.parse(Buffer.from(memberBytes(unpacked.tar, manifestMember)).toString('utf8')) as unknown
+  // A5-pack：清单成员 JSON 解析加固——畸形 JSON → pack-invalid（带文件指针），
+  // 原始 SyntaxError MUST NOT 逃逸出 installPluginPack。
+  let manifestRaw: unknown
+  try {
+    manifestRaw = JSON.parse(Buffer.from(memberBytes(unpacked.tar, manifestMember)).toString('utf8')) as unknown
+  } catch (error) {
+    return {
+      ok: false,
+      report: packReport(
+        `pack 清单不是合法 JSON（mygo-pack.json）：${error instanceof Error ? error.message : String(error)}`,
+        [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: 'mygo-pack.json', range: 'json' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['清单成员不是合法 JSON'] }],
+          actions: ['重新打包或从可信来源获取 pack'],
+        }],
+      ),
+    }
+  }
   const parsed = parsePackManifest(manifestRaw)
   if (parsed.value === undefined) {
     return {
@@ -723,6 +770,103 @@ export async function installPluginPack(
         candidates: [{ version: '<member>', rejected: ['成员不在清单声明集合内'] }],
         actions: ['从可信来源重新获取 pack'],
       }))),
+    }
+  }
+
+  // 空 pack 显式拒绝（A18，已裁决）：plugins 为空 → pack-invalid，预检阶段拒绝。
+  if (manifest.plugins.length === 0) {
+    return {
+      ok: false,
+      report: packReport('pack 不含任何插件（plugins 为空），拒绝空 pack 还原', [{
+        plugin: '<pack>',
+        constraint: { kind: 'pack', target: 'plugins', range: 'empty' },
+        chain: ['<pack>'],
+        candidates: [{ version: '<manifest>', rejected: ['plugins 数组为空'] }],
+        actions: ['重新打包并确认 pack 包含至少一个插件'],
+      }]),
+    }
+  }
+
+  // A4 预检：plugins[] ↔ files[] 一一对应 + lockfile 键集与 plugins[] 一致
+  // （多/少/错配/重复/下标错位 → pack-invalid，最早时机拒绝；锚点：design-r4
+  // D-A2 plugins[] 集合声明与 lockfile 语义载荷同源、D-A3 pins=lockfile.plugins、
+  // D-A6 files[].path 下标形态、T33 两侧载荷逐字节一致、R1 单实例不变量）。
+  const pluginIdSet = new Set<string>()
+  for (const plugin of manifest.plugins) {
+    if (pluginIdSet.has(plugin.id)) {
+      return {
+        ok: false,
+        report: packReport(`pack 清单 plugins[] 重复声明插件 ${plugin.id}`, [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: plugin.id, range: 'plugins' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['plugins[] 重复 id'] }],
+          actions: ['重新打包'],
+        }]),
+      }
+    }
+    pluginIdSet.add(plugin.id)
+  }
+  const seenFileIds = new Set<string>()
+  for (const [index, file] of manifest.files.entries()) {
+    if (file.path !== `files/${index}.tgz`) {
+      return {
+        ok: false,
+        report: packReport(`pack 清单 files[${index}].path 必须是 files/${index}.tgz（实际 ${file.path}）`, [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: file.path, range: 'files' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['files[] 下标与 path 不匹配'] }],
+          actions: ['重新打包'],
+        }]),
+      }
+    }
+    if (seenFileIds.has(file.pluginId)) {
+      return {
+        ok: false,
+        report: packReport(`pack 清单 files[] 重复声明插件 ${file.pluginId}`, [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: file.path, range: 'files' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['files[] 重复 pluginId'] }],
+          actions: ['重新打包'],
+        }]),
+      }
+    }
+    seenFileIds.add(file.pluginId)
+  }
+  if (seenFileIds.size !== pluginIdSet.size) {
+    const missing = [...pluginIdSet].filter(id => !seenFileIds.has(id))
+    const extra = [...seenFileIds].filter(id => !pluginIdSet.has(id))
+    return {
+      ok: false,
+      report: packReport(
+        `pack 清单 plugins[] 与 files[] 不一一对应（缺 vendored 文件：${missing.join(', ') || '无'}；多出：${extra.join(', ') || '无'}）`,
+        [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: missing[0] ?? extra[0] ?? 'plugins', range: 'files' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['plugins[] 与 files[] 集合不一致'] }],
+          actions: ['重新打包并保持 plugins[]/files[] 一一对应'],
+        }],
+      ),
+    }
+  }
+  const lockIds = Object.keys(manifest.lockfile.plugins)
+  if (lockIds.length !== pluginIdSet.size || lockIds.some(id => !pluginIdSet.has(id))) {
+    const lockExtra = lockIds.filter(id => !pluginIdSet.has(id))
+    return {
+      ok: false,
+      report: packReport(
+        `pack 清单 lockfile.plugins 键集与 plugins[] 不一致（多出：${lockExtra.join(', ') || '无'}）`,
+        [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: lockExtra[0] ?? 'lockfile', range: 'plugins' },
+          chain: ['<pack>'],
+          candidates: [{ version: '<manifest>', rejected: ['lockfile.plugins 键集与 plugins[] 不一致'] }],
+          actions: ['重新打包'],
+        }],
+      ),
     }
   }
 
@@ -853,9 +997,11 @@ export async function installPluginPack(
     }])
   }
   if (preflightProblems.length > 0) {
+    // 任务 1.3：summary 必须携带实际违例与上限值（而非只报个数）。
+    const detailLines = preflightProblems.flatMap(problem => problem.candidates[0]?.rejected ?? [])
     return {
       ok: false,
-      report: packReport(`pack 内层校验失败：${preflightProblems.length} 个插件`, preflightProblems),
+      report: packReport(`pack 内层校验失败：${preflightProblems.length} 个插件（${detailLines.join('；')}）`, preflightProblems),
     }
   }
 
@@ -891,13 +1037,36 @@ export async function installPluginPack(
     return { ok: false, report: { ...outcome.report, scope: 'pack' } }
   }
 
-  // store 安装（全部预检通过后才写 store；本地 tarball 变体）。
+  // store 安装（A4）：全部预检通过后才写 store；仅「本次需要新写入的插件」
+  // （在 files[] 内）要求 vendored 文件，已装节点豁免（任务书术语强定义）。
+  // 原子性（D-A7）：任一失败回滚本次新增目录 + 还原移开的既有目录，
+  // lockfile 保持原字节（写 lockfile 在本段成功完成之后）。
+  const createdDirs: string[] = []
+  const createdIdDirs: string[] = []
+  const movedAside = new Map<string, string>()
+  const rollback = async (): Promise<void> => {
+    for (const dir of [...createdDirs].reverse()) {
+      await rm(dir, { recursive: true, force: true })
+    }
+    // 本 restore 新建的 id 级目录（现为空）一并摘除；仅在 id 目录为本次新建时
+    // 才允许递归删除，避免误删既有的其他版本目录（零残留口径）。
+    for (const dir of [...createdIdDirs].reverse()) {
+      await rm(dir, { recursive: true, force: true })
+    }
+    for (const [dir, backup] of movedAside) {
+      await rm(dir, { recursive: true, force: true })
+      await rename(backup, dir)
+    }
+  }
   for (const resolved of outcome.resolved) {
     const file = manifest.files.find(entry => entry.pluginId === resolved.id)
-    const bytes = file === undefined ? undefined : fileBytes.get(file.path)
+    if (file === undefined) continue // 已装节点：无需 vendored 文件、无需重写 store
+    const bytes = fileBytes.get(file.path)
     const lock = manifest.lockfile.plugins[resolved.id]
     const preflightManifest = preflightManifests.get(resolved.id)
-    if (file === undefined || bytes === undefined || lock === undefined || preflightManifest === undefined) {
+    if (bytes === undefined || lock === undefined || preflightManifest === undefined) {
+      // 预检 1:1 + 哈希环之后本分支不可达；防御性保留并保证零残留。
+      await rollback()
       return {
         ok: false,
         report: packReport(`求解结果缺少 vendored 文件：${resolved.id}`, [{
@@ -909,25 +1078,56 @@ export async function installPluginPack(
         }]),
       }
     }
-    await installPackageToStore(ctx.paths, {
-      version: lock.version,
-      tarball: file.path,
-      manifest: preflightManifest,
-      ...(file.integrity === undefined ? {} : { integrity: file.integrity }),
-    }, {
-      localTarballBytes: bytes,
-      expectedSha512Hex: file.sha512,
-      ...(ctx.tarCmd === undefined ? {} : { tarCmd: ctx.tarCmd }),
-    })
-    const fact = await readInstalledPackage(
-      packageDir(ctx.paths, resolved.id, lock.version),
-      resolved.id,
-      lock.version,
-    )
+    const dir = packageDir(ctx.paths, resolved.id, lock.version)
+    const existing = await readInstalledPackage(dir, resolved.id, lock.version)
+    let fact: Awaited<ReturnType<typeof readInstalledPackage>>
+    if (existing !== undefined && existing.entrySha256 !== '') {
+      // 同版本有效事实文件已存在：复用，不写 store。
+      fact = existing
+    } else {
+      // 目录不存在或损坏：先移开旧目录（若存在）再全新安装，失败可整体回滚。
+      const idDir = dirname(dir)
+      const existed = await dirExists(dir)
+      const idDirExisted = existed || await dirExists(idDir)
+      if (existed) {
+        await mkdir(idDir, { recursive: true })
+        await mkdir(ctx.paths.tmpDir, { recursive: true })
+        const backup = join(ctx.paths.tmpDir, `mygo-restore-bak-${randomUUID()}`)
+        await rename(dir, backup)
+        movedAside.set(dir, backup)
+      }
+      try {
+        fact = await installPackageToStore(ctx.paths, {
+          version: lock.version,
+          tarball: file.path,
+          manifest: preflightManifest,
+          ...(file.integrity === undefined ? {} : { integrity: file.integrity }),
+        }, {
+          localTarballBytes: bytes,
+          expectedSha512Hex: file.sha512,
+          ...(ctx.tarCmd === undefined ? {} : { tarCmd: ctx.tarCmd }),
+        })
+      } catch (error) {
+        await rollback()
+        return {
+          ok: false,
+          report: packReport(`store 安装失败：${resolved.id}（${error instanceof Error ? error.message : String(error)}）`, [{
+            plugin: resolved.id,
+            constraint: { kind: 'pack', target: file.path, range: lock.version },
+            chain: [resolved.id],
+            candidates: [{ version: lock.version, rejected: ['本地 tarball 提取/校验失败'] }],
+            actions: ['从可信来源重新获取 pack 后重试'],
+          }]),
+        }
+      }
+      if (!existed) createdDirs.push(dir)
+      if (!idDirExisted) createdIdDirs.push(idDir)
+    }
     if (fact === undefined || fact.entrySha256 !== lock.entrySha256
       || fact.manifestSha256 !== lock.manifestSha256
       || (lock.entrySha512 !== undefined && fact.entrySha512 !== lock.entrySha512)
       || (lock.entryFileSize !== undefined && fact.entryFileSize !== lock.entryFileSize)) {
+      await rollback()
       return {
         ok: false,
         report: packReport(`store 安装后哈希与锁定载荷不一致：${resolved.id}`, [{
@@ -942,6 +1142,9 @@ export async function installPluginPack(
         }]),
       }
     }
+  }
+  for (const backup of movedAside.values()) {
+    await rm(backup, { recursive: true, force: true })
   }
 
   // 双存在 + 社区元数据告警（B25；永不阻断）。
@@ -960,6 +1163,18 @@ export async function installPluginPack(
     }
   }
 
+  // A4：lockfile 合并——pack 条目（pin 胜出，design-r3 §2.4-2）+ 目标 profile
+  // 既有条目（未出现在 pack 内的保留；验收标准 1「lockfile 正确合并」）。
+  // 空目标 profile 时输出与 pack 载荷逐字节一致（RT1/T33 保持）。
+  const mergedPlugins: Record<string, LockedPlugin> = {}
+  if (currentLock !== undefined) {
+    for (const [id, lock] of Object.entries(currentLock.plugins)) {
+      if (manifest.lockfile.plugins[id] === undefined) mergedPlugins[id] = lock
+    }
+  }
+  for (const [id, lock] of Object.entries(manifest.lockfile.plugins)) {
+    mergedPlugins[id] = lock
+  }
   const next: Lockfile = {
     format: 'dsh.lock/v1',
     generated: {
@@ -969,7 +1184,7 @@ export async function installPluginPack(
       ...(coreVersion === undefined ? {} : { core: coreVersion }),
       at: new Date().toISOString(),
     },
-    plugins: manifest.lockfile.plugins,
+    plugins: mergedPlugins,
   }
   await writeLockfile(lockfilePath(ctx.paths, ctx.profile), next)
   return { ok: true, lockfile: next, warnings }

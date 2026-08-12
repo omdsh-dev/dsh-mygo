@@ -5,20 +5,26 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { gzipSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   computePackManifestSha256,
   canonicalPackPayload,
+  installPluginPack,
   listTarMembers,
   listGzipTarMembers,
+  MAX_GUNZIP_BYTES,
+  MAX_TAR_MEMBERS,
   parsePackManifest,
   type PackManifest,
 } from '../../src/package/pack.ts'
 import { detectUndeclaredBundles } from '../../src/package/bundle-scan.ts'
+import { resolveMygoPaths } from '../../src/package/paths.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -191,5 +197,356 @@ describe('KF-1 分类修正（design-r4 §9 / B26）', () => {
       declaredSpecifiers: new Set(['@deepseek-ai/dsh-tools']),
     })
     expect(problems).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// installPluginPack 还原路径加固（修复批次 1：A4 / A18 / A7 / A5-pack）
+// 判定锚：review#1 A4/A5/A7/A18 + review#2 item 2/6/9 + design-r4 D-A6/D-A7
+// 合成 fixture 全部在本测试自建目录内；不触碰真实第三方语料。
+// ---------------------------------------------------------------------------
+
+const sha256Text = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
+const sha512Bytes = (bytes: Uint8Array): string => createHash('sha512').update(bytes).digest('hex')
+
+interface CraftedPlugin {
+  readonly id: string
+  readonly version: string
+  readonly tgz: Buffer
+  readonly entrySha256: string
+  readonly manifestSha256: string
+  readonly lockEntry: Record<string, unknown>
+  readonly factFile: Record<string, unknown>
+}
+
+/** 复刻 store 事实文件与解析后 manifest（package-store.ts:127-135 键序）。 */
+function factPayload(id: string, version: string, entry: string): {
+  readonly manifest: Record<string, unknown>
+  readonly factBase: Record<string, unknown>
+  readonly manifestSha256: string
+} {
+  const manifest = {
+    formatVersion: 1, id, version, entry,
+    depends: {}, breaks: {}, requires: {}, core: '*',
+    recommends: {}, provides: [], entrypoints: {}, bundles: [],
+  }
+  const factBase = { format: 'dsh.mygo-package/v1', id, version, entry, manifest }
+  return { manifest, factBase, manifestSha256: sha256Text(JSON.stringify(factBase)) }
+}
+
+/** 造一个插件源目录并确定性打成 vendored tgz（package/ 根，gzip 无时间戳）。 */
+async function craftPlugin(
+  dir: string,
+  id: string,
+  version = '1.0.0',
+  extraEvilMember = false,
+): Promise<CraftedPlugin> {
+  await mkdir(join(dir, 'lib'), { recursive: true })
+  await writeFile(join(dir, 'package.json'), JSON.stringify({
+    name: `@test/${id}`, version, main: 'lib/index.js',
+    dsh: { mygo: { formatVersion: 1, id, version, entry: 'lib/index.js', depends: {}, breaks: {}, requires: {}, core: '*' } },
+  }, null, 2))
+  const entryBytes = 'export const apply = () => {}\n'
+  await writeFile(join(dir, 'lib', 'index.js'), entryBytes)
+  const args = ['-cf', join(dir, 'inner.tar'), '-C', dir,
+    '--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner',
+    '--transform=s,^\\./,package/,']
+  if (extraEvilMember) {
+    await writeFile(join(dir, 'evil.txt'), 'evil')
+    args.push('--transform=s,^package/evil\\.txt,../evil.txt,')
+  }
+  args.push('.')
+  await execFileAsync('tar', args)
+  const tgz = gzipSync(await readFile(join(dir, 'inner.tar')))
+  const { factBase, manifestSha256 } = factPayload(id, version, 'lib/index.js')
+  return {
+    id, version, tgz,
+    entrySha256: sha256Text(entryBytes),
+    manifestSha256,
+    lockEntry: {
+      version, entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
+      entrySha256: sha256Text(entryBytes), manifestSha256, packageName: `@test/${id}`,
+    },
+    factFile: factBase,
+  }
+}
+
+interface CraftPackOptions {
+  /** 替换 files[<index>] 的实际字节与清单值（sha512/fileSize 以清单为准，可制造失配）。 */
+  readonly fileContent?: ReadonlyMap<number, { readonly bytes: Buffer; readonly sha512: string; readonly fileSize: number }>
+  readonly overrides?: Partial<PackManifest>
+}
+
+/** 把插件列表打成合法 mygo-pack（清单哈希按规范键序计算）。 */
+async function craftPack(
+  root: string,
+  plugins: readonly CraftedPlugin[],
+  options: CraftPackOptions = {},
+): Promise<string> {
+  const staging = join(root, 'staging')
+  await mkdir(join(staging, 'files'), { recursive: true })
+  const files: PackManifest['files'] = []
+  for (const [index, plugin] of plugins.entries()) {
+    const override = options.fileContent?.get(index)
+    const bytes = override?.bytes ?? plugin.tgz
+    await writeFile(join(staging, 'files', `${index}.tgz`), bytes)
+    files.push({
+      path: `files/${index}.tgz`,
+      pluginId: plugin.id,
+      packageName: `@test/${plugin.id}`,
+      sha512: override?.sha512 ?? sha512Bytes(new Uint8Array(plugin.tgz)),
+      fileSize: override?.fileSize ?? plugin.tgz.length,
+    })
+  }
+  const lockPlugins: Record<string, unknown> = {}
+  for (const plugin of plugins) lockPlugins[plugin.id] = plugin.lockEntry
+  const base: Omit<PackManifest, 'manifestSha256'> = {
+    format: 'mygo-pack/v1',
+    formatVersion: 1,
+    name: 'test-pack',
+    version: '1.0.0',
+    generated: { by: 'dsh-mygo', version: '0.3.0', profile: 'web', at: '<t>' },
+    plugins: plugins.map(plugin => ({ id: plugin.id, packageName: `@test/${plugin.id}` })),
+    lockfile: { format: 'dsh.lock/v1', generated: { by: 'dsh-mygo', version: '0.3.0', profile: 'web', at: '<t>' }, plugins: lockPlugins },
+    files,
+    communityDeps: [],
+    ...options.overrides,
+  }
+  const manifest = { ...base, manifestSha256: computePackManifestSha256(base) }
+  await writeFile(join(staging, 'mygo-pack.json'), JSON.stringify(manifest, null, 2) + '\n')
+  const tarPath = join(root, 'pack.tar')
+  await execFileAsync('tar', ['-cf', tarPath, '-C', staging, '--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', 'mygo-pack.json', 'files'])
+  const out = join(root, 'out.mygo-pack')
+  await writeFile(out, gzipSync(await readFile(tarPath)))
+  return out
+}
+
+/** 造一个已装 profile：n 个无关插件的 store 目录 + lockfile，返回 lockfile 快照。 */
+async function seedProfile(home: string, ids: readonly string[]): Promise<{ readonly lockPath: string; readonly lockSha256: string }> {
+  const paths = resolveMygoPaths('web', { DSH_HOME: home })
+  const plugins: Record<string, unknown> = {}
+  for (const id of ids) {
+    const version = '1.0.0'
+    const { manifest, factBase, manifestSha256 } = factPayload(id, version, 'lib/index.js')
+    const entryBytes = 'export const apply = () => {}\n'
+    const dir = join(paths.packagesRoot, id, version)
+    await mkdir(join(dir, 'lib'), { recursive: true })
+    await writeFile(join(dir, 'lib', 'index.js'), entryBytes)
+    await writeFile(join(dir, 'package.json'), JSON.stringify({
+      name: `@test/${id}`, version, main: 'lib/index.js',
+      dsh: { mygo: { formatVersion: 1, id, version, entry: 'lib/index.js', depends: {}, breaks: {}, requires: {}, core: '*' } },
+    }, null, 2))
+    await writeFile(join(dir, '.mygo-package.json'), JSON.stringify({
+      ...factBase, manifestSha256, installedAt: '2026-08-12T00:00:00.000Z',
+    }, null, 2))
+    plugins[id] = {
+      version, entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
+      entrySha256: sha256Text(entryBytes), manifestSha256, packageName: `@test/${id}`,
+    }
+  }
+  await mkdir(paths.lockfileDir, { recursive: true })
+  const lockPath = join(paths.lockfileDir, 'web.dsh.lock.json')
+  await writeFile(lockPath, JSON.stringify({
+    format: 'dsh.lock/v1',
+    generated: { by: 'dsh-mygo', version: '0.3.0', profile: 'web', at: '<t>' },
+    plugins,
+  }, null, 2))
+  return { lockPath, lockSha256: sha256Text(await readFile(lockPath, 'utf8')) }
+}
+
+async function listStoreIds(home: string): Promise<string[]> {
+  try {
+    return await readdir(join(home, 'mygo', 'packages'))
+  } catch {
+    return []
+  }
+}
+
+function packCtx(home: string): { readonly paths: ReturnType<typeof resolveMygoPaths>; readonly profile: string; readonly managerVersion: string } {
+  return { paths: resolveMygoPaths('web', { DSH_HOME: home }), profile: 'web', managerVersion: '0.3.0' }
+}
+
+/** 最小 tar 头（合成成员 flood 用；解析器不校验 checksum）。 */
+function tarHeader(name: string, typeflag = '0'): Buffer {
+  const header = Buffer.alloc(512)
+  header.write(name.slice(0, 100), 0, 'utf8')
+  header.write('0000644\0', 100, 'utf8')
+  header.fill(0x20, 148, 156)
+  header.write(typeflag, 156, 'utf8')
+  let sum = 0
+  for (const byte of header) sum += byte
+  header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 'utf8')
+  return header
+}
+
+describe('installPluginPack 还原路径加固（修复批次 1：A4/A18/A7/A5-pack）', () => {
+  let root: string
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'mygo-pack-restore-'))
+  })
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('A4-验收1：合法 pack 还原到已装 2 个无关插件的非空 profile → ok，store 仅新增 pack 插件，lockfile 合并', async () => {
+    const home = join(root, 'home')
+    const { lockPath } = await seedProfile(home, ['x-one', 'x-two'])
+    const calc = await craftPlugin(join(root, 'calc-src'), 'calc')
+    const outcome = await installPluginPack(packCtx(home), await craftPack(root, [calc]))
+    expect(outcome.ok).toBe(true)
+    expect(await listStoreIds(home)).toEqual(['calc', 'x-one', 'x-two'])
+    const lock = JSON.parse(await readFile(lockPath, 'utf8')) as { plugins: Record<string, { version?: string }> }
+    expect(Object.keys(lock.plugins)).toEqual(['x-one', 'x-two', 'calc'])
+    expect(lock.plugins.calc?.version).toBe('1.0.0')
+    expect(lock.plugins['x-one']?.version).toBe('1.0.0')
+    expect(lock.plugins['x-two']?.version).toBe('1.0.0')
+  })
+
+  it('A4-验收2（故障注入）：第 2 个 vendored 文件哈希不匹配 → pack-hash-mismatch，store 零新增，lockfile 字节不变', async () => {
+    const home = join(root, 'home')
+    const { lockPath, lockSha256 } = await seedProfile(home, ['x-one'])
+    const good = await craftPlugin(join(root, 'good-src'), 'a-good')
+    const bad = await craftPlugin(join(root, 'bad-src'), 'z-bad')
+    const tampered = Buffer.from(bad.tgz)
+    tampered[0] = (tampered[0] ?? 0) ^ 0xff
+    const packPath = await craftPack(root, [good, bad], {
+      fileContent: new Map([[1, {
+        bytes: tampered,
+        sha512: sha512Bytes(new Uint8Array(bad.tgz)), // 清单哈希保持原值 → 失配
+        fileSize: bad.tgz.length,
+      }]]),
+    })
+    const outcome = await installPluginPack(packCtx(home), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-hash-mismatch')
+    expect(outcome.report.conflicts[0]?.constraint.target).toBe('files/1.tgz')
+    expect(await listStoreIds(home)).toEqual(['x-one'])
+    expect(sha256Text(await readFile(lockPath, 'utf8'))).toBe(lockSha256)
+  })
+
+  it('A4-原子性：第 2 个插件提取失败（tar 拒收 .. 成员）→ 回滚第 1 个已装插件，store/lockfile 零残留', async () => {
+    const home = join(root, 'home')
+    const { lockPath, lockSha256 } = await seedProfile(home, ['x-one'])
+    const good = await craftPlugin(join(root, 'good-src'), 'a-good')
+    const bad = await craftPlugin(join(root, 'bad-src'), 'z-bad', '1.0.0', true)
+    const packPath = await craftPack(root, [good, bad])
+    const outcome = await installPluginPack(packCtx(home), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('store 安装失败')
+    expect(outcome.report.summary).toContain('z-bad')
+    expect(await listStoreIds(home)).toEqual(['x-one'])
+    expect(sha256Text(await readFile(lockPath, 'utf8'))).toBe(lockSha256)
+  })
+
+  it('A4-预检：plugins[] 含 files[] 缺失的 id → pack-invalid（最早时机）', async () => {
+    const a = await craftPlugin(join(root, 'a-src'), 'a')
+    const packPath = await craftPack(root, [a], {
+      overrides: { plugins: [{ id: 'a', packageName: '@test/a' }, { id: 'ghost', packageName: '@test/ghost' }] },
+    })
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('不一一对应')
+    expect(outcome.report.summary).toContain('ghost')
+  })
+
+  it('A4-预检：files[] 下标与 path 错位 → pack-invalid', async () => {
+    const a = await craftPlugin(join(root, 'a-src'), 'a')
+    const b = await craftPlugin(join(root, 'b-src'), 'b')
+    // files[0] 声明 path=files/1.tgz、files[1] 声明 path=files/0.tgz：两个成员都存在
+    // （不触发成员白名单），但下标与 path 错位 → 预检拒绝。
+    const packPath = await craftPack(root, [a, b], {
+      overrides: {
+        files: [
+          { path: 'files/1.tgz', pluginId: 'a', packageName: '@test/a', sha512: 'c'.repeat(128), fileSize: 0 },
+          { path: 'files/0.tgz', pluginId: 'b', packageName: '@test/b', sha512: 'd'.repeat(128), fileSize: 0 },
+        ],
+      },
+    })
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('files[0].path')
+  })
+
+  it('A18：空 pack 还原到空 profile → pack-invalid', async () => {
+    const outcome = await installPluginPack(packCtx(join(root, 'home-empty')), await craftPack(root, []))
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('不含任何插件')
+  })
+
+  it('A18：空 pack 还原到非空 profile → pack-invalid（lockfile 字节不变）', async () => {
+    const home = join(root, 'home-nonempty')
+    const { lockPath, lockSha256 } = await seedProfile(home, ['x-one'])
+    const outcome = await installPluginPack(packCtx(home), await craftPack(root, []))
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('不含任何插件')
+    expect(sha256Text(await readFile(lockPath, 'utf8'))).toBe(lockSha256)
+  })
+
+  it('A7：外层 pack gzip 解压超限 → pack-invalid（summary 含上限值）', async () => {
+    const bomb = gzipSync(Buffer.alloc(MAX_GUNZIP_BYTES + 1024 * 1024))
+    const packPath = join(root, 'bomb.mygo-pack')
+    await writeFile(packPath, bomb)
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain(String(MAX_GUNZIP_BYTES))
+  })
+
+  it('A7：外层 pack 成员数超限 → pack-invalid（summary 含上限值）', async () => {
+    const parts: Buffer[] = []
+    for (let index = 0; index <= MAX_TAR_MEMBERS; index += 1) parts.push(tarHeader(`f/${index}.tgz`))
+    parts.push(Buffer.alloc(1024))
+    const packPath = join(root, 'flood.mygo-pack')
+    await writeFile(packPath, gzipSync(Buffer.concat(parts)))
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain(String(MAX_TAR_MEMBERS))
+  })
+
+  it('A7：内层 vendored tgz 解压超限 → pack-invalid（预检路径同样受上限）', async () => {
+    const a = await craftPlugin(join(root, 'a-src'), 'a')
+    const bomb = gzipSync(Buffer.alloc(MAX_GUNZIP_BYTES + 1024 * 1024))
+    const packPath = await craftPack(root, [a], {
+      fileContent: new Map([[0, {
+        bytes: bomb,
+        sha512: sha512Bytes(new Uint8Array(bomb)),
+        fileSize: bomb.length,
+      }]]),
+    })
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain(String(MAX_GUNZIP_BYTES))
+  })
+
+  it('A5-pack：畸形 JSON 清单 → pack-invalid 带文件指针（不抛异常）', async () => {
+    const staging = join(root, 'staging')
+    await mkdir(join(staging, 'files'), { recursive: true })
+    await writeFile(join(staging, 'mygo-pack.json'), '{oops\n')
+    const tarPath = join(root, 'bad.tar')
+    await execFileAsync('tar', ['-cf', tarPath, '-C', staging, '--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner', 'mygo-pack.json', 'files'])
+    const packPath = join(root, 'bad-json.mygo-pack')
+    await writeFile(packPath, gzipSync(await readFile(tarPath)))
+    const outcome = await installPluginPack(packCtx(join(root, 'home')), packPath)
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('pack-invalid')
+    expect(outcome.report.summary).toContain('不是合法 JSON')
+    expect(outcome.report.summary).toContain('mygo-pack.json')
   })
 })
