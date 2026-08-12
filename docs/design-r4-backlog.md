@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | B20 | **pack 清单 schema + 校验器（纯函数）** | `mygo-pack/v1`：format/formatVersion/name/version/generated/plugins/lockfile/files/communityDeps/manifestSha256；规范键序语义 JSON；manifestSha256 重算校验；B10 校验 files[].path；formatVersion 不兼容 → pack-invalid | B1（manifest 词汇已落地） | T38/T41 前置 |
 | B21 | **确定性打包器（buildPack）** | 从 store 重打包 vendored tarball（排除 `.mygo-package.json`；`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` + `gzip -n`）；固定成员序（manifest 首位 + `files/<i>.tgz` 按 files[] 下标）；清单 generated.at 归一 `<t>`；工具能力探测（不支持 --sort=name 则报错） | B20 | T32 |
-| B22 | **解包 + 前置校验（extractPack）** | `tar -tf` 成员清单 B10 校验 + 未知成员拒绝；清单自校验；vendored 文件 sha512+fileSize 校验（先于 store 放置）；staging 隔离目录 | B20 | T34/T35/T38/T41 前置 |
+| B22 | **解包 + 前置校验（extractPack）** | 自实现最小 tar 头部解析（node:zlib gunzip + 512B ustar 遍历，typeflag 仅 regular/dir）做成员清单 B10 校验 + 未知成员拒绝（防换行文件名绕过逐行白名单，design-r4 §3）；清单自校验；vendored 文件 sha512+fileSize 校验（先于 store 放置）；staging 隔离目录 | B20 | T34/T35/T38/T41 前置 |
 | B23 | **pack 安装器（installPack）** | requests=pack.plugins；pins=pack.lockfile（source 'pack'）；候选=本地 tarball 解析（source 'pack'）；离线禁 registry；`installPackageToStore` 本地 tarball 变体（localTarball + expectedSha512Hex，integrity 透传）；lockfile source 保持 'npm'；加载期校验不变 | B5/B20/B21/B22 | T33/T37/T39/T42 |
 | B24 | **pack 报告扩展** | ResolutionReport.code + `pack-invalid`/`pack-hash-mismatch`；scope + `pack`；ConstraintRef.kind + `pack`；全量冲突一次输出；失败原子性（staging/store 零残留） | B7/B22/B23 | T34/T35/T38/T39/T41/T42 |
 

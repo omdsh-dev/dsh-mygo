@@ -101,10 +101,21 @@
 
 1. **清单自校验**：读取 `mygo-pack.json`，重算 `manifestSha256`（规范键序
    JSON，D-A5）比对；失败 → `pack-invalid`（scope pack），指认清单。
-2. **成员清单前置校验**：`tar -tf` 解析全部成员名，B10 规则（禁 `..`、绝对
-   路径、盘符；design-r3 §3.4/C8）逐一校验；**未知成员拒绝**（不在
-   `mygo-pack.json` 声明集合内的成员即恶意/损坏）；通过后才解包到 staging
-   （`paths.tmpDir` 下隔离随机子目录，复用既有 staging 纪律）。
+2. **成员清单前置校验**：**直接解析 tar 头部**（`node:zlib` gunzip +
+   512 字节 ustar header 遍历，typeflag 仅允许 regular file/dir）得到精确
+   成员名，B10 规则（禁 `..`、绝对路径、盘符；design-r3 §3.4/C8）逐一校验；
+   **未知成员拒绝**（不在 `mygo-pack.json` 声明集合内的成员即恶意/损坏）；
+   通过后才用系统 tar 解包到 staging（`paths.tmpDir` 下隔离随机子目录，
+   复用既有 staging 纪律）。
+
+   **为什么不用 `tar -tf` 文本解析（新决策，实证）**：文件名可合法包含换行，
+   实测 GNU tar `tar -tf` 会把一个成员打印成两行——逐行白名单可被
+   `mygo-pack.json\nfiles/0.tgz` 这类名字绕过（每行都在白名单内，实际成员
+   却不在）。自实现最小 tar 头部遍历零新增依赖（任务书 §3 允许自实现最小
+   读写），且只负责成员清单预检；实际解包仍用系统 tar（其 `..`/符号链接
+   防护作为第二道防线，见下）。探针：`tar -tf` 换行成员 od 输出
+   `./\n./evil\nname.txt\n`（1 成员 → 2 行）；自实现解析同一 pack 精确还原
+   `package/`、`package/lib/`、`package/lib/index.js`。
 3. **vendored 哈希校验（先于一切 store 写入，mrpack 先例）**：对每个
    `files[]` 条目计算 sha512 + fileSize，与清单比对；任一失配 →
    `pack-hash-mismatch`（scope pack），报告**指认具体文件**（files[].path）。
