@@ -15,6 +15,7 @@
 | T47 | 自举（吃自己的狗粮） | ✅ | pack 含 `dsh-mygo-cli` 自身 → restore 后 R store 入口与仓库源码 sha256 逐字节一致 → R 中 CLI 再次 `pack` 成功；R 无 `mygo` 参数启动不阻塞 |
 | T48 | 报告渲染快照 | ✅ | resolve-failed / pack-invalid / pack-hash-mismatch / manifest-invalid / service 报告 / `--json` 信封 / 用法文本：字节级断言 |
 | T49 | 被动语义 | ✅ | 非 `mygo` 首 token（`--port 8080`）→ 无输出、无退出、不阻塞 profile |
+| T49b | 管理器缺失报错文案 | ✅ | 无 pluginManager 时 `pack` → 退出码 1；文案明确含「需要 mygo 管理器」+「请确认 mygo 已安装并挂载」；无裸 stack（无 `\n    at `） |
 
 ## 2. 实测数据（本次验证轮实测）
 
@@ -74,7 +75,31 @@
 | C2 | `dsh.mygo.cli` 违反 B1 ID_RE | 用 `dsh-mygo-cli`（Phase A 定案；实现一致） |
 | C3 | 入库不完整 | 本轮前置完成：B19+ 源码/tests/PATCHES.md/发布流水线全量入库（提交见 §6） |
 | C4 | 官方插件配置窗口无安装/挂载 | Phase C 放行后实测（未放行，不预判） |
-| C5 | requires.pluginManager 不可行（实现轮） | Rev-A2：requires 置空 + 惰性解析；零新增语义 |
+| C5 | requires.pluginManager 不可行（实现轮） | Rev-A2：requires 置空 + 惰性解析；零新增语义；**用户追认（2026-08-12 Phase B 裁定），程序违规追记见 §4.1** |
+
+### 4.1 程序违规追记（C5 / Rev-A2）
+
+- **违规**：C5 是对已放行 Phase A 设计的偏离（requires.pluginManager → requires 置空 +
+  惰性解析）。按纪律（第三轮以来「先停后裁」），此类偏离应先冲突上报、等待用户裁决，
+  而非直接以 Rev-A2 修订后动工。本轮实现时直接修订落地，未先停。
+- **用户处置（2026-08-12 Phase B 裁定）**：方向正确，追认有效；程序问题记录在案，
+  **下不为例**——「先停后裁」规矩在顺风局同样适用。
+- **纠正规则**：后续任何对已放行设计（含 Phase A/B 设计文档）的偏离，MUST 先以冲突
+  上报形式停下等待明确裁决，再动工。
+
+### 4.2 C5 附带代价与报错文案要求（已覆盖）
+
+requires 置空后记录两笔代价，并落实报错要求：
+
+1. **作者愿景维度**：CLI 在 manifest 层面不再声明对管理器的依赖关系
+   （`requires: {}`）——作者愿景中「manifest 声明服务依赖」少了一笔；以惰性解析
+   换取零新增治理语义，裁定可接受。
+2. **失败形态退化**：管理器缺失时，失败从「挂载期 INACTIVE + 结构化报告」退化为
+   「命令执行期报错」（退出码 1 + `no-profile` 错误信封）。可接受，但报错文案
+   **MUST 明确说出「需要 mygo 管理器」**，禁止让用户看到裸 stack。
+3. **覆盖证据**：`src/index.ts` 的 `profileOf` 文案含
+   「需要 mygo 管理器（pluginManager 服务缺失或未配置 profile）…请确认 mygo 已安装并
+   挂载（dsh-mygo 行）后重试」；T49b 断言文案包含且无 `\n    at ` 裸栈行。
 
 ## 5. 未核实项 / 候选功能
 

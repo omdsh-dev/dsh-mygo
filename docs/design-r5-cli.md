@@ -485,7 +485,7 @@ forwarder）与 mygo 自身 API（`/api/mygo/*`、pluginManager）。
 | C2 | 暂定 id `dsh.mygo.cli` vs B1 | 含 `.` 违反 `ID_RE`，直接 manifest-invalid | 用 `dsh-mygo-cli` | 待用户确认 |
 | C3 | dsh-mygo 仓库入库不完整 | 234db44 未含 B19+ 源码与 T32-T43（§0.1） | Phase B 前补齐同步（含 PATCHES.md 与 tests），全部入库 | 待确认（状态问题） |
 | C4 | 官方插件配置窗口无安装/挂载 | 0811 ui-plugin-config 全包检索无 install/mount；host RPC 无 plugin 面 | Phase C 按「部分能跑/不能跑」如实记录；官方侧需要时登记 EXT-2 | 待 Phase C 实测 |
-| C5 | requires.pluginManager 不可行（实现轮发现） | B6 政策闸无「要求管理器自身」表达；manager provides 仅 `service:mygo-core`，requires 键禁 `service:` 前缀 | requires 置空 + `ctx.get('pluginManager')` 惰性解析（§1.2）；零新增语义 | 已按 Rev-A2 落地 |
+| C5 | requires.pluginManager 不可行（实现轮发现） | B6 政策闸无「要求管理器自身」表达；manager provides 仅 `service:mygo-core`，requires 键禁 `service:` 前缀 | requires 置空 + `ctx.get('pluginManager')` 惰性解析（§1.2）；零新增语义；报错文案 MUST 含「需要 mygo 管理器」且无裸 stack（cli-verification §4.2） | 用户追认（2026-08-12）；程序违规追记于 cli-verification §4.1 |
 
 ## 10. 修订记录
 
@@ -493,6 +493,7 @@ forwarder）与 mygo 自身 API（`/api/mygo/*`、pluginManager）。
 |---|---|---|
 | Rev-A1 | 2026-08-12 | 初版：Phase A 设计说明（命令面/报告渲染/注册机制/init 产物/离线纪律/webui 调研），交付后等待放行 |
 | Rev-A2 | 2026-08-12 | Phase B 实现轮修订：① requires 置空（C5，B6 无法表达管理器自身）；② 参数解析改手写最小实现（任务书允许；0811 pnpm 非提升布局）；③ init 复制 `.agents/skills`（7）+ `pnpm-lock.yaml`（verify-self-contained 硬性要求）；④ T44 语义载荷口径 = plugins 段（generated 为安装侧事实）；⑤ mygo `package/index.ts` 补导出 ServiceConflictEntry/ServiceResolutionReport 类型（CLI 渲染器消费） |
+| Rev-A3 | 2026-08-12 | Phase B 裁定后收尾：C5 用户追认 + 程序违规追记（cli-verification §4.1）；附带代价记录（§4.2）；管理器缺失报错文案明确「需要 mygo 管理器」且无裸 stack（src/index.ts + T49b） |
 
 ---
 

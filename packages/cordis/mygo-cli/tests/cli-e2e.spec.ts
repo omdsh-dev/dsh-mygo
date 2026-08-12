@@ -254,4 +254,23 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
     expect(q.stdout.text()).toBe('')
     expect(q.stderr.text()).toBe('')
   })
+
+  it('T49b：管理器缺失时报错文案明确「需要 mygo 管理器」且无裸 stack', async () => {
+    const exit: { value?: number } = {}
+    const ctx = {
+      get: (key: string): unknown => {
+        if (key === 'cmdlineArgs') return { get: () => ['pack'] }
+        if (key === 'appExit') return (code: number): void => { exit.value = code }
+        return undefined
+      },
+    }
+    const out = capture()
+    const code = await invokeCli(ctx, ['pack'])
+    expect(code).toBe(1)
+    expect(exit.value).toBe(1)
+    expect(out.stdout.text()).toBe('')
+    expect(out.stderr.text()).toContain('需要 mygo 管理器')
+    expect(out.stderr.text()).toContain('请确认 mygo 已安装并挂载')
+    expect(out.stderr.text()).not.toContain('\n    at ')
+  })
 })

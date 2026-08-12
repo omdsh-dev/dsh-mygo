@@ -84,7 +84,11 @@ function profileOf(ctx: CliHost): { readonly ok: true; readonly profile: string 
   const manager = ctx.get<{ readonly config?: { readonly profile?: string } }>('pluginManager')
   const profile = manager?.config?.profile
   if (profile === undefined || profile === '') {
-    return { ok: false, reason: '无法确定当前 profile：pluginManager 服务缺失或未配置 profile' }
+    return {
+      ok: false,
+      reason: '需要 mygo 管理器（pluginManager 服务缺失或未配置 profile），无法确定当前 profile：'
+        + '请确认 mygo 已安装并挂载（dsh-mygo 行）后重试',
+    }
   }
   return { ok: true, profile }
 }
