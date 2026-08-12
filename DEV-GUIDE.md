@@ -338,7 +338,9 @@ plugin-template@2da8230 资产生成骨架，写盘前过 B1 + `checkTemplateAli
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
 - 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。
-- vendor 修改必须登记 `vendor/PATCHES.md`（当前 #1：Fiber `get epoch()`）。
+- vendor 修改必须登记 `vendor/PATCHES.md`（当前零补丁：PATCHES #1 Fiber
+  `get epoch()` 已于 2026-08-12 移除并回滚三文件，vendor 零残留；此后 vendor
+  修改仍须先登记再动工，host 补丁提案走 `patches/` 两轨分开）。
 - 冻结文档（expected-behavior / design-r3 / two-tier）只追加修订记录。
 
 ## 12. 发布与安装形态
