@@ -120,6 +120,12 @@ P-0 桩化后该用例离线确定（本套件在 fetch 拦截下全绿）。
   `package-manager.ts` 安装后对整包目录执行 `detectUndeclaredBundles`，
   打包期只带 lib 属 fixture 绕开（见 §1 F1 行）。
 
+> 更新（2026-08-12，design-r4 落地）：KF-1 已在 design-r4 §9 裁决并实现
+> （B26/T43）——保持整包扫描，分类规则修正为按 npm 元数据声明分类（含插件
+> 自身包名与子路径归一）；F1 语料已恢复含 src 全量打包，本条目从「待裁决」
+> 转「已裁决」，代码定位行号随实现演进（bundle-scan.ts 现含
+> `dshCoreSpecifiers` / `packageNameOfSpecifier`）。
+
 ## 5. 验收口径
 
 - S1-S9（T21-T31）全绿：17/17。

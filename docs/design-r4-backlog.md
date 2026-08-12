@@ -54,3 +54,18 @@ B20 → B21/B22 → B24 → B23（含 T33 立即跑，不推迟）→ B25/B26 �
 - `dsh mygo pack` / `dsh mygo restore` CLI（design-r4 §8）；
 - pack 签名/信任链（本轮无密钥基础设施，manifestSha256 仅防意外损坏/篡改可
   检出，不防恶意重建；记录为后续候选）。
+
+## 实现完成状态（Phase B/C 落地，2026-08-12）
+
+| # | 状态 | 验收证据 |
+|---|---|---|
+| B20 | ✅ | pack schema + 校验器（src/package/pack.ts）；单元 pack.spec（10 用例） |
+| B21 | ✅ | buildPluginPack 确定性（T32 两次产物 sha256 相等；30.5/31.7ms） |
+| B22 | ✅ | 自实现 tar 头部预检（防换行文件名绕过；T35/T41 + 单元） |
+| B23 | ✅ | installPluginPack 离线求解 + 本地 tarball store 安装（T33/T37/T39/T42） |
+| B24 | ✅ | 报告扩展 scope pack / pack-invalid / pack-hash-mismatch（report.ts） |
+| B25 | ✅ | communityDeps 收割 + 告警 + 双存在（T36/T40） |
+| B26 | ✅ | KF-1 分类修正（bundle-scan.ts + package-manager 调用 + T43） |
+| B27 | ✅ | PluginPackageManager.buildPack/installPack + 类型导出（index.ts） |
+| B28 | ✅ | T32-T43 全绿 + 全量 60 文件/606 用例 + EB 13/13 + typecheck |
+| B29 | ✅ | plugin-pack-verification.md（本验证轮文档） |

@@ -72,8 +72,8 @@
     "sha512": hex, "fileSize": number,
     "integrity"?: string          // packer 侧 lockfile 记录值（若有），透传保语义载荷
   } ],
-  "communityDeps": [ { "name": string, "version": string,
-                       "peerDependencies"?: {}, "dependencies"?: {} } ]
+  "communityDeps": [ { "name": string, "range": string,
+                       "kind": "dependency" | "peerDependency", "owner": string } ]
 }
 ```
 
@@ -105,8 +105,8 @@
    512 字节 ustar header 遍历，typeflag 仅允许 regular file/dir）得到精确
    成员名，B10 规则（禁 `..`、绝对路径、盘符；design-r3 §3.4/C8）逐一校验；
    **未知成员拒绝**（不在 `mygo-pack.json` 声明集合内的成员即恶意/损坏）；
-   通过后才用系统 tar 解包到 staging（`paths.tmpDir` 下隔离随机子目录，
-   复用既有 staging 纪律）。
+   通过后实现直接把已校验成员写入 staging（外容器解包自实现，内存级精确
+   控制；系统 tar 仍用于内层插件 tarball 的 store 安装，见 D-A3 步骤 5）。
 
    **为什么不用 `tar -tf` 文本解析（新决策，实证）**：文件名可合法包含换行，
    实测 GNU tar `tar -tf` 会把一个成员打印成两行——逐行白名单可被
@@ -166,7 +166,8 @@
 **打包侧（新决策）**：
 
 - vendored tarball 由 store 目录确定性重打包：`tar --sort=name --mtime=@0
-  --owner=0 --group=0 --numeric-owner` + `gzip -n`；**排除
+  --owner=0 --group=0 --numeric-owner` + gzip 无时间戳（实现用 Node
+  `zlib.gzipSync`，gzip 头不嵌文件名/时间戳，与 `gzip -n` 同归一语义）；**排除
   `.mygo-package.json`**（其 `installedAt` 是时间戳，包含会使重打包字节漂移）。
 - 成员序固定：`mygo-pack.json` 第一位，`files/*` 由 tar `--sort=name`
   按路径字典序排列（确定性；files[] 数组的 `(id, version)` 排序与成员顺序
@@ -244,9 +245,11 @@ RT3 测试覆盖：`..`、绝对路径、盘符、符号链接子路径、未知
 
 规则：
 
-- `@deepseek-ai/*` import 的 specifier 若 ∈ package.json 的
-  `dependencies / peerDependencies / optionalDependencies`，或 ∈ 已声明
-  `bundles` → **不算未声明**（普通 npm 依赖，two-tier §9 只读观察）；
+- `@deepseek-ai/*` import 的 specifier（按包名归一：scoped 取前两段、普通取
+  第一段；子路径 import 归到其包名）若 ∈ package.json 的
+  `dependencies / peerDependencies / optionalDependencies`，或 = 插件自身
+  npm 包名（自身子路径引用），或 ∈ 已声明 `bundles` → **不算未声明**
+  （普通 npm 依赖/自引用，two-tier §9 只读观察）；
 - 否则（无任何声明）→ 维持硬错，文案带上 specifier 与建议：「在 npm 依赖/
    peer 声明该包，或经 dsh.mygo.bundles 声明内嵌包」。
 
@@ -308,4 +311,7 @@ RT3 测试覆盖：`..`、绝对路径、盘符、符号链接子路径、未知
 
 | 修订编号 | 日期 | 原因 |
 |---|---|---|
-| （Phase B 落地后追加） | — | — |
+| Rev-P1 | 2026-08-12 | communityDeps 字段定型为 `{name, range, kind, owner}`：pack 构建面（store）不含 node_modules，社区依赖只记录 package.json 声明区间与来源，不虚构已装版本。 |
+| Rev-P2 | 2026-08-12 | 外容器解包改为自实现（已预读内存 + 精确成员集校验后写盘），系统 tar 仅保留给内层插件 tarball 的 store 安装（既有路径）；gzip 用 Node zlib.gzipSync（与 gzip -n 同归一语义）。 |
+| Rev-P3 | 2026-08-12 | KF-1 分类规则补充：specifier 按包名归一（子路径归包名），插件自身 npm 包名（自引用）不属未声明；F1 src 全量打包实证（src 自引用 + 已声明 peers 通过）。 |
+| Rev-I1 | 2026-08-12 | Phase B/C 落地：B20-B29 全部完成，T32-T43（24 项）全绿，全量 60 文件/606 用例 + EB 13/13 + typecheck；详见 plugin-pack-verification.md。 |
