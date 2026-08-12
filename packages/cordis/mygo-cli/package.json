@@ -35,7 +35,7 @@
     "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
   },
   "dependencies": {
-    "@deepseek-ai/dsh-mygo": "^0.0.1-rc.1"
+    "@deepseek-ai/dsh-mygo": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1"
@@ -44,7 +44,7 @@
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-mygo": "workspace:^",
     "@deepseek-ai/dsh-mygo-api": "workspace:^",
-    "schemastery": "workspace:^",
+    "schemastery": "^3.18.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
