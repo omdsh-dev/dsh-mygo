@@ -94,6 +94,8 @@ let text = fs.readFileSync(path, 'utf8')
 const inserts = [
   ['    "packages/typert/generator/tests/fixtures/**",\n    "packages/cordis/mygo/tests/fixtures/**",',
    '    "packages/typert/generator/tests/fixtures/**",'],
+  ['    "packages/cordis/mygo/tests/fixtures/**",\n    "packages/cordis/mygo/tests/**",\n    "packages/cordis/mygo/test/**",\n    "packages/cordis/mygo-cli/tests/**",\n    "packages/core/mygo-api/tests/**",',
+   '    "packages/cordis/mygo/tests/fixtures/**",'],
   ['    { "path": "./packages/core/scope" },\n    { "path": "./packages/core/mygo-api" },',
    '    { "path": "./packages/core/scope" },' ],
   ['    { "path": "./packages/self-modification/repository-plugin" },\n    { "path": "./packages/cordis/mygo" },',
