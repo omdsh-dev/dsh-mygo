@@ -106,7 +106,7 @@
       "entry": "lib/index.js",
       "depends": {},
       "breaks": {},
-      "requires": { "pluginManager": "^0.0.1-rc.1" },
+      "requires": {},
       "core": "^0.0.1-rc.1",
       "loader": { "id": "standard", "range": "^1.0.0" },
       "environment": { "platform": "cli" }
@@ -115,10 +115,13 @@
 }
 ```
 
-- `requires.pluginManager`：CLI 需要运行期读取当前 profile（管理器行配置
-  `PluginManagerServiceConfig.profile`，service.ts:69），走 requires 政策闸
-  （design-r3 §2.1「对能力有需求 → 只写 requires」）。服务版本 = 提供者插件
-  manifest 版本；Phase B 用 B6 政策闸与自举测试验证该服务名与版本语义。
+- `requires: {}`（Rev-A2 修正）：CLI 需要运行期读取当前 profile（管理器行配置
+  `PluginManagerServiceConfig.profile`，service.ts:69），但 B6 政策闸无法表达
+  「要求管理器自身」——管理器 provides 只有 `service:mygo-core`
+  （lifecycle.ts:2152/3732），而 requires 键禁止 `service:` 前缀
+  （manifest-v2.ts 规范），声明 `pluginManager` 会导致 CLI 永久 INACTIVE。
+  修正：requires 置空，CLI 在 apply 内以 `ctx.get('pluginManager')` 惰性解析，
+  缺失时输出操作错误（退出码 1），零新增治理语义（§9 C5）。
 - `depends: {}`：CLI 对 `dsh-mygo` 库 API（buildPack/installPack）是 npm 包依赖
   （dependencies），不是插件图 depends；不声明包级硬耦合（§2.1 选用指引）。
 - `core`：按 npm rc.1 锚点（B11 归一：`@deepseek-ai/dsh` rc.1 ↔ `^0.0.1-rc.1`）。
@@ -344,9 +347,10 @@ dsh --profile <profile> mygo
 └── init <name> [--id <id>] [--dir <dir>] [--json]
 ```
 
-- 参数解析：复用 dsh 既有 commander（`^15.0.0`，apps/cli 同款），禁新增第三方依赖
-  （任务书 §0）；`passThroughOptions`/`allowUnknownOption` 仅用于非 `mygo` 场景的
-  被动返回。
+- 参数解析：**手写最小解析器**（Rev-A2 修正；任务书 §0 明确允许「参数解析手写最小
+  实现或复用 dsh 既有 CLI 框架」）。理由：commander 未出现在 0811 顶层
+  node_modules（pnpm 非提升布局），复用会引入测试环境的解析依赖；手写解析器
+  零第三方依赖，命令面固定为三个子命令 + 有限旗标，风险可控。
 - 执行：`pack`/`restore` 直接调用 `PluginPackageManager.buildPack/installPack`
   （pack.ts:476/653；package-manager.ts:546/554），PackContext 由
   `resolveMygoPaths(profile)` + 当前管理器版本（`MYGO_MANAGER_VERSION`）构造；
@@ -371,10 +375,16 @@ invariant}.ts`、`tests/{harness.ts,plugin.spec.ts}`、`scripts/{prepare.mjs,
 verify-self-contained.mjs}`、`tsconfig{,.base,.prepare,.prepare.dts,.vitest}.json`、
 `tsdown{,.prepare}.config.ts`、`vitest.config.ts`、`pnpm-workspace.yaml`、
 `.gitignore`、`README.md`、`AGENTS.md`、`LICENSE`、`docs/dsh-plugin-contracts.md`、
-`patches/README.md`、`src/README.md`、`tests/README.md`、`tests/snapshots/README.md`。
+`patches/README.md`、`src/README.md`、`tests/README.md`、`tests/snapshots/README.md`、
+`.agents/skills/**`（7 个 skill 目录，各含 SKILL.md + agents/openai.yaml）、
+`pnpm-lock.yaml`。
 
-不复制：`pnpm-lock.yaml`（内容与包身份绑定，生成后需用户 `pnpm install` 重建；
-不复制即不伪造锁文件）；`.git`（新仓库由用户初始化）。
+> Rev-A2 修正：`verify-self-contained.mjs`（2da8230）硬性要求 `.agents/skills`
+> 恰有 7 个 skill 且 `pnpm-lock.yaml` 存在，两者缺一骨架即无法通过模板自检；
+> 故 init 复制上述两项（`pnpm-lock.yaml` 内容与包身份绑定，用户 `pnpm install`
+> 时会重建，复制仅为满足模板自检契约）。
+
+不复制：`.git`（新仓库由用户初始化）。
 
 身份替换点（照 2da8230 README「Create your plugin」清单）：package.json 的
 `name/description`、`src/index.ts` 的 `name`、`cordis.patch.yml` 的 row id/name、
@@ -456,7 +466,7 @@ forwarder）与 mygo 自身 API（`/api/mygo/*`、pluginManager）。
 
 | # | 场景 | 断言要点 |
 |---|---|---|
-| T44 | CLI E2E 往返 | 真实语料 profile → `mygo pack` → 空 profile `mygo restore --profile` → lockfile 语义载荷逐字节一致（RT1 口径经 CLI 复验）；全程无网 |
+| T44 | CLI E2E 往返 | 真实语料 profile → `mygo pack` → 空 profile `mygo restore --profile` → lockfile **plugins 语义载荷**逐字节一致（RT1 口径经 CLI 复验；`generated` 为安装侧事实，D-A5）；全程无网 |
 | T45 | 篡改 pack 经 CLI restore | 非零退出 + 指认文件（`files/0.tgz`）+ human 报告可见；`--json` 直通 `pack-hash-mismatch` |
 | T46 | init 产物 | 通过 B1（零 problems）+ 模板对齐（aligned）+ 可 pack/restore；id/name 替换正确 |
 | T47 | 自举 | §1.3 步骤 5：`dsh --profile R mygo pack` 成功；R 无 `mygo` 参数时 profile 正常启动 |
@@ -475,12 +485,14 @@ forwarder）与 mygo 自身 API（`/api/mygo/*`、pluginManager）。
 | C2 | 暂定 id `dsh.mygo.cli` vs B1 | 含 `.` 违反 `ID_RE`，直接 manifest-invalid | 用 `dsh-mygo-cli` | 待用户确认 |
 | C3 | dsh-mygo 仓库入库不完整 | 234db44 未含 B19+ 源码与 T32-T43（§0.1） | Phase B 前补齐同步（含 PATCHES.md 与 tests），全部入库 | 待确认（状态问题） |
 | C4 | 官方插件配置窗口无安装/挂载 | 0811 ui-plugin-config 全包检索无 install/mount；host RPC 无 plugin 面 | Phase C 按「部分能跑/不能跑」如实记录；官方侧需要时登记 EXT-2 | 待 Phase C 实测 |
+| C5 | requires.pluginManager 不可行（实现轮发现） | B6 政策闸无「要求管理器自身」表达；manager provides 仅 `service:mygo-core`，requires 键禁 `service:` 前缀 | requires 置空 + `ctx.get('pluginManager')` 惰性解析（§1.2）；零新增语义 | 已按 Rev-A2 落地 |
 
 ## 10. 修订记录
 
 | 修订编号 | 日期 | 原因 |
 |---|---|---|
 | Rev-A1 | 2026-08-12 | 初版：Phase A 设计说明（命令面/报告渲染/注册机制/init 产物/离线纪律/webui 调研），交付后等待放行 |
+| Rev-A2 | 2026-08-12 | Phase B 实现轮修订：① requires 置空（C5，B6 无法表达管理器自身）；② 参数解析改手写最小实现（任务书允许；0811 pnpm 非提升布局）；③ init 复制 `.agents/skills`（7）+ `pnpm-lock.yaml`（verify-self-contained 硬性要求）；④ T44 语义载荷口径 = plugins 段（generated 为安装侧事实）；⑤ mygo `package/index.ts` 补导出 ServiceConflictEntry/ServiceResolutionReport 类型（CLI 渲染器消费） |
 
 ---
 

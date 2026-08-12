@@ -1,0 +1,71 @@
+{
+  "name": "@dsh-external/dsh-mygo-cli",
+  "description": "mygo managed-plugin CLI: pack/restore/init as a dsh app plugin (design-r5)",
+  "version": "0.0.1-rc.1",
+  "type": "module",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dsh-external/dsh-mygo.git"
+  },
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/types/**/*.d.ts",
+    "assets/plugin-template"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-mygo": "^0.0.1-rc.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-mygo": "workspace:^",
+    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "schemastery": "workspace:^",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "dsh": {
+    "mygo": {
+      "formatVersion": 1,
+      "id": "dsh-mygo-cli",
+      "version": "0.0.1-rc.1",
+      "entry": "lib/index.js",
+      "depends": {},
+      "breaks": {},
+      "requires": {},
+      "core": "^0.0.1-rc.1",
+      "loader": {
+        "id": "standard",
+        "range": "^1.0.0"
+      },
+      "environment": {
+        "platform": "cli"
+      }
+    }
+  }
+}

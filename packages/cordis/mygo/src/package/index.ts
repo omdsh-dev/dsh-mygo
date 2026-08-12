@@ -59,7 +59,15 @@ export type { RegistryClientOptions, RegistryMetadata, RegistryVersionInfo } fro
 export { findDependsCycle, resolve, sortCandidates, topologicalOrder } from './resolver.ts'
 export type { PluginCandidate, ResolvedPlugin, ResolverInput, VersionConstraints, ResolveOutcome } from './resolver.ts'
 export { sortConstraints, suggestActions } from './report.ts'
-export type { CandidateRejection, ConflictEntry, ConstraintRef, CycleEntry, ResolutionReport } from './report.ts'
+export type {
+  CandidateRejection,
+  ConflictEntry,
+  ConstraintRef,
+  CycleEntry,
+  ResolutionReport,
+  ServiceConflictEntry,
+  ServiceResolutionReport,
+} from './report.ts'
 export { integritySha512Hex, sha512File } from './lockfile.ts'
 export { FineEpochRegistry, captureExports, fineEpoch, preGate } from './fine-epoch.ts'
 export type { PreGateResult, ProviderSymbolSnapshot } from './fine-epoch.ts'

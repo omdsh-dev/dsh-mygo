@@ -1,0 +1,26 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "paths": {
+      "@deepseek-ai/dsh-mygo": [
+        "../mygo/src/index.ts"
+      ],
+      "@deepseek-ai/cordis": [
+        "../../../vendor/cordis/src"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../mygo"
+    }
+  ]
+}

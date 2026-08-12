@@ -41,8 +41,8 @@ export interface PackedPackage {
 /** 打包一个语料包为 npm tarball（真实内容；注入 mygo overlay，不改仓库）。 */
 export async function packCorpus(plugin: CorpusPlugin): Promise<PackedPackage> {
   const work = await mkdtemp(join(tmpdir(), 'mygo-e2e-pack-'))
-  const packsDir = join(tmpdir(), 'mygo-e2e-packs')
-  await mkdir(packsDir, { recursive: true })
+  // 每次调用独立暂存目录：多套件并行时避免对同一 tgz 路径的写写竞争。
+  const packsDir = await mkdtemp(join(tmpdir(), 'mygo-e2e-packs-'))
   try {
     const pkgRoot = join(work, 'package')
     await mkdir(pkgRoot, { recursive: true })
@@ -65,7 +65,11 @@ export async function packCorpus(plugin: CorpusPlugin): Promise<PackedPackage> {
       }
     }
     const real = JSON.parse(await readFile(join(plugin.dir, 'package.json'), 'utf8')) as Record<string, unknown>
+    // 打包时以语料登记的 registry 身份为准（name = plugin.name）：真实仓库改名/漂移
+    // 时保持 corpus 契约（lockfile.packageName 与内层 package.json 身份一致）。
+    real.name = plugin.name
     if (plugin.versionOverride !== undefined) real.version = plugin.versionOverride
+    if (plugin.packageJsonOverlay !== undefined) Object.assign(real, plugin.packageJsonOverlay)
     if (plugin.manifestOverlay !== undefined) {
       const dsh = (real.dsh as Record<string, unknown> | undefined)
         ? { ...(real.dsh as Record<string, unknown>) }

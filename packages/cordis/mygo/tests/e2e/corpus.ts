@@ -38,6 +38,11 @@ export interface CorpusPlugin {
   readonly packParts?: readonly string[]
   /** 打包期版本覆盖（用于同一包发布多版本的 registry 形态；不改仓库文件）。 */
   readonly versionOverride?: string
+  /**
+   * 打包期 package.json 顶层覆盖（用于清理本地 monorepo 的 workspace:^ 区间等
+   * 非发布形态声明；不改仓库文件）。
+   */
+  readonly packageJsonOverlay?: Record<string, unknown>
   readonly trust: 'trusted' | 'reviewed'
   readonly reviewNote: string
 }
@@ -57,8 +62,27 @@ export const CORPUS: readonly CorpusPlugin[] = [
     // KF-1 裁决（design-r4 §9）后 src 可全量打包：自身子路径 import 与已声明
     // peers 不再误伤；保持 lib 入口不变（T31 mixin 路径回归）。
     packParts: ['package.json', 'lib', 'src', 'cordis.patch.yml'],
+    // 根载包依赖为本地 monorepo workspace:^（非发布形态）；打包期归一为 semver
+    // 占位，避免 communityDeps 区间校验把 pack 判无效。
+    packageJsonOverlay: {
+      dependencies: {
+        'cordis-fabric': '*',
+        'cordis-fabric-api': '*',
+        'cordis-fabric-dsh': '*',
+      },
+    },
+    // fixture 修正（2026-08-12）：fabric 仓库当日拆为三包后，根载包 package.json
+    // 不再声明 main/dsh.mygo；按语料机制注入 overlay（不改仓库；id 保持语料契约）。
+    manifestOverlay: {
+      id: 'dsh-cordis-fabric',
+      version: '0.0.2',
+      entry: 'lib/index.js',
+      core: '*',
+      depends: {},
+      requires: {},
+    },
     trust: 'trusted',
-    reviewNote: '朋友的 fabric/mixin 插件仓库（lib 产物 + node_modules 齐备）；trusted 直接运行',
+    reviewNote: '朋友的 fabric/mixin 插件仓库（lib 产物 + node_modules 齐备）；trusted 直接运行；2026-08-12 拆包后根载包缺 manifest，注入 overlay',
   },
   {
     category: 'F2',
