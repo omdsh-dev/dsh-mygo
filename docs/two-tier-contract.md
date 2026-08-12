@@ -74,5 +74,6 @@ mygo 结构化报告不覆盖其失败。
 | 修订编号 | 日期 | 原因 |
 |---|---|---|
 | Rev-I1 | 2026-08-11 | design-r3 实现轮（B1-B18）落地确认：Rev-1..6 的契约修订由 B11（harvester 信号归一：engines.dsh / cordis peer / @deepseek-ai/dsh-tools peer → core 区间，EXT-1 锚定）、B12（双存在检测：npm 嵌套 + requires/service: 需求，告警级）、B15（legacy `dsh.plugin.json` 只读映射）、B16（官方模板对齐工具）承接；三原则（只读/告警级/永不阻断）在实现中保持。 |
+| Rev-I2 | 2026-08-12 | **mygo-api 生态接口边界登记**（正文 §7-§13 不改）：契约层（`@deepseek-ai/dsh-mygo-api`，Cordis-free）/ 实现层（`@deepseek-ai/dsh-mygo`）/ 外部消费者三边关系——外部工具 SHOULD 只依赖契约层，不直触实现层；契约层与实现层同版本线同节奏（rc.1），公共类型面 semver 内只增不删。错误词汇分叉登记为候选决策 CD-1（PluginError 43 码 throw 面 vs ResolutionReport 报告面；建议倾向：挂载期/治理期失败走报告、运行时能力拒绝走 PluginError，待独立小轮裁决），详见 docs/next/2026-08-12-mygo-api-surface.md §10。 |
 
 > 正文（§7-§13）仍为 frozen 契约；实现细节以 design-r3 与实现代码为准。
