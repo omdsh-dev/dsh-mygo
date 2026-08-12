@@ -216,6 +216,15 @@ ln -sfn "$CHECKOUT/packages/cordis/mygo" "$CHECKOUT/vendor/dsh-mygo-panel/node_m
 ln -sfn "$CHECKOUT/packages/core/mygo-api" "$CHECKOUT/vendor/dsh-mygo-panel/node_modules/@deepseek-ai/dsh-mygo-api"
 echo "==> 已写入包级开发链接（mygo-cli / panel）"
 
+# ---- 5.7 checkout 根 node_modules 链接（面板 folder 安装的插件依赖解析） --------
+# 面板安装（installDeps=false）会把插件目录的 node_modules 符号链接到
+# $CHECKOUT/node_modules；mygo 生态包尚未发布，需在根 node_modules 补手工链接，
+# 否则 mygo-plugins/<id> 里的 lib 无法解析 @deepseek-ai/dsh-mygo。
+mkdir -p "$CHECKOUT/node_modules/@deepseek-ai"
+ln -sfn "$CHECKOUT/packages/cordis/mygo" "$CHECKOUT/node_modules/@deepseek-ai/dsh-mygo"
+ln -sfn "$CHECKOUT/packages/core/mygo-api" "$CHECKOUT/node_modules/@deepseek-ai/dsh-mygo-api"
+echo "==> 已写入 checkout 根 node_modules 链接（面板安装依赖解析）"
+
 # ---- 6. 记录 mygo 自身版本（供检查更新） -------------------------------------
 SELF_STATE="$DSH_HOME_DIR/mygo-self.json"
 MYGO_VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo unknown)"

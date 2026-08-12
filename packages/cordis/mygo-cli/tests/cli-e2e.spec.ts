@@ -96,6 +96,11 @@ function cliCorpus(): CorpusPlugin {
     reviewNote: 'mygo CLI 插件自身（本仓库包），T47 自举语料',
     packParts: ['package.json', 'src'],
     versionOverride: '0.0.1-rc.1',
+    // 仓库包清单依赖是 workspace:^（未发布）；打包期归一为 semver 占位，
+    // 避免 communityDeps 区间校验把 pack 判无效（F1 同款处理）。
+    packageJsonOverlay: {
+      dependencies: { '@deepseek-ai/dsh-mygo': '*' },
+    },
     manifestOverlay: {
       id: 'dsh-mygo-cli',
       version: '0.0.1-rc.1',
