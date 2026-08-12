@@ -3,6 +3,10 @@
   "version": "0.1.0-rc.1",
   "description": "MyGO managed-plugin panel for the dsh web settings page (marisa slot route)",
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "publishConfig": {
     "access": "restricted"
   },
@@ -43,6 +47,10 @@
     "react-dom": "^18.2.0"
   },
   "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "verify:self-contained": "node scripts/verify-self-contained.mjs",
+    "prepare": "node build.mjs",
     "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/client.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 运行 build.mjs'); process.exit(1)}\""
   }
 }

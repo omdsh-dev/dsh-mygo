@@ -3,6 +3,10 @@
   "description": "mygo managed-plugin CLI: pack/restore/init as a dsh app plugin (design-r5)",
   "version": "0.0.1-rc.1",
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "publishConfig": {
     "access": "restricted"
   },
@@ -28,10 +32,16 @@
     "lib/index.js",
     "lib/invariant.js",
     "lib/types/**/*.d.ts",
+    "src",
     "assets/plugin-template"
   ],
   "license": "MIT",
   "scripts": {
+    "build": "tsc -b && tsdown",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "verify:self-contained": "node scripts/verify-self-contained.mjs",
+    "prepare": "node scripts/prepare.mjs",
     "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
   },
   "dependencies": {
@@ -41,6 +51,7 @@
     "@deepseek-ai/cordis": "^4.0.1-rc.1"
   },
   "devDependencies": {
+    "@types/node": "^22.20.0",
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-mygo": "workspace:^",
     "@deepseek-ai/dsh-mygo-api": "workspace:^",

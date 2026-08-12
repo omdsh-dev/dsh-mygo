@@ -4,5 +4,6 @@ lib/
 coverage/
 .DS_Store
 *.log
+*.tgz
 .oxlintrc.contract-*.json
 oxlint-contract-*

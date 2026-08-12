@@ -10,7 +10,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const checkout = process.env.DSH_CHECKOUT ?? '/home/rosen/.dsh/source/current'
+// 安装形态下本包位于 checkout/vendor/dsh-mygo-panel，../../ 即 checkout 根；
+// 不写死工作站绝对路径（verify:self-contained 约束）。
+const checkout = process.env.DSH_CHECKOUT ?? fileURLToPath(new URL('../../', import.meta.url)).replace(/\/$/, '')
 console.log(`build-mygo-panel: using dsh checkout ${checkout}`)
 
 const link = join(HERE, 'node_modules')
