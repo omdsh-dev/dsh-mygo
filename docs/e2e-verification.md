@@ -95,6 +95,11 @@ P-0 桩化后该用例离线确定（本套件在 fetch 拦截下全绿）。
    package.json 为 `@deepseek-ai/dsh-cc-tui`；已修正。
 3. **dsh-voice-chat 语料缺口**：真实仓库不在本地 90 快照；按 F4 服务契约构造
    占位提供者 fixture（打包期注入，不改仓库），T24/S1 使用并如实记录。
+4. **T22 真实图单候选（闸口轮 M1 假绿）**：破坏求解器排序确定性（Math.random
+   参与比较）后 T19 变红但 T22 仍绿——真实图每 id 仅单一候选版本，
+   sortCandidates 未被调用。修复：voice-chat fixture 增补 0.1.0 历史版本
+   （registry 多候选）+ T22 增补「真实依赖图整体 resolve() 两次字节级断言」；
+   破坏复验变红、回滚后恢复绿。
 
 ### design-gap：0（无冲突上报）
 
