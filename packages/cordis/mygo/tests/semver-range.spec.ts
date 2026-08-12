@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { isValidRange, matchesVersionRange } from '@deepseek-ai/dsh-mygo'
+import { compareCodePoints, compareVersions, parseVersion } from '@deepseek-ai/dsh-mygo'
 
 describe('semver range matcher', () => {
   it('matches any-range and exact pins', () => {
@@ -96,5 +97,34 @@ describe('semver range matcher', () => {
     expect(isValidRange('>=1.0.0 <2.0.0')).toBe(true)
     expect(isValidRange('not-a-range')).toBe(false)
     expect(isValidRange('')).toBe(false)
+  })
+})
+
+describe('locale 确定性（修复批次 4 / review#1 A11 + review#2 A17）', () => {
+  it('预发布标识符比较为码点序，与 locale 无关（tr 陷阱用例）', () => {
+    const upper = parseVersion('1.0.0-I')
+    const lower = parseVersion('1.0.0-i')
+    const upperA = parseVersion('1.0.0-A')
+    const lowerA = parseVersion('1.0.0-a')
+    expect(upper).toBeDefined()
+    expect(lower).toBeDefined()
+    expect(upperA).toBeDefined()
+    expect(lowerA).toBeDefined()
+    // 陷阱存在性证据：ICU 显式 locale 下 'i' vs 'I' 顺序相反（tr=1 / en=-1）；
+    // 'ı'（U+0131）不是合法 semver 标识符（parser 拒收），仅作 locale 陷阱演示，
+    // 不参与版本比较。
+    expect('i'.localeCompare('I', 'tr')).toBe(1)
+    expect('i'.localeCompare('I', 'en')).toBe(-1)
+    expect(parseVersion('1.0.0-ı')).toBeUndefined()
+    // 我们的比较器与 locale 无关：码点序恒定（I 0x49 < i 0x69；A 0x41 < a 0x61）。
+    expect(compareCodePoints('I', 'i')).toBeLessThan(0)
+    expect(compareCodePoints('A', 'a')).toBeLessThan(0)
+    const ordered = ['1.0.0-i', '1.0.0-a', '1.0.0-I', '1.0.0-A']
+      .map(version => ({ version, parsed: parseVersion(version) as NonNullable<ReturnType<typeof parseVersion>> }))
+      .sort((left, right) => compareVersions(left.parsed, right.parsed))
+      .map(entry => entry.version)
+    expect(ordered).toEqual(['1.0.0-A', '1.0.0-I', '1.0.0-a', '1.0.0-i'])
+    // 排序结果不依赖 localeCompare：比较器无 locale 面，任何 locale 下字节级一致。
+    expect(JSON.stringify(ordered)).toBe(JSON.stringify(['1.0.0-A', '1.0.0-I', '1.0.0-a', '1.0.0-i']))
   })
 })

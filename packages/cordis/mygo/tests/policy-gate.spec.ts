@@ -296,3 +296,46 @@ describe('键处理镜像（修复批次 2 / review#1 A1）', () => {
     expect(report?.conflicts[0]?.service).toBe('toString')
   })
 })
+
+describe('Proxy 记录面完整性（修复批次 4 / review#1 A2 + review#2 A11）', () => {
+  it('symbol 键与 defineProperty/has/ownKeys/getOwnPropertyDescriptor 路径均入访问记录；不新增拒绝行为', async () => {
+    const h = harness()
+    const raw: Record<string, unknown> = { ok: true }
+    let wrapped: Record<string | symbol, unknown> | undefined
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['svc'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', raw)
+        },
+      },
+    }))
+    h.definitions.set('consumer', fixture('consumer', {
+      hooks: {
+        activate(env) {
+          wrapped = env.get<Record<string | symbol, unknown>>('svc')
+          const svc = wrapped as Record<string | symbol, unknown>
+          void svc?.[Symbol.for('mark')]
+          void ('ok' in svc)
+          void Object.getOwnPropertyDescriptor(svc, 'ok')
+          void Reflect.ownKeys(svc)
+          Object.defineProperty(svc, 'extra', { value: 1, enumerable: true, configurable: true, writable: true })
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    await h.engine.install(source('consumer'))
+    const log = h.engine.providedAccessLog()
+    const symbolName = String(Symbol.for('mark'))
+    // 记录完整性：symbol 键与四个补充路径的访问全部可见。
+    expect(log.some(record => record.pluginId === 'consumer' && record.symbol === symbolName)).toBe(true)
+    expect(log.some(record => record.pluginId === 'consumer' && record.symbol === 'ok')).toBe(true)
+    expect(log.some(record => record.pluginId === 'consumer' && record.symbol === 'extra')).toBe(true)
+    // 未新增拒绝行为（约束 3 对照证据）：defineProperty 转发生效（原始对象被改写），
+    // set 拒绝仍是既有内层提供方包装面语义（非本批新增）。
+    expect(raw.extra).toBe(1)
+    expect(() => {
+      (wrapped as Record<string, unknown>).ok = 2
+    }).toThrow()
+  })
+})

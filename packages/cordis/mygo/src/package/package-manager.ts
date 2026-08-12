@@ -15,7 +15,7 @@ import { constraintsOf, type PluginManifestV2 } from './manifest-v2.ts'
 import { computeMountOrder, type MountEdge } from './mount-order.ts'
 import { installPackageToStore, type InstalledPackage } from './package-store.ts'
 import { lockfilePath, packageDir, type MygoPaths } from './paths.ts'
-import { fetchRegistryMetadata, type RegistryVersionInfo } from './registry-client.ts'
+import { fetchRegistryMetadata } from './registry-client.ts'
 import { resolve, type PluginCandidate, type ResolveOutcome } from './resolver.ts'
 import { extractPlugin, loadPluginEntry } from './entry-loader.ts'
 import type { ResolutionReport } from './report.ts'
@@ -180,7 +180,27 @@ export class PluginPackageManager {
     if (chosen === undefined) {
       return { ok: false, report: { code: 'resolve-failed', summary: '求解结果缺少目标插件', cycles: [], conflicts: [] } }
     }
-    const versionInfo = idCandidates.find(entry => entry.version === chosen.version) as RegistryVersionInfo
+    // 修复批次 4（review#2 A5）：消除 as-cast——pin 指向 registry 不存在的版本
+    // （候选集/已装集有该版本时求解可过）→ 显式 resolve-failed，MUST NOT
+    // 以 undefined 继续（原 TypeError）。
+    const versionInfo = idCandidates.find(entry => entry.version === chosen.version)
+    if (versionInfo === undefined) {
+      return {
+        ok: false,
+        report: {
+          code: 'resolve-failed',
+          summary: `求解选定的版本 ${chosen.version} 不在 registry 候选集中（profile 钉定指向不存在版本？）`,
+          cycles: [],
+          conflicts: [{
+            plugin: canonicalId,
+            constraint: { kind: 'pin', target: canonicalId, range: chosen.version },
+            chain: [canonicalId],
+            candidates: [{ version: chosen.version, rejected: ['registry 元数据无该版本'] }],
+            actions: ['调整 profile 钉定版本或解除钉定', '选择 registry 现存版本重新安装'],
+          }],
+        },
+      }
+    }
     const installedPackage = await installPackageToStore(this.options.paths, versionInfo, {
       ...(this.options.token === undefined ? {} : { token: this.options.token }),
       ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),

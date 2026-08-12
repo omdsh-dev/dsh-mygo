@@ -890,6 +890,11 @@ export class LifecycleEngine {
   /**
    * A15 消费方访问包装：为 (消费者, capability) 提供身份稳定的记录代理。
    * 每次 get 校验缓存是否仍包装当前提供值——提供者换代后自动换新包装（自愈）。
+   * 修复批次 4（review#1 A2 / review#2 A11）：traps 补全口径 = 记录完整性，
+   * 不是拦截（DG-3(a) 裁决 Proxy 定位 = 访问记录面）——defineProperty /
+   * has / ownKeys / getOwnPropertyDescriptor 与 symbol 键访问同样入记录；
+   * 本包装面不新增任何拒绝行为（set/delete 的既有冻结语义由内层提供方包装面
+   * 维持，defineProperty 等转发路径与批次 2 完全一致）。
    */
   trackConsumerAccess(value: unknown, capability: string, consumerId: string): unknown {
     if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return value
@@ -900,12 +905,31 @@ export class LifecycleEngine {
     }
     const cached = perCapability.get(capability)
     if (cached !== undefined && cached.value === value) return cached.wrapper
+    const record = (property: string | symbol): void => {
+      const name = typeof property === 'symbol' ? String(property) : property
+      if (name === 'then') return
+      this.providedAccessRecords.push({ capability, symbol: name, at: Date.now(), pluginId: consumerId })
+    }
     const wrapper = new Proxy(value, {
       get: (target, property, receiver) => {
-        if (typeof property === 'string' && property !== 'then') {
-          this.providedAccessRecords.push({ capability, symbol: property, at: Date.now(), pluginId: consumerId })
-        }
+        record(property)
         return Reflect.get(target, property, receiver)
+      },
+      has: (target, property) => {
+        record(property)
+        return Reflect.has(target, property)
+      },
+      getOwnPropertyDescriptor: (target, property) => {
+        record(property)
+        return Reflect.getOwnPropertyDescriptor(target, property)
+      },
+      ownKeys: (target) => {
+        for (const key of Reflect.ownKeys(target)) record(key)
+        return Reflect.ownKeys(target)
+      },
+      defineProperty: (target, property, attributes) => {
+        record(property)
+        return Reflect.defineProperty(target, property, attributes)
       },
     })
     perCapability.set(capability, { value, wrapper })

@@ -215,7 +215,7 @@ function installOrder(packed: readonly PackedPackage[]): readonly PackedPackage[
     }
     out.push(item)
   }
-  for (const item of [...packed].sort((a, b) => a.plugin.id.localeCompare(b.plugin.id))) visit(item)
+  for (const item of [...packed].sort((a, b) => (a.plugin.id < b.plugin.id ? -1 : a.plugin.id > b.plugin.id ? 1 : 0))) visit(item)
   return out
 }
 

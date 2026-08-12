@@ -9,6 +9,7 @@
  */
 
 import { deriveOrders } from './order.ts'
+import { compareCodePoints } from './semver-range.ts'
 import type {
   ConflictIssue,
   PlanState,
@@ -277,10 +278,11 @@ function addProducer(
 }
 
 function byId(left: PluginDeclarationInput, right: PluginDeclarationInput): number {
-  return left.id.localeCompare(right.id)
+  // 修复批次 4 / A11+A17：码点序（locale 无关确定性），替换 localeCompare。
+  return compareCodePoints(left.id, right.id)
 }
 
 function byIssue(left: ConflictIssue, right: ConflictIssue): number {
-  return left.code.localeCompare(right.code)
-    || JSON.stringify(left.details).localeCompare(JSON.stringify(right.details))
+  return compareCodePoints(left.code, right.code)
+    || compareCodePoints(JSON.stringify(left.details), JSON.stringify(right.details))
 }

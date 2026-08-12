@@ -279,15 +279,17 @@ export function resolve(input: ResolverInput): ResolveOutcome {
     const pin = input.pins?.get(id)
     if (pin !== undefined) {
       const pinned = list.find(candidate => candidate.version === pin.version)
-      list = [{
-        version: pin.version,
-        ...(pinned === undefined ? {} : { constraints: pinned.constraints, provides: pinned.provides }),
-        ...(pinned === undefined
-          ? { constraints: { depends: {}, breaks: {}, core: '*' } }
-          : {}),
-        source: pin.source ?? 'profile',
-        pinned: true,
-      }]
+      // 修复批次 4（review#2 A5/A8 口径）：钉定版本不在候选源中时 MUST NOT
+      // 编造零约束候选——候选集置空，报告阶段产出 kind:'pin' 冲突与具体原因。
+      list = pinned === undefined
+        ? []
+        : [{
+            version: pin.version,
+            ...(pinned.constraints === undefined ? {} : { constraints: pinned.constraints }),
+            ...(pinned.provides === undefined ? {} : { provides: pinned.provides }),
+            source: pin.source ?? 'profile',
+            pinned: true,
+          }]
     }
     const request = input.requests.get(id)
     if (request?.range !== undefined) {
@@ -425,11 +427,40 @@ export function resolve(input: ResolverInput): ResolveOutcome {
   const conflicts: ConflictEntry[] = []
   for (const id of order) {
     const candidates = candidatesById.get(id) ?? []
+    const pin = input.pins?.get(id)
+    const request = input.requests.get(id)
     const allRejections = candidates.map(candidate => ({
       version: candidate.version,
       rejected: [...(rejectionLog.get(`${id}@${candidate.version}`) ?? [])],
     })).filter(entry => entry.rejected.length > 0)
     if (allRejections.length === 0 && candidates.length > 0) continue
+    if (pin !== undefined) {
+      // 修复批次 4（review#2 A5/A8）：钉定失败 → constraint.kind:'pin'，
+      // 原因具体化（不在候选源 / 不满足声明区间 / 约束冲突），不再落
+      // kind:'core' 兜底（design-r3 §2.4-2「报告 constraint.kind: pin」）。
+      const reasons: string[] = []
+      const existedInSources = (input.candidates.get(id) ?? []).some(candidate => candidate.version === pin.version)
+        || input.installed.get(id)?.version === pin.version
+      if (!existedInSources) reasons.push(`profile 钉定 ${pin.version} 不在候选源（registry/store/pack）中`)
+      if (request?.range !== undefined && !matchesVersionRange(pin.version, request.range)) {
+        reasons.push(`profile 钉定 ${pin.version} 不满足声明区间 ${request.range}`)
+      }
+      reasons.push(...(rejectionLog.get(`${id}@${pin.version}`) ?? []))
+      conflicts.push({
+        plugin: id,
+        constraint: { kind: 'pin', target: id, range: pin.version },
+        chain: findChain(roots, id, edges),
+        candidates: [{
+          version: pin.version,
+          rejected: reasons.length > 0 ? [...new Set(reasons)] : ['没有任何候选版本'],
+        }],
+        actions: [
+          `调整 profile 钉定版本（当前 ${pin.version}）或解除钉定`,
+          `提供满足声明区间的候选版本`,
+        ],
+      })
+      continue
+    }
     const first = candidates[0]
     const constraints = (first === undefined ? undefined : constraintsOf(id, first)) ?? {
       depends: {},

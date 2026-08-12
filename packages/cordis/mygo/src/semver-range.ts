@@ -88,6 +88,22 @@ export function compareVersions(left: ParsedVersion, right: ParsedVersion): numb
   return comparePrerelease(left.prerelease, right.prerelease)
 }
 
+/**
+ * 码点序字符串比较（修复批次 4 / review#1 A11 + review#2 A17）：
+ * 与 locale 无关的确定性比较，替换 localeCompare（ICU 默认 locale 会让
+ * 预发布标识符排序跨环境漂移，如 'i' vs 'I' 在 tr/en 下顺序相反）。
+ * semver 标识符为 [0-9A-Za-z-]（BMP 内），逐码点比较即可。
+ */
+export function compareCodePoints(left: string, right: string): number {
+  const length = Math.min(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const a = left.charCodeAt(index)
+    const b = right.charCodeAt(index)
+    if (a !== b) return a - b
+  }
+  return left.length - right.length
+}
+
 /** Semver prerelease ordering: absent > present; numeric identifiers sort before alphanumeric. */
 function comparePrerelease(left: readonly string[], right: readonly string[]): number {
   if (left.length === 0 && right.length === 0) return 0
@@ -109,7 +125,7 @@ function comparePrerelease(left: readonly string[], right: readonly string[]): n
     } else if (bNumeric) {
       return 1
     } else {
-      const diff = a.localeCompare(b)
+      const diff = compareCodePoints(a, b)
       if (diff !== 0) return diff
     }
   }

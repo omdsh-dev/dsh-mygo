@@ -81,3 +81,34 @@ describe('profile pins', () => {
     expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join()).toContain('service:voice')
   })
 })
+
+  it('修复批次 4（A5/A8）：pin 版本不在候选源 → resolve-failed（kind pin，不编造零约束候选）', () => {
+    const outcome = resolve({
+      requests: new Map([['A', {}]]),
+      candidates: new Map([['A', [candidate('1.0.0')]]]),
+      installed: new Map(),
+      coreVersion: '0.0.1-rc.1',
+      pins: new Map([['A', { version: '2.0.0' }]]),
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.code).toBe('resolve-failed')
+    expect(outcome.report.conflicts[0]?.constraint.kind).toBe('pin')
+    expect(outcome.report.conflicts[0]?.constraint.target).toBe('A')
+    expect(outcome.report.conflicts[0]?.constraint.range).toBe('2.0.0')
+    expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join('')).toContain('不在候选源')
+  })
+
+  it('修复批次 4（A8）：pin 与声明区间冲突 → constraint.kind pin（T39 口径，design-r3 §2.4-2）', () => {
+    const outcome = resolve({
+      requests: new Map([['A', { range: '^1.0.0' }]]),
+      candidates: new Map([['A', [candidate('1.0.0')]]]),
+      installed: new Map(),
+      coreVersion: '0.0.1-rc.1',
+      pins: new Map([['A', { version: '2.0.0' }]]),
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.conflicts[0]?.constraint.kind).toBe('pin')
+    expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join('')).toContain('不满足声明区间 ^1.0.0')
+  })

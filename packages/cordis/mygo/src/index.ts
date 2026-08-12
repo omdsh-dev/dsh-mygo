@@ -49,7 +49,7 @@ export {
   type CompatibilityPlugin,
   type CompatibilitySet,
 } from './compatibility.ts'
-export { isValidRange, matchesVersionRange } from './semver-range.ts'
+export { compareCodePoints, compareVersions, isValidRange, matchesVersionRange, parseVersion } from './semver-range.ts'
 export { LifecycleEngine } from './lifecycle.ts'
 export { wrapProvidedValue } from './lifecycle.ts'
 export type { ProvidedAccessRecord } from './lifecycle.ts'

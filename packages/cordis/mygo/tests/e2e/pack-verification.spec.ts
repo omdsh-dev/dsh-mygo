@@ -399,6 +399,8 @@ describe('T38/T39/T41/T42 失败语义', () => {
     if (outcome.ok) return
     expect(outcome.report.code).toBe('resolve-failed')
     expect(outcome.report.scope).toBe('pack')
+    // 修复批次 4（review#2 A8 / 任务 4.5）：kind 口径按验证报告 item 8 修正为 'pin'。
+    expect(outcome.report.conflicts[0]?.constraint.kind).toBe('pin')
   }, 60_000)
 
   it('T41 files[].path 逃逸 → pack-invalid', async () => {
