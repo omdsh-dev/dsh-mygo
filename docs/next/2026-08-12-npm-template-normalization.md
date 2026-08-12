@@ -61,9 +61,11 @@
 
 ## 4. 待决策（不属本轮实现）
 
-1. 官方 main 的「DSH host 补丁」契约是否与 dsh-dev 守则并存：模板允许以
-   自包含 diff 形式向 host 维护者提交变更，不写 checkout；dsh-dev 当前守则
-   禁止任何 host 变更表达。若采纳，PATCHES #1 类变更可走该通道，需用户裁决。
+1. ~~官方 main 的「DSH host 补丁」契约是否与 dsh-dev 守则并存~~ ——
+   **已裁决（2026-08-12，用户选 (b)）：采纳官方语义**。落地动作：
+   AGENTS.md 措辞精确化为「零写入 / 禁 apply，允许 host 补丁提案」；
+   patches/README 转为官方双契约 + dsh-dev 执行约束；模板资产同步
+   87acac8（7 文件逐字节一致）；vendor/PATCHES.md 明确只登记已落地修改。
 2. 框架包完全 standalone 转换（根 pnpm workspace、去掉 checkout 相对
    references、verify 恢复到官方严格口径）——即 AGENTS.md 例外 #2/#5 的
    收口轮。

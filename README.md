@@ -95,9 +95,11 @@ packages/cordis/mygo-cli/    CLI 扩展插件（pack/restore/init + 报告渲染
 vendor/dsh-mygo-panel/       Web 面板扩展（/api/mygo/* + settings.section）
 vendor/cordis-alias/         开发态 @deepseek-ai/cordis 别名（0810 checkout 用）
 extension/mygo-rdb/          外部注册表存储扩展（RegistryStore 契约）
+patches/                     DSH host 补丁提案 / 依赖补丁契约（官方语义，不 apply）
 scripts/publish-mygo.mjs     发布流水线（dry-run 门禁）
 install.sh                   源码 checkout 安装器
 docs/                        设计/验证/备忘录（见下）
+AGENTS.md                    仓库级规则补充（npm SDK / 包级规范 / 提交纪律）
 ```
 
 ## 文档地图
