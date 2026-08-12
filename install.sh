@@ -204,6 +204,18 @@ ln -sfn "$CHECKOUT/vendor/dsh-mygo-panel" "$FALLBACK/@dsh-external/dsh-mygo-pane
 ln -sfn "$CHECKOUT/packages/cordis/mygo-cli" "$FALLBACK/@dsh-external/dsh-mygo-cli"
 echo "==> 已写入模块回退链接：$FALLBACK"
 
+# ---- 5.6 包级开发链接（pnpm install 可能重建/清理这些 node_modules） -----------
+# mygo-cli / panel 的 lib 产物 import '@deepseek-ai/dsh-mygo'，包内 node_modules
+# 必须能解析到 checkout 源码包；pnpm install 后如被清空，重跑本脚本即恢复。
+mkdir -p "$CHECKOUT/packages/cordis/mygo-cli/node_modules/@deepseek-ai" \
+  "$CHECKOUT/vendor/dsh-mygo-panel/node_modules/@deepseek-ai"
+ln -sfn "$CHECKOUT/packages/cordis/mygo" "$CHECKOUT/packages/cordis/mygo-cli/node_modules/@deepseek-ai/dsh-mygo"
+ln -sfn "$CHECKOUT/packages/core/mygo-api" "$CHECKOUT/packages/cordis/mygo-cli/node_modules/@deepseek-ai/dsh-mygo-api"
+ln -sfn "$CHECKOUT/vendor/cordis" "$CHECKOUT/packages/cordis/mygo-cli/node_modules/@deepseek-ai/cordis"
+ln -sfn "$CHECKOUT/packages/cordis/mygo" "$CHECKOUT/vendor/dsh-mygo-panel/node_modules/@deepseek-ai/dsh-mygo"
+ln -sfn "$CHECKOUT/packages/core/mygo-api" "$CHECKOUT/vendor/dsh-mygo-panel/node_modules/@deepseek-ai/dsh-mygo-api"
+echo "==> 已写入包级开发链接（mygo-cli / panel）"
+
 # ---- 6. 记录 mygo 自身版本（供检查更新） -------------------------------------
 SELF_STATE="$DSH_HOME_DIR/mygo-self.json"
 MYGO_VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo unknown)"
