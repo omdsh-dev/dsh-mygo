@@ -1,5 +1,5 @@
 /**
- * init 骨架生成器（design-r5 §5；B16 落地）：以 plugin-template@2da8230
+ * init 骨架生成器（design-r5 §5；B16 落地）：以 plugin-template@87acac8
  * 的 vendored 资产为模板，做身份替换 + mygo 词汇增量，写盘前完成 B1 与
  * 模板对齐双重校验。全程不触网、不执行 install/prepare。
  * @module @dsh-external/dsh-mygo-cli/init

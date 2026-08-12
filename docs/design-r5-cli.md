@@ -362,8 +362,10 @@ dsh --profile <profile> mygo
 
 ### 5.1 模板来源与离线约束
 
-- 来源：`dsh-external-src/plugin-template@2da8230`（「refactor: make plugin template
-  fully self-contained」，npm 强兼容形态）。
+- 来源：`dsh-external-src/plugin-template@87acac8`（2da8230「refactor: make
+  plugin template fully self-contained」npm 强兼容形态之上，追加
+  「split patches/ contract into dependency and DSH host patches」；
+  Rev-A4）。
 - 交付方式：构建期把模板骨架 vendored 进 CLI 包 `assets/plugin-template/`（记录
   源 commit 与校验和）；运行期 `init` 只从本地资产复制 + 替换，**不触网、不执行
   install/prepare**（任务书 §2 离线纪律）。
@@ -494,6 +496,7 @@ forwarder）与 mygo 自身 API（`/api/mygo/*`、pluginManager）。
 | Rev-A1 | 2026-08-12 | 初版：Phase A 设计说明（命令面/报告渲染/注册机制/init 产物/离线纪律/webui 调研），交付后等待放行 |
 | Rev-A2 | 2026-08-12 | Phase B 实现轮修订：① requires 置空（C5，B6 无法表达管理器自身）；② 参数解析改手写最小实现（任务书允许；0811 pnpm 非提升布局）；③ init 复制 `.agents/skills`（7）+ `pnpm-lock.yaml`（verify-self-contained 硬性要求）；④ T44 语义载荷口径 = plugins 段（generated 为安装侧事实）；⑤ mygo `package/index.ts` 补导出 ServiceConflictEntry/ServiceResolutionReport 类型（CLI 渲染器消费） |
 | Rev-A3 | 2026-08-12 | Phase B 裁定后收尾：C5 用户追认 + 程序违规追记（cli-verification §4.1）；附带代价记录（§4.2）；管理器缺失报错文案明确「需要 mygo 管理器」且无裸 stack（src/index.ts + T49b） |
+| Rev-A4 | 2026-08-12 | 用户裁决采纳官方 DSH host 补丁语义（patches/README @87acac8）：模板资产基线 2da8230 → 87acac8（7 文件同步，逐字节一致）；init 产物随之携带官方双补丁契约；AGENTS.md 措辞精确化为「零写入/禁 apply，允许 host 补丁提案」；vendor/PATCHES.md 仅登记已落地修改 |
 
 ---
 
