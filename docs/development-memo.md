@@ -43,32 +43,32 @@
      prepare 能解析 workspace 类型），或把插件临时注册为 checkout workspace 包构建；
   3. 安装策略路由：按 manifest 特征自动选路（client half 无产物→build；workspace: 协议→pnpm；
      build 不可移植→prepare；宿主高级 API→透传+支持检查；实在不行→显式拒绝并给原因）。
-- **✅ 2026-08-10 已兑现第 1 层**：hostPassthrough 通用代理（tools/systemPrompt/
+- **[OK] 2026-08-10 已兑现第 1 层**：hostPassthrough 通用代理（tools/systemPrompt/
   skills/commands/httpServer）+ 外层属性访问先 `env.get` 再 host 回退（raw
   `inject` 服务不再抛 "without inject"）；ext-compat 复测 9/9 facade-service-gap
   插件 real 挂载成功，5 个 rejected-facade-gap 的宿主方法透传在 web 组合验证
   通过。宿主副作用生命周期见下（已修）。
-- **✅ 2026-08-10 修复面板 ESM 缓存**：重装同 id 插件时 Node 按 URL 缓存模块，
+- **[OK] 2026-08-10 修复面板 ESM 缓存**：重装同 id 插件时 Node 按 URL 缓存模块，
   adoptRaw 拿到旧代码；安装路径导入追加 `?mygo=<ts>` 绕过（query 会被
   fileURLToPath/相对解析剥离，import.meta.url 使用者不受影响）。
-- **✅ 2026-08-10 修复宿主副作用生命周期**：facade 对注册类宿主方法
+- **[OK] 2026-08-10 修复宿主副作用生命周期**：facade 对注册类宿主方法
   （tapIndex/registerUpgrade/registerFallback/registerProvider/context）包装，
   返回的 disposer 经 `env.hostEffect` 单独登记（插件丢弃返回值也兜底登记）；
   disable 执行 host-effect disposers（页面改写/upgrade 路由/技能 provider
   停用即恢复），普通 effect 保留以维持工具“已停用”拦截语义；enable 检测到
   曾撤销则走 HMR replace 重挂重新 apply；卸载/替换先执行 host-effect 再执行
   普通 disposers。
-- **✅ 2026-08-10 修复静态 adopt 竞态**：install 写桥接行触发 Loader 热重载 +
+- **[OK] 2026-08-10 修复静态 adopt 竞态**：install 写桥接行触发 Loader 热重载 +
   面板 adoptRaw 可能双 apply，宿主副作用重复注册（already registered）；
   adoptStatic 对同 id 同版本已 enabled 的静态行幂等返回。
-- **✅ 2026-08-10 浏览器端 client 状态门卫**：sfw/ads 类 UI 插件的可见效果在
+- **[OK] 2026-08-10 浏览器端 client 状态门卫**：sfw/ads 类 UI 插件的可见效果在
   浏览器端 client 半部；node 侧 disable 只撤 index.html 注入，client 读不到
   注入时回退本地默认（sfw 默认 enabled:true）→ WebUI 不更新。桥接生成时在
   原 client bundle（保留原注册 id）后追加状态门卫：materialize 时同步查
   `/api/mygo/plugins`，非 enabled 不调原 apply。强刷后浏览器端按 mygo 状态
   生效；已有桥接启动时自动升级。残余边界：已打开页面的实时撤销需要宿主
   client fiber 卸载能力（0 侵入做不到），刷新后必然生效。
-- **✅ 2026-08-10 安装链路通用修复**：config 校验失败给可读 schema 描述；
+- **[OK] 2026-08-10 安装链路通用修复**：config 校验失败给可读 schema 描述；
   npm install 剥全部 @deepseek-ai/*（registry 404）；adoptStatic per-id 锁
   串行化双 adopt；宿主服务冲突（Service 类插件 super 注册同名服务）包装成
   host-conflict 明确消息。
@@ -91,34 +91,34 @@
 
 ## 已知问题
 
-- **✅ 2026-08-10 已修（managed tool 演示面）**：facade `tools.register`
+- **[OK] 2026-08-10 已修（managed tool 演示面）**：facade `tools.register`
   曾丢弃 `output.render` / `output.presentationMeta` / `presentCall` /
   `presentResult`，导致 dsh-visualize 类工具的 `tool/result` meta 恒为
   null、浏览器端回退 generic 文本（卡片不渲染）。已透传三处（mygo-api
   类型 + adapter 映射 + registryToolView），回归测试
   `tool-presentation.spec`；旧 session 已落库的 null meta 无法回补，需新
   调用验证。
-- **✅ 2026-08-10 已修（bundle CLI 定位）**：BundleRail 的 checkout 此前用
+- **[OK] 2026-08-10 已修（bundle CLI 定位）**：BundleRail 的 checkout 此前用
   固定 `../../..`，在构建产物 `packages/cordis/mygo/lib` 下会解析到
   `packages/`，导致 `dsh 可执行文件不存在`。改为向上查找
   `packages/client/tsdown.client.ts` / `apps/cli/src/bin.ts` 标记
   （`resolveCheckout`）。已用真实 bundle 验证。
-- **✅ 2026-08-10 session-reader 三层格式**：`mygo/src/session-reader.ts`
+- **[OK] 2026-08-10 session-reader 三层格式**：`mygo/src/session-reader.ts`
   实现 jsonl（zstd 多帧 + chunk-run 解包）、sqlite、rdb（稠密 seq
   重映射 + torn tail）三种读取器 + `extractFields` 字段投影；设计见
   `docs/next/2026-08-10-session-persistence-formats.md`。
-- **✅ 2026-08-10 mygo-rdb 扩展插件（依赖 dogfood）**：mygo 在统一依赖图
+- **[OK] 2026-08-10 mygo-rdb 扩展插件（依赖 dogfood）**：mygo 在统一依赖图
   暴露隐式 provider（`dsh-mygo` + `service:mygo-core`）；扩展插件
   `extension/mygo-rdb` 声明 `depends service:mygo-core >=0.1.0` +
   `provides service:mygo-session-reader`，工具 `session_list` /
   `session_read` 自动识别 rdb/sqlite/jsonl 三种格式；package.json 声明
   `@deepseek-ai/dsh-mygo` 依赖以便面板链接工作区包。3080 已现场安装
   验证 capability 依赖被隐式 provider 满足。
-- **✅ 2026-08-10 host 替换 companion**：`HOST_REPLACEMENT_DEFAULTS`
+- **[OK] 2026-08-10 host 替换 companion**：`HOST_REPLACEMENT_DEFAULTS`
   （rdb→禁用 jsonl）+ `dsh.mygo.hostDisables` 声明；启用写 host 块、
   停用/卸载移除还原；staging 临时实例真实 rdb 安装/停用/启用/卸载闭环
   验证通过。
-- **✅ 2026-08-10 已修（HTTP 桥 req async iterable）**：dsh-better-sidebar
+- **[OK] 2026-08-10 已修（HTTP 桥 req async iterable）**：dsh-better-sidebar
   用 `for await (const chunk of req)` 读 body（Node IncomingMessage 语义），
   mygo `rawHttpBridge` 的 req shim 没有 `Symbol.asyncIterator` → 报
   “req is not async iterable”。已给 shim 补 async generator（yield 缓冲
@@ -132,7 +132,7 @@
   保护、syncBridgeRows 无并发守卫）或当时的面板人工操作；若再出现，先抓
   `~/.dsh/profiles/web/cordis.patch.yml`、INSTALL_DIR 清单与运行日志。
 
-- **✅ 2026-08-10 已修（原 disable 不撤销 WebUI 副作用）**：停用现在执行
+- **[OK] 2026-08-10 已修（原 disable 不撤销 WebUI 副作用）**：停用现在执行
   host-effect disposers（tapIndex 改写、upgrade 路由、技能 provider 恢复），
   保留普通 effect 以维持工具“已停用”拦截语义；启用走 HMR replace 重挂。
   已知残余边界：未列进注册白名单的宿主方法（非注册类调用）返回的副作用仍由
@@ -151,12 +151,12 @@
 （install/adopt/replace/uninstall/enable/恢复对账/plan/checkSupport/面板预检），
 新增 `compatibility-conflict` 错误码与零依赖 semver 范围匹配器；测试全绿。
 
-- **兼容性约束（requires / breaks）**：包级、版本化、纯校验不解算。✅ v1
+- **兼容性约束（requires / breaks）**：包级、版本化、纯校验不解算。[OK] v1
   - `requires`：栈内必须有满足版本的包；`breaks`：栈内不得有版本落在禁止区间的包。
     只做两个硬级别，不做 recommends/suggests 软级别；不移植 ModSolver，不选版本
     （pnpm 负责），不为 capability 引入版本制（服务 id 不带 range，
     `name@range` 错误保留）。
-  - ✅ 2026-08-10 P1 v2：Fabric 五级词汇（depends/recommends/suggests/
+  - [OK] 2026-08-10 P1 v2：Fabric 五级词汇（depends/recommends/suggests/
     conflicts/breaks）+ `depends` 硬边传递闭包（环检测、链报告、
     missing/installed-disabled/version-mismatch 状态区分）+ 软边单层警告 +
     派生 provider 冲突 + reconcile 级联禁用 + enable 预检 + 传递卸载拦截；
@@ -168,8 +168,8 @@
 - **插件间依赖**：现有 requires/provides 是服务 id 级且已有 dependents 计算
   （plan.ts），但缺面向用户的报告与停用/卸载/替换时的级联提示；下版把依赖图
   变成可解释、可检视的能力（“卸载 X 会连带停用 Y：Y requires X 提供的服务”）。
-  ✅ v1 已有约束链报告与卸载拦截；依赖图级联提示（服务级）仍待做。
-  - ✅ 2026-08-10 P2：激活求解器（`solveActivation`）——required-by 连带
+  [OK] v1 已有约束链报告与卸载拦截；依赖图级联提示（服务级）仍待做。
+  - [OK] 2026-08-10 P2：激活求解器（`solveActivation`）——required-by 连带
     enable、capability（service:/cap:）provider 确定性选择、breaks 最小
     变更消解、advisory 安装/升级建议；`plan()` 返回 actions；install
     支持 `autoResolve`；disable 新增下游保护（dependent-exists）与
@@ -177,7 +177,7 @@
     含能力时拦截）；面板错误响应带 details + 客户端错误 banner（涉及插件
     高亮、自动滚动）；设计见
     `docs/next/2026-08-10-activation-solver-v2.md`。
-  - ✅ 2026-08-10 P3 核心：bundle 轨（`BundleRail`）——profile manifest
+  - [OK] 2026-08-10 P3 核心：bundle 轨（`BundleRail`）——profile manifest
     原子读写 + `dsh plugin` CLI 转发 + patch 行解析 + companion 块 +
     统一依赖图（bridge/bundle 跨轨求解与级联）；in-box bundle 按 realpath
     排除；面板 rail 徽标与 Bundle 安装入口；设计见
@@ -187,7 +187,7 @@
 - **声明式贡献（entrypoints）作为配套通道**：静态数据（skill 根、命令、策略行等）
   无需插件代码即可贡献给扩展点，贡献随 HMR 原子撤回；需要先补包级声明式 manifest
   （`mygo.json` 或 package.json 的 `dsh.mygo` 段），key 有属主、顺序即安装序。
-  ✅ v1（package.json `dsh.mygo` 段；`mygo.json` 独立文件未做，暂不需要）。
+  [OK] v1（package.json `dsh.mygo` 段；`mygo.json` 独立文件未做，暂不需要）。
 - **验收（第一版）**：两个插件 `breaks` 冲突时，安装/启动给出可读报告并拒绝生效；
   HMR 引入冲突时保留上一好代并广播失败；静态贡献无需代码即进入
   `ctx.entrypoints.get(key)`，`dump-config`-家族命令可检视贡献集与约束集。

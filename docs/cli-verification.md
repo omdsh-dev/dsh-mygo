@@ -9,13 +9,13 @@
 
 | # | 场景 | 结果 | 断言要点 |
 |---|---|---|---|
-| T44 | CLI E2E 往返（RT1 经 CLI 复验） | ✅ | 真实语料（dsh-tool-time + zotero-wave-rag）→ `mygo pack --json` → 空 profile `mygo restore --profile cli-r --json` → lockfile **plugins 语义载荷逐字节一致**（generated 为安装侧事实，D-A5）；restore 告警可见 |
-| T45 | 篡改 pack 经 CLI restore | ✅ | 字节翻转 `files/0.tgz` → 退出码 1；`--json` 直通 `pack-hash-mismatch`；human 输出含 `✗ pack-hash-mismatch` + `  文件 files/0.tgz` |
-| T46 | init 产物 | ✅ | B1 零 problems/零 warnings + `checkTemplateAlignment aligned` + 身份替换（id/row/name）+ 7 skills + lockfile + 可被 pack/restore（还原后 R lockfile 含 `my-plugin`）；非法包名 → 2；非空目录 → 1 且零落盘 |
-| T47 | 自举（吃自己的狗粮） | ✅ | pack 含 `dsh-mygo-cli` 自身 → restore 后 R store 入口与仓库源码 sha256 逐字节一致 → R 中 CLI 再次 `pack` 成功；R 无 `mygo` 参数启动不阻塞 |
-| T48 | 报告渲染快照 | ✅ | resolve-failed / pack-invalid / pack-hash-mismatch / manifest-invalid / service 报告 / `--json` 信封 / 用法文本：字节级断言 |
-| T49 | 被动语义 | ✅ | 非 `mygo` 首 token（`--port 8080`）→ 无输出、无退出、不阻塞 profile |
-| T49b | 管理器缺失报错文案 | ✅ | 无 pluginManager 时 `pack` → 退出码 1；文案明确含「需要 mygo 管理器」+「请确认 mygo 已安装并挂载」；无裸 stack（无 `\n    at `） |
+| T44 | CLI E2E 往返（RT1 经 CLI 复验） | [OK] | 真实语料（dsh-tool-time + zotero-wave-rag）→ `mygo pack --json` → 空 profile `mygo restore --profile cli-r --json` → lockfile **plugins 语义载荷逐字节一致**（generated 为安装侧事实，D-A5）；restore 告警可见 |
+| T45 | 篡改 pack 经 CLI restore | [OK] | 字节翻转 `files/0.tgz` → 退出码 1；`--json` 直通 `pack-hash-mismatch`；human 输出含 `✗ pack-hash-mismatch` + `  文件 files/0.tgz` |
+| T46 | init 产物 | [OK] | B1 零 problems/零 warnings + `checkTemplateAlignment aligned` + 身份替换（id/row/name）+ 7 skills + lockfile + 可被 pack/restore（还原后 R lockfile 含 `my-plugin`）；非法包名 → 2；非空目录 → 1 且零落盘 |
+| T47 | 自举（吃自己的狗粮） | [OK] | pack 含 `dsh-mygo-cli` 自身 → restore 后 R store 入口与仓库源码 sha256 逐字节一致 → R 中 CLI 再次 `pack` 成功；R 无 `mygo` 参数启动不阻塞 |
+| T48 | 报告渲染快照 | [OK] | resolve-failed / pack-invalid / pack-hash-mismatch / manifest-invalid / service 报告 / `--json` 信封 / 用法文本：字节级断言 |
+| T49 | 被动语义 | [OK] | 非 `mygo` 首 token（`--port 8080`）→ 无输出、无退出、不阻塞 profile |
+| T49b | 管理器缺失报错文案 | [OK] | 无 pluginManager 时 `pack` → 退出码 1；文案明确含「需要 mygo 管理器」+「请确认 mygo 已安装并挂载」；无裸 stack（无 `\n    at `） |
 
 ## 2. 实测数据（本次验证轮实测）
 
@@ -138,7 +138,7 @@ mygo 未发布 npm：两个临时 profile（rc.1 npm 与 0811 source）均以
 官方包由 dsh 启动器 heal 回退（rc.1 走 npx 缓存、0811 走 checkout）。进程分别以
 rc.1 `dsh/lib/bin.js` 与 0811 `apps/cli/lib/bin.js`（lib 生产模式）启动。
 
-### 8.2 路线 2（主测）：npm rc.1 profile + mygo panel —— ✅ 全通（API/装载面）
+### 8.2 路线 2（主测）：npm rc.1 profile + mygo panel —— [OK] 全通（API/装载面）
 
 固化测试 T50（`packages/cordis/mygo-cli/tests/webui-spike.spec.ts`）：
 
@@ -185,7 +185,7 @@ rc.1 `dsh/lib/bin.js` 与 0811 `apps/cli/lib/bin.js`（lib 生产模式）启动
   （仅 locale/permission/ui-conversation/ui-theme + 产品/模型命名空间，无
   agent-loop/bash/web-search-deepseek——后者随 0811 窗口新增）。
 
-### 8.4 路线 3（断点坐实）：官方「插件配置」窗口调用链 —— ✅ 确认不经过 mygo
+### 8.4 路线 3（断点坐实）：官方「插件配置」窗口调用链 —— [OK] 确认不经过 mygo
 
 固化测试 T51：
 

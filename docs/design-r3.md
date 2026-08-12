@@ -428,13 +428,13 @@
 
 | 任务书章节 | 本文件 | 覆盖 |
 |---|---|---|
-| 任务一：7 条设计决策逐条裁决 + EB-D21 具体超时 + EB-D19/C4 分层 | §1.1-1.7 | ✅ |
-| 任务二：双命名空间、字段全集、原型回收、版本谓词、environment 裁决、optional/recommends、formatVersion | §2.1-2.7 | ✅ |
-| 任务三：求解器全序确定性、requires 与求解器关系、三段分工、路径安全、BOM | §3.1-3.5 | ✅ |
-| 任务四：细 epoch/前置门、Proxy 三路径与三处发布点、exports 冻结、失败策略/三态/dispose 超时、EB-D22、报告 schema | §4.1-4.6 | ✅ |
-| 任务五：收割器与 cordis↔dsh 对照表（EXT-1）、双存在、bundle 展开、legacy 迁移、模板对齐、三原则 | §5.1-5.6 | ✅ |
-| 输出：design-r3-backlog.md | 见 [design-r3-backlog.md](design-r3-backlog.md) | ✅ |
-| 测试计划合并去重 | §6（T1..T20） | ✅ |
+| 任务一：7 条设计决策逐条裁决 + EB-D21 具体超时 + EB-D19/C4 分层 | §1.1-1.7 | [OK] |
+| 任务二：双命名空间、字段全集、原型回收、版本谓词、environment 裁决、optional/recommends、formatVersion | §2.1-2.7 | [OK] |
+| 任务三：求解器全序确定性、requires 与求解器关系、三段分工、路径安全、BOM | §3.1-3.5 | [OK] |
+| 任务四：细 epoch/前置门、Proxy 三路径与三处发布点、exports 冻结、失败策略/三态/dispose 超时、EB-D22、报告 schema | §4.1-4.6 | [OK] |
+| 任务五：收割器与 cordis↔dsh 对照表（EXT-1）、双存在、bundle 展开、legacy 迁移、模板对齐、三原则 | §5.1-5.6 | [OK] |
+| 输出：design-r3-backlog.md | 见 [design-r3-backlog.md](design-r3-backlog.md) | [OK] |
+| 测试计划合并去重 | §6（T1..T20） | [OK] |
 
 ## 9. 修订记录（实现轮追加）
 

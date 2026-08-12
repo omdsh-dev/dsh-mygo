@@ -81,7 +81,7 @@ execute/outputRender/outputPresentationMeta/presentCall/presentResult；
 
 ## 实施记录（2026-08-10，A→B→C→D 已全部落地）
 
-### A. ctx.on 宿主事件桥 ✅
+### A. ctx.on 宿主事件桥 [OK]
 
 先做了一次实测修正：最小 harness 下，词汇内宿主事件（emit/waterfall/scoped/
 carrier thisArg）经 dispatch 的 real listener 是能触发的，审计原文
@@ -102,7 +102,7 @@ carrier thisArg）经 dispatch 的 real listener 是能触发的，审计原文
 - 测试 `host-event-bridge.spec.ts`（9 例：emit/waterfall/scoped/carrier/
   词汇外桥接/disable 撤销/HMR replace 撤销/once/prepend）。
 
-### B. HTTP 桥 req/res shim ✅
+### B. HTTP 桥 req/res shim [OK]
 
 `rawHttpBridge` 重写：
 - `res.pipe(source)`（dsh-stickers 的 `createReadStream().pipe(response)`）；
@@ -122,13 +122,13 @@ SSE 空闲超时关闭、statusMessage/flushHeaders + req 异步迭代）。
 200 + `image/png` + 完整 1.38MB PNG（此前贴纸不显示的断点）；sidebar
 `POST /sidebar/api/session.cwd` 返回真实业务 JSON。
 
-### C. 工具字段透传 ✅
+### C. 工具字段透传 [OK]
 
 `PluginToolDefinition` 增加 `timeoutMs` / `isConcurrencySafe` /
 `finalizeContent`；facade `tools.register` 与 `registryToolView` 透传；
 `tool-presentation.spec.ts` 覆盖（2 例）。
 
-### D. skills 发布视图保留插件声明 ✅
+### D. skills 发布视图保留插件声明 [OK]
 
 `skillProviderView` 的 list/get 改为：插件声明的 `invocation` / `source` /
 `provider` / `rank` / `resourceBase` / `path` / `metadata` 优先，缺省回退

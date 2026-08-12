@@ -47,25 +47,25 @@ integrity），体系外包注入 mygo manifest overlay 于打包期（不改仓
 
 | # | 场景 | 结果 | 证据/断言要点 |
 |---|---|---|---|
-| T21/S1 | 六类混装：安装→求解→挂载全通 | ✅ | 桥接安装 F1/F3/F4（真实 tarball+integrity）lockfile 覆盖全部桥接 id；entry 相对、sha512/fileSize 落账；桥接引擎挂载 F3/F4 全 active；直连 loader 挂载 F2/F5/F6，tools 注册齐（time/zotero_status/view_image/gh_bridge），无 ERROR |
-| T22/S2 | 真实依赖图确定性复验 | ✅ | 同一 profile 两次全新安装，lockfile 逐字节相等（generated.at 归一为安装时间戳，非求解产物）；实测 52.4ms/次 |
-| T23/S3 | 符号缺失前置门 | ✅ | 真实消费者动态访问缺失符号 → pre-gate symbol-missing + INACTIVE + policy-rejected 报告；实测 0.0059ms（5.9μs）< 1ms 预算 |
-| T24/S4 | requires 三态（F4 载体） | ✅ | 缺失→service-missing（候选集来自 B19 观测）；出现→自动激活；版本不符→mismatch + requires 报告 |
-| T25/S5 | 提供者消失 | ✅ | replace 到不提供服务版本 → 快照/观测清理 + 消费者 INACTIVE（细 epoch 记账路径） |
-| T26/S6 | dispose 悬挂 | ✅ | 永不结束 disposal → 实测 5002.6ms 超时 → dispose-abandoned 日志 + replace 完成（generation 2，回滚不阻塞） |
-| T27/S7 | exports 逃逸 | ✅ | 桥接 set 抛 TypeError + exports-frozen 日志 + 原始对象不触碰；直连原生插件 set/delete 无约束 |
-| T28/S8 | 双存在 | ✅ | dsh-cc-tui 真实 dependencies 嵌套 + vibe 服务需求 → 告警输出、不抛错 |
-| T29/S9 | 社区零阻断 | ✅ | F2 真实元数据收割（engines.dsh/cordis peer/dsh-tools peer）归一或 EXT-1 告警、绝不抛错；F2 全部直接挂载成功 |
-| T30 | F3 模板对齐 / F5 legacy 映射 / F6 bundle 展开 | ✅ | 模板 aligned；pty-windows dsh.plugin.json → id/entry 映射 + 迁移警告；dsh-101 真实 patch 展开为 entry 行 |
-| T31 | F1 mixin 真实路径 | ✅ | 真实 fabric 补丁经真实 `validatePatchStatic` 校验 + mygo mixin 引擎应用，目标行为改变（hello fabric:world）、trace 含补丁 id |
+| T21/S1 | 六类混装：安装→求解→挂载全通 | [OK] | 桥接安装 F1/F3/F4（真实 tarball+integrity）lockfile 覆盖全部桥接 id；entry 相对、sha512/fileSize 落账；桥接引擎挂载 F3/F4 全 active；直连 loader 挂载 F2/F5/F6，tools 注册齐（time/zotero_status/view_image/gh_bridge），无 ERROR |
+| T22/S2 | 真实依赖图确定性复验 | [OK] | 同一 profile 两次全新安装，lockfile 逐字节相等（generated.at 归一为安装时间戳，非求解产物）；实测 52.4ms/次 |
+| T23/S3 | 符号缺失前置门 | [OK] | 真实消费者动态访问缺失符号 → pre-gate symbol-missing + INACTIVE + policy-rejected 报告；实测 0.0059ms（5.9μs）< 1ms 预算 |
+| T24/S4 | requires 三态（F4 载体） | [OK] | 缺失→service-missing（候选集来自 B19 观测）；出现→自动激活；版本不符→mismatch + requires 报告 |
+| T25/S5 | 提供者消失 | [OK] | replace 到不提供服务版本 → 快照/观测清理 + 消费者 INACTIVE（细 epoch 记账路径） |
+| T26/S6 | dispose 悬挂 | [OK] | 永不结束 disposal → 实测 5002.6ms 超时 → dispose-abandoned 日志 + replace 完成（generation 2，回滚不阻塞） |
+| T27/S7 | exports 逃逸 | [OK] | 桥接 set 抛 TypeError + exports-frozen 日志 + 原始对象不触碰；直连原生插件 set/delete 无约束 |
+| T28/S8 | 双存在 | [OK] | dsh-cc-tui 真实 dependencies 嵌套 + vibe 服务需求 → 告警输出、不抛错 |
+| T29/S9 | 社区零阻断 | [OK] | F2 真实元数据收割（engines.dsh/cordis peer/dsh-tools peer）归一或 EXT-1 告警、绝不抛错；F2 全部直接挂载成功 |
+| T30 | F3 模板对齐 / F5 legacy 映射 / F6 bundle 展开 | [OK] | 模板 aligned；pty-windows dsh.plugin.json → id/entry 映射 + 迁移警告；dsh-101 真实 patch 展开为 entry 行 |
+| T31 | F1 mixin 真实路径 | [OK] | 真实 fabric 补丁经真实 `validatePatchStatic` 校验 + mygo mixin 引擎应用，目标行为改变（hello fabric:world）、trace 含补丁 id |
 
 ## 3. 性能实测（不许「很快」）
 
 | 项 | 实测 | 预算/期望 |
 |---|---:|---|
 | S2 真实图求解（4 包桥接图，含 install+lockfile） | 52.4 ms/次 | — |
-| S3 pre-gate 同步拦截（真实快照大小） | 0.0059 ms（5.9 μs） | 微秒~亚毫秒（EB-D20）✅ |
-| S6 dispose 超时（默认 5000ms） | 5002.6 ms | 5000ms 超时后放弃等待、释放队列 ✅ |
+| S3 pre-gate 同步拦截（真实快照大小） | 0.0059 ms（5.9 μs） | 微秒~亚毫秒（EB-D20）[OK] |
+| S6 dispose 超时（默认 5000ms） | 5002.6 ms | 5000ms 超时后放弃等待、释放队列 [OK] |
 | P-0 后 real-composition 全文件 | ~2.3s（16 用例） | 不再触网；无隐藏 dispose 超时 |
 
 ### real-composition ~10s 复核（实现轮遗留审计项）

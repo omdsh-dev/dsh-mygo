@@ -35,13 +35,13 @@
 
 | 项 | 结果 | 证据 |
 |---|---|---|
-| clean → install.sh → 全量 build → 3080 启动 | ✅ | `npm run clean`（226 路径）→ install.sh → `npm run build` rc=0 → 3080 root 200 |
-| 客户端插件 bundle | ✅ | 此前失败的 agent-preset 等全部 200（全量 client build 后） |
-| CLI 套件（T44-T49） | ✅ 15/15 | 无网拦截，3 文件全绿 |
-| 全量回归（mygo + mygo-api + CLI） | ✅ 63 文件 / 621 用例 | 无网拦截；**注**：测得时工作树含未提交的 mygo-rdb 下限修正（见 §4.2） |
-| EB 套件 | ✅ 13/13 | 无网拦截 |
-| typecheck（mygo-api + mygo + mygo-cli） | ✅ | `tsc -b` rc=0 |
-| CLI 经面板激活 | ✅ | `POST /api/mygo/install`（folder）→ `plugins()` 显示 `dsh-mygo-cli enabled`；依赖 `install.sh §5.7` 根链接 |
+| clean → install.sh → 全量 build → 3080 启动 | [OK] | `npm run clean`（226 路径）→ install.sh → `npm run build` rc=0 → 3080 root 200 |
+| 客户端插件 bundle | [OK] | 此前失败的 agent-preset 等全部 200（全量 client build 后） |
+| CLI 套件（T44-T49） | [OK] 15/15 | 无网拦截，3 文件全绿 |
+| 全量回归（mygo + mygo-api + CLI） | [OK] 63 文件 / 621 用例 | 无网拦截；**注**：测得时工作树含未提交的 mygo-rdb 下限修正（见 §4.2） |
+| EB 套件 | [OK] 13/13 | 无网拦截 |
+| typecheck（mygo-api + mygo + mygo-cli） | [OK] | `tsc -b` rc=0 |
+| CLI 经面板激活 | [OK] | `POST /api/mygo/install`（folder）→ `plugins()` 显示 `dsh-mygo-cli enabled`；依赖 `install.sh §5.7` 根链接 |
 
 ## 4. 已知边界 / 注意事项
 

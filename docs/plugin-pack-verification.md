@@ -9,18 +9,18 @@
 
 | # | 场景 | 结果 | 断言要点 |
 |---|---|---|---|
-| T32 | 打包确定性 | ✅ | 同一 store 两次 buildPack → pack 文件 sha256 相等 + 逐字节相等（`349e6476…`） |
-| T33 / RT1 | 打包→还原往返 | ✅ | F1/F3/F4 + F2(dsh-tool-time) 打包 → 全新空 profile installPack → 两侧 lockfile 语义载荷（generated.at 归一）逐字节一致；verifyAtBoot 通过 |
-| T34 / RT2 | 篡改检测 | ✅ | vendored 单字节翻转 → `pack-hash-mismatch` + 指认 `files/0.tgz`；清单翻转 → `manifestSha256` 失配 `pack-invalid` |
-| T35 / RT3 | 路径穿越 | ✅ | `..`/绝对路径/符号链接子路径/未知成员 → `pack-invalid`，零逃逸、零写盘 |
-| T36 / RT4 | 社区混合 | ✅ | communityDeps 告警可见（含 dsh-tool-time peer 声明），安装完成不阻断 |
-| T37 / RT5 | 离线分发 | ✅ | fetch 拦截计数为 0（pack 安装路径完全不触网） |
-| T38 | formatVersion | ✅ | 不兼容 → `pack-invalid`（R1/C6 先例） |
-| T39 | pin 与声明区间冲突 | ✅ | `resolve-failed` + scope `pack`（顺带暴露并修复 resolver 零候选崩溃，见 §3） |
-| T40 | pack 内双存在 | ✅ | 告警不阻断（B12 语义复用） |
-| T41 | files[].path 逃逸 | ✅ | `pack-invalid`，报告指认 `files[0].path` |
-| T42 | 整体拒绝原子性 | ✅ | 一坏多好 → 全部拒绝、store 零写入、全量冲突一次输出 |
-| T43 | KF-1 回归 | ✅ | F1 含 src 全量打包安装不再误伤（自引用 + 已声明 peers）；未声明 specifier 仍硬错 |
+| T32 | 打包确定性 | [OK] | 同一 store 两次 buildPack → pack 文件 sha256 相等 + 逐字节相等（`349e6476…`） |
+| T33 / RT1 | 打包→还原往返 | [OK] | F1/F3/F4 + F2(dsh-tool-time) 打包 → 全新空 profile installPack → 两侧 lockfile 语义载荷（generated.at 归一）逐字节一致；verifyAtBoot 通过 |
+| T34 / RT2 | 篡改检测 | [OK] | vendored 单字节翻转 → `pack-hash-mismatch` + 指认 `files/0.tgz`；清单翻转 → `manifestSha256` 失配 `pack-invalid` |
+| T35 / RT3 | 路径穿越 | [OK] | `..`/绝对路径/符号链接子路径/未知成员 → `pack-invalid`，零逃逸、零写盘 |
+| T36 / RT4 | 社区混合 | [OK] | communityDeps 告警可见（含 dsh-tool-time peer 声明），安装完成不阻断 |
+| T37 / RT5 | 离线分发 | [OK] | fetch 拦截计数为 0（pack 安装路径完全不触网） |
+| T38 | formatVersion | [OK] | 不兼容 → `pack-invalid`（R1/C6 先例） |
+| T39 | pin 与声明区间冲突 | [OK] | `resolve-failed` + scope `pack`（顺带暴露并修复 resolver 零候选崩溃，见 §3） |
+| T40 | pack 内双存在 | [OK] | 告警不阻断（B12 语义复用） |
+| T41 | files[].path 逃逸 | [OK] | `pack-invalid`，报告指认 `files[0].path` |
+| T42 | 整体拒绝原子性 | [OK] | 一坏多好 → 全部拒绝、store 零写入、全量冲突一次输出 |
+| T43 | KF-1 回归 | [OK] | F1 含 src 全量打包安装不再误伤（自引用 + 已声明 peers）；未声明 specifier 仍硬错 |
 
 ## 2. 实测数据（不许「很快」）
 

@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ResolutionReport, ServiceResolutionReport } from '@deepseek-ai/dsh-mygo'
-import { jsonOutput, renderReportHuman, renderUsage } from '../src/render.ts'
+import { jsonOutput, renderReportHuman, renderRestoreSuccess, renderUsage } from '../src/render.ts'
 
 function resolveFailed(): ResolutionReport {
   return {
@@ -87,6 +87,11 @@ function serviceReport(): ServiceResolutionReport {
   }
 }
 
+/** restore 成功输出（含告警）的固定字节序列（守则禁 emoji：警告前缀为 [warn]）。 */
+function restoreSuccessWithWarnings(): string {
+  return renderRestoreSuccess('web', 3, ['社区依赖声明 2 条（未钉版）', 'peerDependencies 区间告警（dsh >=0.0.1-rc.1）'])
+}
+
 describe('报告渲染（T48）', () => {
   it('resolve-failed 渲染为固定字节序列', () => {
     expect(renderReportHuman(resolveFailed())).toBe([
@@ -137,6 +142,15 @@ describe('报告渲染（T48）', () => {
     expect(text).toContain('  冲突 1/1 · 服务 voice-chat')
     expect(text).toContain('      voice-impl@1.1.0 [active]')
     expect(text).toContain('    建议 安装/启用提供 voice-chat 的插件')
+  })
+
+  it('restore 成功含告警渲染为固定字节序列（警告前缀 [warn]）', () => {
+    expect(restoreSuccessWithWarnings()).toBe([
+      '✓ 已还原 → profile web：3 个插件',
+      '  [warn] 社区依赖声明 2 条（未钉版）',
+      '  [warn] peerDependencies 区间告警（dsh >=0.0.1-rc.1）',
+      '',
+    ].join('\n'))
   })
 
   it('--json 信封只含一个 JSON 文档', () => {

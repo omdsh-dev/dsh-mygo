@@ -143,7 +143,7 @@
 
 - **体系内插件**（pack 主载荷）：桥接路径 + mygo manifest，受依赖图全套约束：
   安装期求解、lockfile、pins、符号前置门、exports 冻结、反应式编排、结构化
-  报告（two-tier §7/§8 全 ✅ 列）。
+  报告（two-tier §7/§8 全 [OK] 列）。
 - **社区依赖**（`communityDeps[]`，npm 语义）：仅元数据收割——version 纳入
   对账与报告、peerDependencies 中 dsh 核心区间复读比对（不满足 → 告警）、
   dependencies 摘要仅展示（two-tier §9 三原则：只读、告警级、永不阻断）。
@@ -296,16 +296,16 @@ RT3 测试覆盖：`..`、绝对路径、盘符、符号链接子路径、未知
 
 | 任务书章节 | 本文件 | 覆盖 |
 |---|---|---|
-| 前置闸门 1-3 | §0 | ✅ |
-| D-A1 格式选型 | §1 | ✅ |
-| D-A2 包内容 + overrides 裁决 | §2 | ✅ |
-| D-A3 安装流三段 | §3 | ✅ |
-| D-A4 双层语义 + 双存在 | §4 | ✅ |
-| D-A5 确定性双口径 | §5 | ✅ |
-| D-A6 路径安全 + zip-slip 类测试 | §6 | ✅ |
-| D-A7 失败语义 + 报告扩展 | §7 | ✅ |
-| KF-1 裁决（e2e 指定 design-r4 裁决） | §9 | ✅ |
-| 输出：design-r4-backlog.md | 见 [design-r4-backlog.md](design-r4-backlog.md) | ✅ |
+| 前置闸门 1-3 | §0 | [OK] |
+| D-A1 格式选型 | §1 | [OK] |
+| D-A2 包内容 + overrides 裁决 | §2 | [OK] |
+| D-A3 安装流三段 | §3 | [OK] |
+| D-A4 双层语义 + 双存在 | §4 | [OK] |
+| D-A5 确定性双口径 | §5 | [OK] |
+| D-A6 路径安全 + zip-slip 类测试 | §6 | [OK] |
+| D-A7 失败语义 + 报告扩展 | §7 | [OK] |
+| KF-1 裁决（e2e 指定 design-r4 裁决） | §9 | [OK] |
+| 输出：design-r4-backlog.md | 见 [design-r4-backlog.md](design-r4-backlog.md) | [OK] |
 
 ## 13. 修订记录
 

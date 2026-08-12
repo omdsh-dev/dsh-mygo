@@ -136,7 +136,7 @@
 | 条款 | 判定 | 现实证据 | 收敛落点 |
 |---|---|---|---|
 | two-tier §7 分层定义 | **需修订** | 社区插件当前主分发 = repo catalog + `dsh.bundle.patch`（33/80）+ legacy `dsh.plugin.json`（22）；npm 直连为 rc1 起步但**今日官方模板已按 npm 强兼容重构**（dsh-external/plugin-template@2da8230）；已有 1 例社区 mygo manifest（dsh-vibe-mode） | 契约修订 Rev-1/Rev-5/Rev-6 + design-r3 D4/D5/D7 |
-| two-tier §8 担保矩阵 | 部分确认 | 社区侧仅「运行期反应式 + 只读观察」为 ✅ 与现实一致（无安装期求解/lockfile/depends 硬阻断现实载体）；「npm/pnpm 原生解析」应补充 `autoInstallPeers:false` 事实 | 契约修订 Rev-1（矩阵备注） |
+| two-tier §8 担保矩阵 | 部分确认 | 社区侧仅「运行期反应式 + 只读观察」为 [OK] 与现实一致（无安装期求解/lockfile/depends 硬阻断现实载体）；「npm/pnpm 原生解析」应补充 `autoInstallPeers:false` 事实 | 契约修订 Rev-1（矩阵备注） |
 | two-tier §9 npm 元数据收割 | **需修订（现网空白 + 官方迁移目标已定）** | peer dsh 核心 0/80；现实信号 = engines.dsh（6，均 `>=0.0.1`）+ cordis peer（50）+ @deepseek-ai/dsh-tools peer（35）；private 66/80；**官方今日模板即 npm 强兼容形态（自包含、可发布、禁 link:/file:）**，§9 收割是迁移目标而非死路 | 契约修订 Rev-2/Rev-6 + design-r3 D2/D7 + 测试 T2/T7 |
 | two-tier §10 双存在检测 | 确认 | 1/27 dependencies + 1 mygo requires（service: 前缀） | 契约修订 Rev-3 + 测试 T1/T4 |
 | two-tier §11 直连路径永久支持承诺 | 需修订叙事 | 条款本身保留；现状是 GitHub+p npm/bundle 分发、npm 直连起步；官方模板今日已把「npm 强兼容」定为模板默认 | 契约修订 Rev-1/Rev-6 |

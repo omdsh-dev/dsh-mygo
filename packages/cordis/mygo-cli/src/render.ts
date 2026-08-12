@@ -78,7 +78,7 @@ export function renderPackSuccess(
 /** restore 成功的人类可读输出（含告警）。 */
 export function renderRestoreSuccess(profile: string, pluginCount: number, warnings: readonly string[]): string {
   const lines = [`✓ 已还原 → profile ${profile}：${pluginCount} 个插件`]
-  for (const warning of warnings) lines.push(`  ⚠ ${warning}`)
+  for (const warning of warnings) lines.push(`  [warn] ${warning}`)
   return lines.join('\n') + '\n'
 }
 
