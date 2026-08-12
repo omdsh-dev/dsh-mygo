@@ -54,6 +54,7 @@ copy_pkg() {
 echo "==> 复制 mygo / mygo-api / mygo-panel"
 copy_pkg "$HERE/packages/core/mygo-api" "$CHECKOUT/packages/core/mygo-api"
 copy_pkg "$HERE/packages/cordis/mygo" "$CHECKOUT/packages/cordis/mygo"
+copy_pkg "$HERE/packages/cordis/mygo-cli" "$CHECKOUT/packages/cordis/mygo-cli"
 copy_pkg "$HERE/vendor/dsh-mygo-panel" "$CHECKOUT/vendor/dsh-mygo-panel"
 if [ -f "$CHECKOUT/vendor/cordis/package.json" ] \
   && grep -q '"name": "@deepseek-ai/cordis"' "$CHECKOUT/vendor/cordis/package.json" 2>/dev/null; then
@@ -99,6 +100,8 @@ const inserts = [
    '    { "path": "./packages/self-modification/repository-plugin" },' ],
   ['    { "path": "./packages/self-modification/tool-cordis" },\n    { "path": "./packages/cordis/mygo" },',
    '    { "path": "./packages/self-modification/tool-cordis" },' ],
+  ['    { "path": "./packages/cordis/mygo" },\n    { "path": "./packages/cordis/mygo-cli" },',
+   '    { "path": "./packages/cordis/mygo" },' ],
 ]
 let changed = false
 const missing = []
@@ -122,7 +125,9 @@ if (changed) fs.writeFileSync(path, text)
 NODE
 
 # ---- 4. pnpm install ---------------------------------------------------------
-if command -v pnpm >/dev/null 2>&1; then
+if [ "${DSH_SKIP_PNPM:-0}" = "1" ]; then
+  echo "==> 跳过 pnpm install（DSH_SKIP_PNPM=1；运行期依赖由模块回退链接提供）"
+elif command -v pnpm >/dev/null 2>&1; then
   echo "==> pnpm install（$CHECKOUT）"
   (cd "$CHECKOUT" && pnpm install)
 else
@@ -131,11 +136,13 @@ fi
 
 # ---- 4.5 已构建 checkout：重新编译 mygo（源码刚被更新） ---------------------
 if [ -f "$CHECKOUT/packages/core/mygo-api/lib/index.js" ]; then
-  echo "==> 检测到已构建 checkout，重新编译 mygo / mygo-api"
+  echo "==> 检测到已构建 checkout，重新编译 mygo / mygo-api / mygo-cli"
   (cd "$CHECKOUT" \
     && node node_modules/typescript/bin/tsc -b packages/core/mygo-api packages/cordis/mygo \
     && node node_modules/tsdown/dist/run.mjs --config packages/core/mygo-api/tsdown.config.ts \
-    && node node_modules/tsdown/dist/run.mjs --config packages/cordis/mygo/tsdown.config.ts) \
+    && node node_modules/tsdown/dist/run.mjs --config packages/cordis/mygo/tsdown.config.ts \
+    && node node_modules/typescript/bin/tsc -b packages/cordis/mygo-cli \
+    && node node_modules/tsdown/dist/run.mjs --config packages/cordis/mygo-cli/tsdown.config.ts) \
     || echo "警告：mygo 重编失败，请稍后手动 pnpm run build" >&2
 fi
 
@@ -192,6 +199,7 @@ ln -sfn "$CHECKOUT/packages/cordis/mygo" "$FALLBACK/@deepseek-ai/dsh-mygo"
 ln -sfn "$CHECKOUT/packages/core/mygo-api" "$FALLBACK/@deepseek-ai/dsh-mygo-api"
 ln -sfn "$CHECKOUT/packages/storage/storage-sqlite" "$FALLBACK/@deepseek-ai/dsh-storage-sqlite"
 ln -sfn "$CHECKOUT/vendor/dsh-mygo-panel" "$FALLBACK/@dsh-external/dsh-mygo-panel"
+ln -sfn "$CHECKOUT/packages/cordis/mygo-cli" "$FALLBACK/@dsh-external/dsh-mygo-cli"
 echo "==> 已写入模块回退链接：$FALLBACK"
 
 # ---- 6. 记录 mygo 自身版本（供检查更新） -------------------------------------
