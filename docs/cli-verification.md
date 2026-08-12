@@ -20,10 +20,9 @@
 
 | 项 | 实测 | 环境 |
 |---|---:|---|
-| 全量 mygo 主套件（无网 fetch 拦截） | 57 文件 / 582 用例全绿，10.79 s | `NODE_OPTIONS="--require /tmp/block-net.cjs" vitest run packages/cordis/mygo --maxWorkers=2` |
-| CLI 套件（无网 fetch 拦截） | 3 文件 / 15 用例全绿，1.13 s | `NODE_OPTIONS=… vitest run --config packages/cordis/mygo-cli/vitest.config.ts --maxWorkers=2` |
+| 全量回归（mygo + mygo-api + CLI，无网 fetch 拦截） | 63 文件 / 621 用例全绿，11.08 s | `NODE_OPTIONS="--require /tmp/block-net.cjs" vitest run packages/core/mygo-api packages/cordis/mygo --maxWorkers=2`（含 CLI 15 项；既有基线 60 文件 / 606 用例 = mygo 54/567 + mygo-api 6/39） |
 | EB 假设套件 | 11 文件 / 13 用例全绿，1.34 s | `NODE_OPTIONS=… vitest run --config packages/cordis/mygo/test/eb/vitest.config.ts --maxWorkers=2` |
-| typecheck | `tsc -b packages/cordis/mygo packages/cordis/mygo-cli` 通过 | rc 0 |
+| typecheck | `tsc -b packages/core/mygo-api packages/cordis/mygo packages/cordis/mygo-cli` 通过 | rc 0 |
 | buildPack 第一次 / 确定性复跑 | 25.50 / 25.52 ms | pack-verification beforeAll（5 插件真实语料） |
 | pack 产物 | 62,069 B；sha256 `ac41bae1f14920a6657ed0cc4c7ceca278d410a97fc7de956f51b014ae780866` | 同一运行 |
 | CLI 往返插件集 | 2 插件（T44）/ 1 插件（T47 自举） | 真实语料 + CLI 自身 |
@@ -97,5 +96,6 @@
 
 ## 7. 收尾
 
-Phase B 验收口径：主套件 57/582 + CLI 15 + EB 13 全绿（无网拦截）、typecheck 通过。
+Phase B 验收口径：全量 63/621（既有 606 + CLI 15）全绿（无网拦截）、EB 13/13、
+typecheck 通过。
 Phase C 未放行，未动工。
