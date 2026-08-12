@@ -168,6 +168,22 @@ rc.1 `dsh/lib/bin.js` 与 0811 `apps/cli/lib/bin.js`（lib 生产模式）启动
 - **断点**：① 卡片实际渲染未浏览器自动化（本环境无 headless browser）；
   ② **npm rc.1 未发布 `dsh-client-ui-plugin-config`**（npx 缓存核查无此包），
   rc.1 profile 上没有 `settings.plugin.item` 宿主槽 → 卡片无宿主可挂（EXT-3）。
+- **断点 ③（2026-08-12 复核，settings 显式 allowlist）**：即使宿主槽存在，
+  **插件自建命名空间也无法经官方 settings 网关读写**——
+  `packages/host/apiproxy/src/api-proxy.ts:120-127` 的
+  `WEB_SETTINGS_NAMESPACES`（agent-loop/bash/locale/permission/ui-conversation/
+  ui-theme/web-search-deepseek）是显式硬编码名单，官方注释明言：
+  「a namespace absent here answers `settings-not-exposed` even when its owner
+  registered it … Moving that declaration to `settings.register()`, so a plugin
+  can expose its own configuration without a change in this package, is deferred
+  work」；`exposedNamespaces()`（:1846-1851）= 模型提供方 +
+  两个 allowlist；写操作在 :1902 直接 `notExposed` 拒绝；describe 在
+  :3186-3191 过滤到 exposed 集。活体复核（0811 temp profile）：
+  `settings.update` 对 `mygo-spike-ns` → `settings-not-exposed`；对 allowlist 内
+  `agent-loop` → ok（revision 递增）。→ 绑定插件命名空间的卡片会因 describe
+  读不到值而渲染为空、写入被拒，scope 不可用。rc.1 发布版同为硬编码名单
+  （仅 locale/permission/ui-conversation/ui-theme + 产品/模型命名空间，无
+  agent-loop/bash/web-search-deepseek——后者随 0811 窗口新增）。
 
 ### 8.4 路线 3（断点坐实）：官方「插件配置」窗口调用链 —— ✅ 确认不经过 mygo
 
@@ -189,9 +205,14 @@ rc.1 `dsh/lib/bin.js` 与 0811 `apps/cli/lib/bin.js`（lib 生产模式）启动
 
 ### 8.6 EXT-3（官方需求清单）
 
-- **需求**：官方将 `@deepseek-ai/dsh-client-ui-plugin-config`（0811 形态，
+- **需求 1**：官方将 `@deepseek-ai/dsh-client-ui-plugin-config`（0811 形态，
   含 `settings.plugin.item` 卡片槽声明）发布到 npm rc 线；mygo 配置卡片才能在
   rc.1 官方「插件配置」窗口中挂载（路线 1 宿主条件）。
+- **需求 2（更深，2026-08-12 复核）**：官方把 settings 网关的显式 allowlist
+  改为插件可声明的暴露机制（api-proxy.ts:120-127 注释自述的 deferred work，
+  例如随 `settings.register()` 暴露）；否则即使槽位存在，mygo 自建命名空间的
+  卡片仍会 `settings-not-exposed`、渲染为空。当前 mygo panel 的配置编辑不走
+  settings 网关（用自有 `/api/mygo/config*` 面），不受此限制。
 - 不需要官方提供：插件管理窗口安装/挂载操作（mygo panel 自有 `/api/mygo/*` 面，
   路线 2 已证可独立运行）。
 
