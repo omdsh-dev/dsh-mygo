@@ -192,4 +192,4 @@
 
 | 修订编号 | 日期 | 原因 |
 |---|---|---|
-| （冻结后暂无） | — | — |
+| R1 | 2026-08-12 | 守则合规轮（零侵入裁决）：删除 vendor epoch getter 补丁（PATCHES.md #1 已移除，fiber.ts / lib/index.js / fiber.d.ts 三处回滚，git 核验零残留）。EB-D14 中「epoch getter 已落地」随之失效：原生 epoch 仅存私有 _runner（诊断用），mygo 控制面细 epoch 由 FineEpochRegistry 自有记账维持；EB-A9 断言同步更新。 |
