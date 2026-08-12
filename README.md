@@ -119,14 +119,15 @@ docs/                        设计/验证/备忘录（见下）
 - `docs/next/2026-08-12-mygo-api-surface.md` —— 契约层公开面盘点 + CD-1。
 - `docs/next/2026-08-12-cd-2-panel-adoptraw-ledger.md` —— 面板静态账 vs lockfile 账本分叉（CD-2）。
 - `docs/next/2026-08-12-live-3080-out-of-box-memo.md` —— 运行环境迁移备忘录。
+- `docs/next/2026-08-12-npm-template-normalization.md` —— 官方 plugin-template 对齐的 npm SDK 规范化记录。
 
 ## 测试与纪律
 
-- 全量回归 64 文件 / 624 用例（无网 fetch 拦截；CLI 18 项含 T50/T51 spike；
+- 全量回归 64 文件 / 625 用例（无网 fetch 拦截；CLI 19 项含 T50/T51 spike；
   其中 3 个 mygo-rdb 用例依赖本地未提交修正，提交态为 621——见备忘录）；
   EB 假设套件 13/13；typecheck 三包通过。
 - 确定性断言字节级；故障按 impl-bug / design-gap / fixture-issue 三分类；
-  vendor 修改登记 `vendor/PATCHES.md`（当前 #1 epoch getter）。
+  vendor 修改登记 `vendor/PATCHES.md`（当前 vendor 零补丁；#1 已按守则移除）。
 
 ## License
 
