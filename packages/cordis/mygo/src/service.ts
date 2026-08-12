@@ -9,12 +9,14 @@
  * @module @deepseek-ai/dsh-mygo/src/service
  */
 
-import { Context, Service } from 'cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import z from 'schemastery'
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import type Schema from 'schemastery'
+import { fromCordisPlugin, PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
 import type {
   InstallOptions,
   PluginDefinition,
+  PluginEntrypointsDeclaration,
   PluginExecRequest,
   PluginExecResult,
   PluginHandleInfo,
@@ -41,13 +43,16 @@ import { EVENT_VOCABULARY } from './event-vocabulary.ts'
 import { EntrypointsTable } from './entrypoints.ts'
 import { LifecycleEngine, MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from './lifecycle.ts'
 import { RegistryPersistence } from './persistence.ts'
+import { extractPlugin, loadPluginEntry, PluginPackageManager, resolveCoreVersion, resolveMygoPaths } from './package/index.ts'
+import type { PluginManifestV2 } from './package/index.ts'
 import type { AuditClass } from './audit.ts'
 import type { RegistryStore } from './store.ts'
-import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
 import { dshHomePath } from '@deepseek-ai/dsh-paths'
 import type {
   PluginManager,
@@ -65,7 +70,7 @@ export const PluginManagerServiceConfig = z.intersect([
     // Internally: mana. Five empty casts and you're benched.
     cpuBudgetMs: z.number().min(0).default(100),
   }),
-])
+]) as unknown as Schema<PluginManagerServiceConfigValue>
 
 /** Resolved row config: the §15.6/§17 surface plus the profile name. */
 export type PluginManagerServiceConfigValue = PluginManagerConfig & {
@@ -79,11 +84,12 @@ export type PluginManagerServiceConfigValue = PluginManagerConfig & {
  */
 export class PluginManagerService extends Service implements PluginManager {
   static inject = ['storage', 'storageDomain']
-  static Config = PluginManagerServiceConfig
+  static Config: Schema<PluginManagerServiceConfigValue> = PluginManagerServiceConfig
 
   private readonly resolved: PluginManagerConfig
   private engine: LifecycleEngine | undefined
   private persistence: RegistryPersistence | undefined
+  private readonly packageManager: PluginPackageManager
 
   /**
    * @param ctx - the plugin context (`storage` and `storageDomain` injected).
@@ -96,6 +102,14 @@ export class PluginManagerService extends Service implements PluginManager {
     super(ctx, 'pluginManager')
     const { profile: _profile, ...rest } = config
     this.resolved = resolvePluginManagerConfig(rest)
+    const paths = resolveMygoPaths(config.profile)
+    const coreVersion = resolveCoreVersion(process.env)
+    this.packageManager = new PluginPackageManager({
+      paths,
+      profile: config.profile,
+      ...(coreVersion === undefined ? {} : { coreVersion }),
+      managerVersion: MYGO_MANAGER_VERSION,
+    })
   }
 
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */
@@ -112,6 +126,28 @@ export class PluginManagerService extends Service implements PluginManager {
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
     }, externalStore)
+    // 加载时校验（不重新求解）：lockfile 与磁盘（版本+哈希）不一致 MUST 硬阻断。
+    const bootVerify = await this.packageManager.verifyAtBoot()
+    if (!bootVerify.ok) {
+      throw new PluginError(
+        'package-not-resolvable',
+        formatPluginError('package-not-resolvable', {
+          package: 'lockfile',
+          anchors: bootVerify.report.summary,
+        }),
+        { package: 'lockfile', report: bootVerify.report },
+      )
+    }
+    const mountOrderResult = await this.packageManager.mountOrder()
+    if (!mountOrderResult.ok) {
+      throw new PluginError(
+        'ordering-cycle',
+        formatPluginError('ordering-cycle', {
+          cycle: mountOrderResult.report.cycles[0]?.cycle.join(' → ') ?? 'unknown',
+        }),
+        { cycle: mountOrderResult.report.cycles[0]?.cycle, report: mountOrderResult.report },
+      )
+    }
     const holder: { engine?: LifecycleEngine } = {}
     const hostLlm = ctx.get('llm') as
       | { stream(options: unknown): AsyncIterable<unknown> }
@@ -221,8 +257,16 @@ export class PluginManagerService extends Service implements PluginManager {
       | { register(definition: unknown): () => void }
       | undefined
     const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-    const checkout = resolveCheckout(dirname(fileURLToPath(import.meta.url)))
-    const bundleRail = new BundleRail({ dshHome, profile: this.config.profile, checkout })
+    const dshBin = resolveDshBin()
+    const dshInstallDir = resolveDshInstallDir()
+    const sourceCheckout = resolveSourceCheckout()
+    const bundleRail = new BundleRail({
+      dshHome,
+      profile: this.config.profile,
+      ...(dshBin === undefined ? {} : { dshBin }),
+      ...(dshInstallDir === undefined ? {} : { dshInstallDir }),
+      ...(sourceCheckout === undefined ? {} : { checkout: sourceCheckout }),
+    })
     const machine = new DispatchMachine(ctx, {
       vocabulary: new Map(EVENT_VOCABULARY.map(entry => [entry.name, entry.mode])),
       cpuBudgetMs: this.config.cpuBudgetMs,
@@ -261,17 +305,17 @@ export class PluginManagerService extends Service implements PluginManager {
       hostProvide: (name: string, value: unknown) => ctx.provide(name, value),
       resolveSource: (source) => {
         if (source.type === 'npm') {
-          return Promise.reject(new PluginError(
-            'package-not-resolvable',
-            formatPluginError('package-not-resolvable', {
-              package: source.package,
-              anchors: 'runtime profile anchors',
-            }),
-            { package: source.package, anchors: 'runtime profile anchors' },
-          ))
+          return this.resolveNpmSource(source.package)
         }
         return Promise.resolve(evaluateInlineDefinition(source.code))
       },
+      resolveSourcePreview: (source) => {
+        if (source.type === 'npm') {
+          return this.previewNpmSource(source.package)
+        }
+        return Promise.resolve(evaluateInlineDefinition(source.code))
+      },
+      ...(mountOrderResult.ok ? { recoverOrder: mountOrderResult.order } : {}),
     })
     holder.engine = engine
     await engine.recover()
@@ -300,6 +344,149 @@ export class PluginManagerService extends Service implements PluginManager {
       entrypointsDisposer()
       void persistence.close()
     }, 'pluginManager.teardown')
+  }
+
+  /** Resolve an npm plugin source: locked store first, registry install second. */
+  private async resolveNpmSource(packageName: string): Promise<PluginDefinition> {
+    try {
+      const loaded = await this.packageManager.loadEntry(packageName)
+      if (loaded !== undefined) {
+        return this.definitionFromManifest(loaded.plugin, loaded.installed.manifest)
+      }
+      const outcome = await this.packageManager.resolveInstall({ package: packageName })
+      if (!outcome.ok) {
+        throw new PluginError(
+          'package-not-resolvable',
+          formatPluginError('package-not-resolvable', {
+            package: packageName,
+            anchors: outcome.report.summary,
+          }),
+          { package: packageName, report: outcome.report },
+        )
+      }
+      const module = await loadPluginEntry(outcome.installed.dir, outcome.installed.entry)
+      const plugin = extractPlugin(module)
+      if (plugin === undefined) {
+        throw new PluginError(
+          'package-not-resolvable',
+          formatPluginError('package-not-resolvable', {
+            package: packageName,
+            anchors: `入口 ${outcome.installed.entry} 未导出可挂载插件`,
+          }),
+          { package: packageName },
+        )
+      }
+      return this.definitionFromManifest(plugin, outcome.installed.manifest)
+    } catch (error) {
+      if (error instanceof PluginError) throw error
+      throw new PluginError(
+        'package-not-resolvable',
+        formatPluginError('package-not-resolvable', {
+          package: packageName,
+          anchors: error instanceof Error ? error.message : String(error),
+        }),
+        { package: packageName },
+      )
+    }
+  }
+
+  /** Pure npm preview for plan(): metadata + resolve only, no install. */
+  private async previewNpmSource(packageName: string): Promise<PluginDefinition> {
+    try {
+      const outcome = await this.packageManager.preview({ package: packageName })
+      if (!outcome.ok) {
+        throw new PluginError(
+          'package-not-resolvable',
+          formatPluginError('package-not-resolvable', {
+            package: packageName,
+            anchors: outcome.report.summary,
+          }),
+          { package: packageName, report: outcome.report },
+        )
+      }
+      return this.definitionFromManifestOnly(outcome.manifest)
+    } catch (error) {
+      if (error instanceof PluginError) throw error
+      throw new PluginError(
+        'package-not-resolvable',
+        formatPluginError('package-not-resolvable', {
+          package: packageName,
+          anchors: error instanceof Error ? error.message : String(error),
+        }),
+        { package: packageName },
+      )
+    }
+  }
+
+  /** Build an inert (never-mounted) PluginDefinition from a v2 manifest. */
+  private definitionFromManifestOnly(manifest: PluginManifestV2): PluginDefinition {
+    return {
+      id: manifest.id,
+      version: manifest.version,
+      kinds: [],
+      events: [],
+      requires: [],
+      provides: manifest.provides,
+      permissions: {
+        observe: [],
+        transform: [],
+        intercept: [],
+        position: 'derived',
+        claims: [],
+      },
+      stateful: false,
+      swapPolicy: 'immediate',
+      config: z.object({}),
+      hooks: {
+        activate: async () => {
+          throw new Error(`preview definition 不可挂载：${manifest.id}`)
+        },
+      },
+      ...(Object.keys(manifest.entrypoints).length === 0
+        ? {}
+        : { entrypoints: manifest.entrypoints as unknown as PluginEntrypointsDeclaration }),
+      ...(Object.keys(manifest.depends).length === 0 && Object.keys(manifest.breaks).length === 0
+        ? {}
+        : {
+            compatibility: {
+              ...(Object.keys(manifest.depends).length === 0 ? {} : { requires: manifest.depends }),
+              ...(Object.keys(manifest.breaks).length === 0 ? {} : { breaks: manifest.breaks }),
+            },
+          }),
+    }
+  }
+
+  /** Convert a loaded plugin entry + v2 manifest into a runtime PluginDefinition. */
+  private definitionFromManifest(plugin: unknown, manifest: PluginManifestV2): PluginDefinition {
+    return fromCordisPlugin(plugin as RawCordisFunctionPlugin, {
+      id: manifest.id,
+      version: manifest.version,
+      kinds: [],
+      events: [],
+      requires: [],
+      provides: manifest.provides,
+      permissions: {
+        observe: [],
+        transform: [],
+        intercept: [],
+        position: 'derived',
+        claims: [],
+      },
+      stateful: false,
+      swapPolicy: 'immediate',
+      config: z.object({}),
+      ...(Object.keys(manifest.entrypoints).length === 0
+        ? {}
+        : { entrypoints: manifest.entrypoints as unknown as PluginEntrypointsDeclaration }),
+      ...(Object.keys(manifest.depends).length === 0 && Object.keys(manifest.breaks).length === 0
+        ? {}
+        : {
+            compatibility: {
+              ...(Object.keys(manifest.depends).length === 0 ? {} : { requires: manifest.depends }),
+              ...(Object.keys(manifest.breaks).length === 0 ? {} : { breaks: manifest.breaks }),
+            },
+          }),
+    })
   }
 
   install(source: PluginSource, options?: InstallOptions): Promise<PluginHandleInfo> {
@@ -557,8 +744,37 @@ function evaluateInlineDefinition(code: string): PluginDefinition {
  * The depth to `packages/cordis/mygo/src` (3) differs from the built
  * `packages/cordis/mygo/lib` (4), so a fixed `../../..` is wrong in lib.
  */
-function resolveCheckout(from: string): string {
-  let dir = from
+/**
+ * Resolve the `dsh` executable for bundle-rail forwarding: explicit
+ * `DSH_BIN` env wins, then the `@deepseek-ai/dsh` package's bin from mygo's
+ * own module anchor (npm layout), else PATH lookup by the spawn default.
+ */
+function resolveDshBin(): string | undefined {
+  const explicit = process.env.DSH_BIN
+  if (typeof explicit === 'string' && explicit !== '') return explicit
+  try {
+    const anchor = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
+    return join(dirname(anchor), 'lib', 'bin.js')
+  } catch {
+    return undefined
+  }
+}
+
+/** dsh 安装目录：env 优先，其次 @deepseek-ai/dsh 包目录（npm 布局）。 */
+function resolveDshInstallDir(): string | undefined {
+  const explicit = process.env.DSH_INSTALL_DIR
+  if (typeof explicit === 'string' && explicit !== '') return explicit
+  try {
+    const anchor = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
+    return dirname(anchor)
+  } catch {
+    return undefined
+  }
+}
+
+/** 源码 checkout（legacy）：向上找 checkout 标记，找不到返回 undefined。 */
+function resolveSourceCheckout(): string | undefined {
+  let dir = dirname(fileURLToPath(import.meta.url))
   for (let depth = 0; depth < 8; depth++) {
     if (
       existsSync(join(dir, 'packages', 'client', 'tsdown.client.ts'))
@@ -570,7 +786,7 @@ function resolveCheckout(from: string): string {
     if (parent === dir) break
     dir = parent
   }
-  throw new Error('无法定位 dsh checkout（未找到 packages/client/tsdown.client.ts）')
+  return undefined
 }
 
 /** Map one dispatch violation code to the §22.3 audit class. */

@@ -118,6 +118,7 @@ export type {
   PluginOperationPlan,
   SlotKind,
 } from './types.ts'
+export * from './package/index.ts'
 
 /** The Loader-facing service plugin (default export; named exports stay library surfaces). */
 export default PluginManagerService

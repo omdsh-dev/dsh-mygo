@@ -15,7 +15,7 @@
 
 import { readFile } from 'node:fs/promises'
 import { zstdDecompressSync } from 'node:zlib'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 
 /** A persisted-session snapshot as surfaced to the model. */

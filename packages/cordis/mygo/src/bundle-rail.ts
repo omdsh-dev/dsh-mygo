@@ -63,7 +63,12 @@ export interface BundleInstallResult {
 export interface BundleRailOptions {
   readonly dshHome: string
   readonly profile: string
-  readonly checkout: string
+  /** dsh 可执行文件；缺省走 PATH 上的 `dsh`（npm/npx 布局）。 */
+  readonly dshBin?: string
+  /** dsh 安装目录（npm 布局 = @deepseek-ai/dsh 包目录）；in-box bundle 判定。 */
+  readonly dshInstallDir?: string
+  /** 源码 checkout（legacy）；in-box bundle 判定。 */
+  readonly checkout?: string
 }
 
 const COMPANION_DISABLE_START = (id: string): string => `# >>> mygo bundle disable block: ${id}`
@@ -212,8 +217,12 @@ export class BundleRail {
     if (dir === undefined) return undefined
     // In-box bundles resolve through the profiles fallback into the dsh
     // installation; they are harness-owned and never mygo-managed.
+    const inBoxRoots = [this.options.checkout, this.options.dshInstallDir].filter(
+      (root): root is string => root !== undefined,
+    )
     try {
-      if (realpathSync(dir).startsWith(realpathSync(this.options.checkout))) return undefined
+      const real = realpathSync(dir)
+      if (inBoxRoots.some(root => real.startsWith(realpathSync(root)))) return undefined
     } catch {
       return undefined
     }
@@ -282,8 +291,8 @@ export class BundleRail {
 
   /** Forward one official `dsh plugin` invocation and return its output. */
   runDshPlugin(args: readonly string[]): string {
-    const bin = join(this.options.checkout, 'bin', 'dsh')
-    if (!existsSync(bin)) throw new Error(`dsh 可执行文件不存在：${bin}`)
+    const bin = this.options.dshBin
+      ?? (this.options.checkout === undefined ? 'dsh' : join(this.options.checkout, 'bin', 'dsh'))
     const result = spawnSync(bin, ['plugin', '--profile', this.options.profile, ...args], {
       cwd: this.profileDir(),
       encoding: 'utf8',

@@ -9,6 +9,8 @@
  */
 
 import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { dshHomePath } from '@deepseek-ai/dsh-paths'
 import { parseVersion } from './semver-range.ts'
 
@@ -22,8 +24,19 @@ export interface MygoSelfInfo {
   readonly installedAt?: number
 }
 
-/** 回退版本：开发/harness 环境没有 mygo-self.json 时的图成员版本。 */
-const FALLBACK_VERSION = '0.1.0'
+/** 回退版本：开发/harness 环境没有 mygo-self.json 时读取包自身版本。 */
+function packageVersionFallback(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { readonly version?: unknown }
+    if (typeof pkg.version === 'string' && isSemver(pkg.version)) return pkg.version
+  } catch {
+    // fall through to the hardcoded fallback
+  }
+  return '0.1.0'
+}
+
+const FALLBACK_VERSION = packageVersionFallback()
 
 function isSemver(value: unknown): value is string {
   return typeof value === 'string' && parseVersion(value) !== undefined

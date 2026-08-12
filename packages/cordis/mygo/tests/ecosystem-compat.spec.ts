@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { Context, Service } from 'cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import Loader from '@cordisjs/plugin-loader'
 import Include from '@cordisjs/plugin-include'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'

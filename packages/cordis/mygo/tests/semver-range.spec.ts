@@ -82,6 +82,13 @@ describe('semver range matcher', () => {
     expect(matchesVersionRange('1.2.2', '>=1.2.3-alpha')).toBe(false)
   })
 
+  it('gates prerelease candidates on explicit prerelease comparators (npm semver)', () => {
+    expect(matchesVersionRange('1.0.1-rc.1', '>=1.0.0')).toBe(false)
+    expect(matchesVersionRange('0.0.1-rc.2', '^0.0.1-rc.1')).toBe(true)
+    expect(matchesVersionRange('0.0.2-rc.1', '^0.0.1-rc.1')).toBe(false)
+    expect(matchesVersionRange('1.0.0', '>=1.0.0-rc.1')).toBe(true)
+  })
+
   it('rejects unparsable versions and ranges', () => {
     expect(matchesVersionRange('abc', '>=1.0.0')).toBe(false)
     expect(matchesVersionRange('1.2.3', 'not-a-range')).toBe(false)

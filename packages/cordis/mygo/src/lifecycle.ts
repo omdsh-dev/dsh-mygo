@@ -38,7 +38,7 @@ import type {
   RawCordisFunctionPlugin,
   RawPluginDeclaration,
 } from '@deepseek-ai/dsh-mygo-api'
-import type { Context, Events } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { isDeepStrictEqual } from 'node:util'
 
 /** Implicit manager identity in the unified dependency graph. */
@@ -645,6 +645,8 @@ export interface LifecycleEngineOptions {
    * host power). Absent (harness/tests): every resolution fails loudly.
    */
   readonly resolveSource?: (source: PluginSource) => Promise<PluginDefinition>
+  /** Pure source preview for `plan()` (npm sources must not install). */
+  readonly resolveSourcePreview?: (source: PluginSource) => Promise<PluginDefinition>
   /** Generation history retained per plugin; defaults to Config `historyKeep`. */
   readonly historyKeep?: number
   /** Bounded drain/next-idle wait; defaults to Config `swapTimeoutMs`. */
@@ -655,6 +657,8 @@ export interface LifecycleEngineOptions {
   readonly staticIds?: readonly string[]
   /** Slot classification for order neutrality (same input as #13). */
   readonly slotKinds?: ReadonlyMap<string, 'host-sorted' | 'chain-ordered'>
+  /** Preferred recovery mount order (dependencies first, from lockfile). */
+  readonly recoverOrder?: readonly string[]
   /** Harness event vocabulary for mount validation (defaults to the generated one). */
   readonly eventVocabulary?: readonly PluginEventVocabularyEntry[]
   /** Logger for recovery and warnings. */
@@ -723,11 +727,13 @@ export class LifecycleEngine {
   private readonly store: RegistryStore
   private readonly config: PluginManagerConfig
   private readonly resolveSource: (source: PluginSource) => Promise<PluginDefinition>
+  private readonly resolveSourcePreview: (source: PluginSource) => Promise<PluginDefinition>
   private readonly historyKeep: number
   private readonly swapTimeoutMs: number
   private readonly isTurnBusy: () => boolean | Promise<boolean>
   private readonly staticIds: ReadonlySet<string>
   private readonly slotKinds: ReadonlyMap<string, 'host-sorted' | 'chain-ordered'>
+  private readonly recoverOrder: readonly string[] | undefined
   private readonly eventVocabulary: readonly PluginEventVocabularyEntry[]
   /** Engine-owned logger for warnings and violation surfaces; defaults to a no-op. */
   readonly logger: Logger
@@ -790,11 +796,13 @@ export class LifecycleEngine {
         { package: 'n/a', anchors: 'resolveSource 未配置' },
       )
     })
+    this.resolveSourcePreview = options.resolveSourcePreview ?? this.resolveSource
     this.historyKeep = options.historyKeep ?? options.config.historyKeep
     this.swapTimeoutMs = options.swapTimeoutMs ?? options.config.swapTimeoutMs
     this.isTurnBusy = options.isTurnBusy ?? (() => false)
     this.staticIds = new Set(options.staticIds ?? [])
     this.slotKinds = options.slotKinds ?? new Map()
+    this.recoverOrder = options.recoverOrder
     this.eventVocabulary = options.eventVocabulary ?? EVENT_VOCABULARY
     this.logger = options.logger ?? { error: () => {}, info: () => {}, warn: () => {}, debug: () => {} }
     this.io = options.io ?? nodePluginIo
@@ -1443,11 +1451,11 @@ export class LifecycleEngine {
    */
   async plan(operation: PluginOperation): Promise<PluginOperationPlan> {
     if (operation.op === 'install') {
-      const definition = await this.resolveSource(operation.source)
+      const definition = await this.resolveSourcePreview(operation.source)
       return planOperation({ op: 'install', plugin: declarationOf(definition) }, this.planState())
     }
     if (operation.op === 'replace') {
-      const definition = await this.resolveSource(operation.source)
+      const definition = await this.resolveSourcePreview(operation.source)
       return planOperation({
         op: 'replace',
         id: operation.id,
@@ -1567,7 +1575,17 @@ export class LifecycleEngine {
     const rows: RecoveryRow[] = []
     let orphanGenerations = 0
     let historyTrimmed = 0
-    const ids = await this.store.listIds()
+    const rawIds = await this.store.listIds()
+    const ids = this.recoverOrder === undefined
+      ? rawIds
+      : [...rawIds].sort((left, right) => {
+          const li = this.recoverOrder?.indexOf(left) ?? -1
+          const ri = this.recoverOrder?.indexOf(right) ?? -1
+          if (li === -1 && ri === -1) return left < right ? -1 : left > right ? 1 : 0
+          if (li === -1) return 1
+          if (ri === -1) return -1
+          return li - ri
+        })
     for (const id of ids) {
       let status: StatusRecord | undefined
       try {
@@ -3641,7 +3659,9 @@ export class LifecycleEngine {
   }
 
   private emit(event: string, payload: PluginLifecycleEventPayload): void {
-    this.ctx.emit(event as keyof Events, payload)
+    // 0811 的 Events 泛型不再包含 plugin/* 事件名；按松散 emit 面转发
+    // （事件名/载荷由 mygo 词汇表与监听端共同约束）。
+    ;(this.ctx as unknown as { emit(name: string, payload: unknown): void }).emit(event, payload)
   }
 }
 

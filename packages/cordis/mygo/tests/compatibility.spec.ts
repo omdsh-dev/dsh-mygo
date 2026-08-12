@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import z from 'schemastery'
 import type { PluginCompatibility, PluginDefinition, PluginSource } from '@deepseek-ai/dsh-mygo-api'
 import {

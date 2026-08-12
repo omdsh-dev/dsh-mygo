@@ -9,7 +9,7 @@
  * @module @deepseek-ai/dsh-mygo/src/entrypoints
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 
 /** One aggregated contribution returned by `get(key)`. */
 export interface EntrypointContribution<T = unknown> {

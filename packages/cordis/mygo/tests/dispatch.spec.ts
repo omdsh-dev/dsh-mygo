@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { PluginError } from '@deepseek-ai/dsh-mygo-api'
 import {
   DispatchMachine,

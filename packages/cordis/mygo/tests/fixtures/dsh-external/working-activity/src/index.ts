@@ -15,7 +15,7 @@
  * @module @deepseek-ai/dsh-working-activity
  */
 
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import z from 'schemastery'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { AgentStatus } from '@deepseek-ai/dsh-agent'

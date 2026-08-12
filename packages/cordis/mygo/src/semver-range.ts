@@ -42,7 +42,33 @@ export function matchesVersionRange(version: string, range: string): boolean {
   const parsed = parseVersion(version)
   if (parsed === undefined) return false
   const alternatives = range.split('||')
-  return alternatives.some(alternative => matchesComparatorSet(parsed, alternative))
+  return alternatives.some(alternative => {
+    // npm semver 规则：预发布版本只有在该区间对同一 major.minor.patch 三元组
+    // 显式带预发布比较符时才可匹配（`^0.0.1-rc.1` 可匹配 rc.2；
+    // `>=1.0.0` 不匹配 `1.0.1-rc.1`）。
+    if (parsed.prerelease.length > 0 && !alternativeAllowsPrerelease(alternative, parsed)) {
+      return false
+    }
+    return matchesComparatorSet(parsed, alternative)
+  })
+}
+
+/**
+ * Whether one range alternative explicitly references a prerelease comparator
+ * on the same major.minor.patch tuple as the candidate version.
+ */
+function alternativeAllowsPrerelease(alternative: string, version: ParsedVersion): boolean {
+  const comparators = alternative.trim().split(/\s+/)
+  return comparators.some(raw => {
+    if (raw === '*' || raw === 'x' || raw === 'X') return false
+    const comparator = parseComparator(raw)
+    if (comparator === undefined) return false
+    const bound = comparator.version
+    return bound.prerelease.length > 0
+      && bound.major === version.major
+      && bound.minor === version.minor
+      && bound.patch === version.patch
+  })
 }
 
 /** Whether a range parses into at least one non-empty comparator set. */

@@ -10,7 +10,7 @@
  */
 
 import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { Context, EventOptions } from 'cordis'
+import type { Context, EventOptions } from '@deepseek-ai/cordis'
 import { EVENT_VOCABULARY } from './event-vocabulary.ts'
 
 /** Loose Cordis registration surface the machine needs for string event names. */

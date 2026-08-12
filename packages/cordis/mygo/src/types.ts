@@ -333,7 +333,7 @@ export interface PluginLifecycleEventPayload {
  * The `ctx.pluginManager` service key (§15). The manager package bridges the
  * upper plugin contract into Cordis; plugin authors never see this key.
  */
-declare module 'cordis' {
+declare module '@deepseek-ai/cordis' {
   interface Context {
     /**
      * Managed-plugin service surface (§15.3): install/uninstall/enable/
