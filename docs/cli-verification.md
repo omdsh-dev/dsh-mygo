@@ -123,4 +123,79 @@ requires 置空后记录两笔代价，并落实报错要求：
 
 Phase B 验收口径：全量 63/621（既有 606 + CLI 15）全绿（无网拦截）、EB 13/13、
 typecheck 通过。
-Phase C 未放行，未动工。
+
+## 8. §webui-spike：Phase C 接入 spike（2026-08-12）
+
+> 可行性刺探，结论 + 证据；**部分能跑**（三选一判定，如实记录；浏览器点击渲染
+> 未自动化，属于本环境工具缺口而非 mygo 能力缺口）。
+
+### 8.1 装载方式（如实记录）
+
+mygo 未发布 npm：两个临时 profile（rc.1 npm 与 0811 source）均以
+`$DSH_HOME/profiles/node_modules` 回退链接预置（file/link 语义，design-r5 §1.3
+既有口径）：`@deepseek-ai/dsh-mygo|dsh-mygo-api|dsh-storage-sqlite` →
+0811 checkout，`@dsh-external/dsh-mygo-panel|dsh-mygo-cli` → 0811 checkout；
+官方包由 dsh 启动器 heal 回退（rc.1 走 npx 缓存、0811 走 checkout）。进程分别以
+rc.1 `dsh/lib/bin.js` 与 0811 `apps/cli/lib/bin.js`（lib 生产模式）启动。
+
+### 8.2 路线 2（主测）：npm rc.1 profile + mygo panel —— ✅ 全通（API/装载面）
+
+固化测试 T50（`packages/cordis/mygo-cli/tests/webui-spike.spec.ts`）：
+
+- rc.1 profile 根页面 200，HTML 含 `/plugins/@dsh-external/dsh-mygo-panel/client.js`
+  （webui 设置页装载 panel 客户端）。
+- `POST /api/mygo/install-plan`（folder 源，mygo-cli）两次结果 deep-equal
+  （`{ok:true,id:'dsh-mygo-cli',plan:{accepted:true}}` + 同一 actions 集）。
+- `POST /api/mygo/install` → `{ok:true,id:'dsh-mygo-cli',message:'插件 dsh-mygo-cli 已安装'}`；
+  `GET /api/mygo/plugins` 含 `dsh-mygo-cli enabled`。
+- 静态账落盘：`cordis.patch.yml` 生成桥接行 `dsh-mygo-cli-mygo`
+  （`@dsh-external/dsh-mygo-cli-mygo`）+ `mygo-plugins/dsh-mygo-cli/` 安装目录 +
+  `.mygo-install.json`；`POST /api/mygo/bom/export` 产出 `dsh.bom.json/md`
+  （4 members，报告可见）。
+- 重复一致性：第二次 install → 确定性拒绝 `插件已安装`。
+- **如实标注**：面板 folder 安装 = `adoptRaw` 静态路径（webui-spike.spec.ts
+  断言面），不写 pack 期 `dsh.lock/v1`、不写 registry 行（registry 表保持 0 行）；
+  `dsh.lock/v1` 账由 npm-source/pack 路径承担（T33/T44 已证）。
+
+### 8.3 路线 1（顺带）：settings.plugin.item 卡片 —— ◐ 机制可行，宿主槽缺失
+
+- 0811 webui 官方窗口 bundle（`dsh-client-ui-plugin-config/client.js`）声明
+  `settings.plugin.item` 槽位（T51 断言）；mygo panel 已用同一 `ctx.slots.register`
+  机制装载 `settings.section`（mygo-plugins），两个环境 bundle 均 200。
+- 设置命名空间读写走通：`settings.describe` 列出官方窗口三命名空间
+  （agent-loop / bash / web-search-deepseek），`settings.replace` revision 0→1
+  （T51 断言）。
+- **断点**：① 卡片实际渲染未浏览器自动化（本环境无 headless browser）；
+  ② **npm rc.1 未发布 `dsh-client-ui-plugin-config`**（npx 缓存核查无此包），
+  rc.1 profile 上没有 `settings.plugin.item` 宿主槽 → 卡片无宿主可挂（EXT-3）。
+
+### 8.4 路线 3（断点坐实）：官方「插件配置」窗口调用链 —— ✅ 确认不经过 mygo
+
+固化测试 T51：
+
+- 官方窗口 bundle 含 `settings.plugin.item` / `settingsScope.bind({namespace:
+  BASH_NS|AGENT_LOOP_NS|WEB_SEARCH_NS})` / `credentials/updated`；
+  **0 处** `pluginManager` / `/api/mygo` / `mygo` 引用。
+- 真实操作：`settings.replace(agent-loop, {maxParallelToolCalls:10})` → ok，
+  describe revision 0→1（走 settings 面，非 PluginManagerService）。
+- mygo 侧不受影响：`/api/mygo/plugins` 前后 deep-equal（空），registry 行数 0 不变。
+
+### 8.5 最终判定：**部分能跑**
+
+- 跑通子集：路线 2 全通（rc.1 profile 装载/install/plan 重复/静态账/BOM）、
+  路线 3 坐实、路线 1 机制可行（slot + settings 读写）。
+- 断点：① 浏览器点击/渲染自动化缺失（工具缺口）；② npm rc.1 未发布官方
+  ui-plugin-config（`settings.plugin.item` 宿主槽缺失，EXT-3）。
+
+### 8.6 EXT-3（官方需求清单）
+
+- **需求**：官方将 `@deepseek-ai/dsh-client-ui-plugin-config`（0811 形态，
+  含 `settings.plugin.item` 卡片槽声明）发布到 npm rc 线；mygo 配置卡片才能在
+  rc.1 官方「插件配置」窗口中挂载（路线 1 宿主条件）。
+- 不需要官方提供：插件管理窗口安装/挂载操作（mygo panel 自有 `/api/mygo/*` 面，
+  路线 2 已证可独立运行）。
+
+### 8.7 新增测试与回归
+
+- 新增 `webui-spike.spec.ts`（T50/T51）；CLI 套件现 18 项。
+- 全量回归（无网拦截）：**64 文件 / 624 用例全绿**；EB 13/13；typecheck 三包通过。
