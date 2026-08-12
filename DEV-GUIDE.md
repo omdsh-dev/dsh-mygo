@@ -8,8 +8,8 @@
 ## 0. 一句话模型
 
 Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之上补充了
-「受管插件生命周期 + 包治理」**：插件不再由作者自己 import 加载，而是经过
-manifest → 求解 → 锁定 → 安装 → 挂载 → 运行 → 替换/停用/卸载 的受管管线，
+「受管插件生命周期 + 包治理」**：插件不再简单经过 load/registry 路径自己 import 加载，
+而是经过manifest → 求解 → 锁定 → 安装 → 挂载 → 运行 → 替换/停用/卸载 的受管管线，
 每一步都有确定性与可审计账目。
 
 ## 1. 架构分层
@@ -93,6 +93,18 @@ manifest → 求解 → 锁定 → 安装 → 挂载 → 运行 → 替换/停�
 受权管理面（`plugins/install/uninstall/updateConfig`）。生命周期钩子
 `PluginHooks`：`setup → activate → deactivate/captureState/restoreState/dispose`。
 
+### 2.1 manifest 字段参考（作者向，来自 `package/manifest-v2.ts`）
+
+| 字段 | 语义 | 示例 |
+|---|---|---|
+| `recommends` | 可选推荐依赖：只校验不选择、只警告不阻断、永不自动安装（design-r3 §2.6） | `"recommends": { "ui-helper": "^1.0.0" }` |
+| `bundles` | 内嵌包声明（id + version + 包内路径），参与跨插件去重 | `"bundles": [{ "id": "dep-x", "version": "1.2.0", "path": "vendor/dep-x" }]` |
+| `patches` | mixin loader 的 patch 目标声明（module/filePath/symbol/operation） | `"patches": [{ "id": "p1", "target": { "module": "host", "symbol": "run", "operation": "around" }, "file": "patch.js" }]` |
+| `symbolAliases` | 符号别名/兼容映射（`b: alias of c`，EB-D19）：改名可经别名解析，未声明别名按破坏性变更走删除路径 | `"symbolAliases": { "oldName": "newName" }` |
+| `environment` | 只读环境元数据（如 `{platform:"web"}`）：不设硬门、仅报告展示（design-r3 §2.5） | `"environment": { "platform": "cli" }` |
+| `grants` | 能力授权表达式（fs/network/vars/llm/exec/http 等）；默认拒绝 | `"grants": { "fs": "..." }` |
+| `provides` / `loader` / `shared` / `entrypoints` | 服务能力声明 / loader 契约（v1: standard/mixin）/ 显式共享状态标记 / 入口贡献表 | — |
+
 ## 3. 依赖管理（mygo 在 Cordis 之上补充的核心之一）
 
 Cordis 的组合是「行 + patch 层」；mygo 把行替换成「依赖图 + 求解 + 锁 + 校验」。
@@ -165,7 +177,7 @@ root 优先 → id 升序 → 版本降序 → 嵌套浅优先 → parent 升序
 - `policyStatus`（运行期政策，requires 闸求值）：`active | inactive | policy-rejected`
 
 优先级：**disabled（用户显式关闭）> policy-rejected（政策拒绝）> INACTIVE
-（依赖缺失）**——三态分立（EB-D19/C4 裁决），三种停用都记账。
+（依赖缺失）**——三态分立（EB-D16；expected-behavior §6 矛盾 2 裁决），三种停用都记账。
 
 ### 4.2 操作与七步替换协议（`lifecycle.ts` §14）
 
@@ -176,8 +188,11 @@ root 优先 → id 升序 → 版本降序 → 嵌套浅优先 → parent 升序
 2. 新一代 staging 全部成功才提交，失败整体回滚；
 3. `swapPolicy`：`immediate`（直接换）/ `drain`（事件排空）/ `next-idle`
    （Agent 空闲）——有界等待；
-4. dispose 有界（`disposeTimeoutMs` 默认 5000ms，EB-D21）：超时强制置
-   FAILED、释放过渡队列、产结构化报告；日志 `dispose-abandoned`。
+4. dispose 有界（`disposeTimeoutMs` 默认 5000ms，0..30000 可配，EB-D21 /
+   design-r3 §1.7）：超时 = **停止等待并放弃所有权**（JS 无法中止运行中的
+   异步生成器，诚实声明）——不再 await 剩余 disposables，计入
+   `dispose-abandoned` 报告（显式警告可能资源泄漏），释放过渡队列，
+   后续过渡（含 P1-global 回滚与 P2 停用）不被阻塞。
 
 `updateConfig` 只允许改配置（EB-D22：任何代码/exports 变更必须 remove+create，
 物理不能换模块）。

@@ -315,3 +315,4 @@ RT3 测试覆盖：`..`、绝对路径、盘符、符号链接子路径、未知
 | Rev-P2 | 2026-08-12 | 外容器解包改为自实现（已预读内存 + 精确成员集校验后写盘），系统 tar 仅保留给内层插件 tarball 的 store 安装（既有路径）；gzip 用 Node zlib.gzipSync（与 gzip -n 同归一语义）。 |
 | Rev-P3 | 2026-08-12 | KF-1 分类规则补充：specifier 按包名归一（子路径归包名），插件自身 npm 包名（自引用）不属未声明；F1 src 全量打包实证（src 自引用 + 已声明 peers 通过）。 |
 | Rev-I1 | 2026-08-12 | Phase B/C 落地：B20-B29 全部完成，T32-T43（24 项）全绿，全量 60 文件/606 用例 + EB 13/13 + typecheck；详见 plugin-pack-verification.md。 |
+| Rev-P4 | 2026-08-12 | 求解来源序以实现为准修正：`resolver.ts sourceRank` 实为 `pinned > registry > locked > bundle > 其他`（pack 候选归「其他」，rank 4）；pack 安装的精确版本经 `pins`（rank 0）生效。design-r4-backlog.md「求解器全序扩展（B23 附属）」段所称「sourceRank 插在 pinned 之后、registry 之前」与实现不符，该段描述以实现为准（DEV-GUIDE §3.1 已按实现表述）。 |

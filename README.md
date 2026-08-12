@@ -21,7 +21,7 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
 | 核心 | 面板中心的 HMR 生命周期 + 外部应用 + 远程更新 | 包治理核心：求解器 / lockfile / 不可变 store / 政策闸 / 细 epoch / 报告 |
 | 分发 | GitHub/文件夹/压缩包/官方 bundle tgz（面板装） | `mygo-pack/v1` 确定性打包 + CLI `pack/restore`（离线、原子、可审计） |
 | 依赖管理 | 兼容性告警为主 | manifest v3 插件图 + 确定性全序求解 + 符号前置门 + 双存在告警 |
-| 运行期 | HMR 替换 | 七步替换协议 + swapPolicy + dispose 超时强制终止 + requires 政策闸（INACTIVE/自动激活） |
+| 运行期 | HMR 替换 | 七步替换协议 + swapPolicy + dispose 超时放弃等待（dispose-abandoned，不阻塞回滚） + requires 政策闸（INACTIVE/自动激活） |
 | 用户面 | 设置页「My 插件」面板 | 面板（扩展）+ `dsh --profile <p> mygo pack|restore|init`（扩展插件） |
 | 生态接口 | 直触 manager | `@deepseek-ai/dsh-mygo-api` 契约层（Cordis-free），外部工具 SHOULD 只依赖它 |
 
@@ -82,6 +82,10 @@ CLI 本身是 mygo 受管插件：可经面板 folder 安装激活，也可出�
 设置页「My 插件」：安装（GitHub/文件夹/压缩包）、启停/卸载、配置编辑、
 BOM 导出、远程更新（外部应用面为旧扩展，按需保留）。
 
+> 治理差异提示：面板 folder 安装走静态装载（adoptRaw），账目 = 桥接行 + 安装
+> 目录 + 静态记录，不写 pack 期 `dsh.lock/v1`；npm/pack 安装路径才写 lockfile。
+> 该账本分叉已登记为候选决策 CD-2（docs/next/2026-08-12-cd-2-panel-adoptraw-ledger.md）。
+
 ## 仓库布局
 
 ```text
@@ -100,11 +104,20 @@ docs/                        设计/验证/备忘录（见下）
 
 - `docs/DEV-GUIDE.md` —— 开发者指南：mygo 在 Cordis 之上补充的全部逻辑拆解
   （依赖管理/启停/epoch/打包/报告/治理/持久化/扩展点）。
-- `docs/design-r5-cli.md` —— CLI 用户面设计（命令面/报告渲染/注册机制/init/离线）。
 - `docs/expected-behavior.md` —— 冻结基线（EB-D1..D22）。
+- `docs/design-r2.md` / `design-r3.md`（+ `design-r3-backlog.md`）/
+  `design-r4.md`（+ `design-r4-backlog.md`）—— 设计定稿与实现任务清单。
+- `docs/design-r5-cli.md` —— CLI 用户面设计（命令面/报告渲染/注册机制/init/离线）。
 - `docs/two-tier-contract.md` —— 体系内/社区双 tier 契约（含 mygo-api 边界）。
+- `docs/community-census.md` / `docs/ecosystem-verification.md` —— 生态普查与验证。
+- `docs/assumption-verification.md` —— 假设验证（A1-A11 等）。
+- `docs/e2e-verification.md` —— E2E 验证（T21-T31、P-0 离线纪律）。
+- `docs/plugin-pack-verification.md` —— pack 体系真实验证轮（T32-T43、RT1-RT5、流程纪律）。
 - `docs/cli-verification.md` —— CLI 验证 + Phase C webui spike（§8，含 EXT-3）。
+- `docs/round-closeout.md` —— 基线冻结与收尾（含 EB 修订登记）。
+- `docs/EXT-CD-index.md` —— EXT 外部依赖 / CD 候选决策索引。
 - `docs/next/2026-08-12-mygo-api-surface.md` —— 契约层公开面盘点 + CD-1。
+- `docs/next/2026-08-12-cd-2-panel-adoptraw-ledger.md` —— 面板静态账 vs lockfile 账本分叉（CD-2）。
 - `docs/next/2026-08-12-live-3080-out-of-box-memo.md` —— 运行环境迁移备忘录。
 
 ## 测试与纪律
