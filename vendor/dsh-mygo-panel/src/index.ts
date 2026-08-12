@@ -10,13 +10,13 @@
  */
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { openSync } from 'node:fs'
+import { existsSync, openSync } from 'node:fs'
 import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@deepseek-ai/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@deepseek-ai/dsh-mygo'
 import type {
@@ -28,8 +28,31 @@ import type {
 
 const execFileAsync = promisify(execFile)
 
-/** The dsh checkout root (the panel runs from vendor/dsh-mygo-panel/src or lib). */
-const CHECKOUT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+/**
+ * The dsh source checkout root, when present. npm/npx 布局下不存在 → 所有
+ * checkout 专属路径（构建/自更新/workspace 链接）降级为不执行；桥接投影等
+ * 用户级路径继续走 $DSH_HOME。
+ */
+const CHECKOUT = resolveCheckoutDir(dirname(fileURLToPath(import.meta.url)))
+/** 源码模式 = 在 dsh checkout 内安装；否则为 npm 布局。 */
+const SOURCE_MODE = CHECKOUT !== undefined
+
+/** Walk up from a module dir to a dsh checkout marker; npm layout → undefined. */
+function resolveCheckoutDir(from: string): string | undefined {
+  let dir = from
+  for (let depth = 0; depth < 8; depth++) {
+    if (
+      existsSync(join(dir, 'packages', 'client', 'tsdown.client.ts'))
+      || existsSync(join(dir, 'apps', 'cli', 'src', 'bin.ts'))
+    ) {
+      return dir
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
 
 /** Managed install root: every installed plugin lives in its own subdirectory. */
 const HOME_ROOT = process.env.DSH_HOME !== undefined && process.env.DSH_HOME !== ''
@@ -419,6 +442,7 @@ async function copyPluginTree(source: string, target: string): Promise<void> {
 
 /** Link the harness node_modules into an installed plugin dir so bare imports resolve. */
 async function ensureNodeModulesLink(target: string): Promise<void> {
+  if (CHECKOUT === undefined) return
   const link = join(target, 'node_modules')
   try {
     await symlink(join(CHECKOUT, 'node_modules'), link, 'dir')
@@ -431,6 +455,7 @@ async function ensureNodeModulesLink(target: string): Promise<void> {
 
 /** Find one workspace package directory under the dsh checkout by name. */
 async function findWorkspacePackage(name: string): Promise<string | undefined> {
+  if (CHECKOUT === undefined) return undefined
   const packagesRoot = join(CHECKOUT, 'packages')
   let groups: string[]
   try {
@@ -802,6 +827,7 @@ async function buildConfigTemplate(root: string): Promise<ConfigSchemaInfo | und
 
 /** Build-time env: expose the dsh checkout and its toolchain on PATH. */
 function buildEnv(): NodeJS.ProcessEnv {
+  if (CHECKOUT === undefined) return { ...process.env }
   return {
     ...process.env,
     DSH_CHECKOUT: CHECKOUT,
@@ -816,6 +842,7 @@ async function linkStorePackage(
   storeSubPath: string,
   linkPath: string,
 ): Promise<void> {
+  if (CHECKOUT === undefined) return
   const store = join(CHECKOUT, 'node_modules', '.pnpm')
   let entries: string[]
   try {
@@ -850,6 +877,7 @@ async function linkStorePackage(
  * host owns those instances; these links only let the plugin's build run.
  */
 async function linkFrameworkDependencies(target: string): Promise<void> {
+  if (CHECKOUT === undefined) return
   const flat = join(CHECKOUT, 'node_modules', '.pnpm', 'node_modules')
   for (const name of ['cordis', 'schemastery']) {
     const source = join(flat, name)
@@ -979,13 +1007,14 @@ async function withInstallableManifest(
     const deps = pkg[field]
     if (deps === null || typeof deps !== 'object' || Array.isArray(deps)) continue
     const entries = Object.entries(deps as Record<string, unknown>)
-    // Drop `link:`/`workspace:` specs AND every `@deepseek-ai/*` entry: the
-    // checkout links those packages from the workspace (they do not exist on
-    // the npm registry, so npm install fails with 404 otherwise).
-    const kept = entries.filter(([name, spec]) => !(
-      name.startsWith('@deepseek-ai/')
-      || (typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('workspace:')))
-    ))
+    // Drop `link:`/`workspace:` specs always。源码模式下还要丢弃
+    // `@deepseek-ai/*`（由 checkout workspace 链接提供）；npm 模式下这些包
+    // 已在私仓发布，保留给 npm install。
+    const kept = entries.filter(([name, spec]) => {
+      if (typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('workspace:'))) return false
+      if (SOURCE_MODE && name.startsWith('@deepseek-ai/')) return false
+      return true
+    })
     if (kept.length === entries.length) continue
     pkg[field] = Object.fromEntries(kept)
     changed = true
@@ -1000,9 +1029,11 @@ async function withInstallableManifest(
     // as `file:` deps makes npm keep them for the duration of the install, so
     // a `prepare` script running mid-install can resolve the types.
     const dependencies = (pkg.dependencies ?? {}) as Record<string, string>
-    for (const name of ['cordis', 'schemastery']) {
-      if (dependencies[name] !== undefined) continue
-      dependencies[name] = `file:${join(CHECKOUT, 'node_modules', '.pnpm', 'node_modules', name)}`
+    if (CHECKOUT !== undefined) {
+      for (const name of ['cordis', 'schemastery']) {
+        if (dependencies[name] !== undefined) continue
+        dependencies[name] = `file:${join(CHECKOUT, 'node_modules', '.pnpm', 'node_modules', name)}`
+      }
     }
     pkg.dependencies = dependencies
   }
@@ -1317,14 +1348,15 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
     }
   }
 
-  // Project into the checkout AND the active profile's node_modules: the web
-  // loader resolves row names from the profile patch directory, so the link
-  // must live where Node walks up from `~/.dsh/profiles/<profile>/`.
-  const scopeDir = join(CHECKOUT, 'node_modules', '@dsh-external')
-  await mkdir(scopeDir, { recursive: true })
-  const link = join(scopeDir, `${manifest.id}-mygo`)
-  await rm(link, { force: true, recursive: false })
-  await symlink(bridgeDir, link, 'dir')
+  // Project into the active profile's node_modules (npm-native). 源码模式
+  // 下额外投影到 checkout，兼容旧布局；npm 布局不写 dsh 安装目录。
+  if (CHECKOUT !== undefined) {
+    const scopeDir = join(CHECKOUT, 'node_modules', '@dsh-external')
+    await mkdir(scopeDir, { recursive: true })
+    const link = join(scopeDir, `${manifest.id}-mygo`)
+    await rm(link, { force: true, recursive: false })
+    await symlink(bridgeDir, link, 'dir')
+  }
   const profileScope = join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@dsh-external')
   await mkdir(profileScope, { recursive: true })
   const profileLink = join(profileScope, `${manifest.id}-mygo`)
@@ -1335,7 +1367,9 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
 /** Remove a projected bridge: package dir, checkout link, and generated files. */
 async function removeProjectedBridge(id: string): Promise<void> {
   await rm(bridgeDirOf(id), { recursive: true, force: true })
-  await rm(join(CHECKOUT, 'node_modules', '@dsh-external', `${id}-mygo`), { force: true, recursive: false })
+  if (CHECKOUT !== undefined) {
+    await rm(join(CHECKOUT, 'node_modules', '@dsh-external', `${id}-mygo`), { force: true, recursive: false })
+  }
   await rm(join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@dsh-external', `${id}-mygo`), {
     force: true,
     recursive: false,
@@ -2026,6 +2060,9 @@ async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
 async function updateMygoFromRemote(
   _ctx: PanelContext,
 ): Promise<{ readonly ok: true; readonly id: string; readonly updated: boolean; readonly message: string; readonly commit?: string }> {
+  if (CHECKOUT === undefined) {
+    throw new Error('源码自更新仅支持 checkout 安装；npm 安装请通过包管理器更新 mygo')
+  }
   const self = await readMygoSelfState()
   if (self === undefined) throw new Error('未记录 mygo 自身安装信息（请用 install.sh 安装）')
   const latestCommit = await remoteLatest(self.url, self.ref)

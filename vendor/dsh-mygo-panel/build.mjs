@@ -69,6 +69,21 @@ for (const name of workspacePackages) {
   const workspace = findWorkspace(name)
   if (workspace !== undefined) symlinkDir(workspace, join(scopeDir, name.slice(name.lastIndexOf('/') + 1)))
 }
+const cordisAlias = join(checkout, 'vendor', 'cordis-alias')
+if (existsSync(join(cordisAlias, 'package.json'))) {
+  symlinkDir(cordisAlias, join(scopeDir, 'cordis'))
+} else {
+  // 0811+：vendor/cordis 已直接以 @deepseek-ai/cordis 身份存在于 workspace。
+  const cordisVendor = join(checkout, 'vendor', 'cordis')
+  if (existsSync(join(cordisVendor, 'package.json'))) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(cordisVendor, 'package.json'), 'utf8'))
+      if (pkg.name === '@deepseek-ai/cordis') symlinkDir(cordisVendor, join(scopeDir, 'cordis'))
+    } catch {
+      // unreadable vendor manifest: skip
+    }
+  }
+}
 
 const run = (bin, args) => {
   const result = spawnSync(process.execPath, [bin, ...args], {

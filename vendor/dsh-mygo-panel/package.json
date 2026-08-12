@@ -1,11 +1,16 @@
 {
   "name": "@dsh-external/dsh-mygo-panel",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "MyGO managed-plugin panel for the dsh web settings page (marisa slot route)",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "restricted"
+  },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
+  "files": [
+    "lib"
+  ],
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -30,6 +35,14 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-mygo": "workspace:^",
-    "cordis": "^4.0.0-rc.7"
+    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "@deepseek-ai/cordis": "^4.0.1-rc.1"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "scripts": {
+    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/client.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 运行 build.mjs'); process.exit(1)}\""
   }
 }

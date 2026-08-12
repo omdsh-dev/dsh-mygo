@@ -18,6 +18,10 @@ export interface LockedPlugin {
   readonly breaks: Readonly<Record<string, string>>
   readonly entrySha256: string
   readonly manifestSha256: string
+  /** BOM 对账：entry 文件 sha512（hex；npm integrity 解析转 hex，C5/Rev-2）。 */
+  readonly entrySha512?: string
+  /** BOM 对账：entry 文件字节数（G10）。 */
+  readonly entryFileSize?: number
   readonly integrity?: string
   readonly source?: string
   /** npm package name this plugin was installed from (id = manifest id). */
@@ -68,9 +72,26 @@ export async function sha256File(path: string): Promise<string> {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+/** SHA-512 hex of one file's bytes（BOM 对账；C5/G11）。 */
+export async function sha512File(path: string): Promise<string> {
+  const bytes = await readFile(path)
+  return createHash('sha512').update(bytes).digest('hex')
+}
+
 /** SHA-256 hex of a UTF-8 string. */
 export function sha256Text(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/**
+ * 解析 npm `integrity` SRI（`sha512-base64`）为 hex（design-r3 §3.5/C5）。
+ * 无法解析返回 undefined（不猜测、不阻断）。
+ */
+export function integritySha512Hex(integrity: string | undefined): string | undefined {
+  if (integrity === undefined) return undefined
+  const match = /^sha512-([A-Za-z0-9+/=]+)$/.exec(integrity.trim())
+  if (match === null) return undefined
+  return Buffer.from(match[1] as string, 'base64').toString('hex')
 }
 
 /** Write a lockfile atomically (temp + rename), keeping a `.bak`. */
@@ -113,6 +134,12 @@ export async function verifyLockfile(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly issues: readonly VerifyIssue[] }> {
   const issues: VerifyIssue[] = []
   for (const [id, lock] of Object.entries(lockfile.plugins)) {
+    // B10 加载期路径安全：lockfile 内的 entry 必须是相对路径（禁逃逸/绝对/盘符）。
+    if (lock.entry.startsWith('/') || /^[A-Za-z]:[\\/]/.test(lock.entry)
+      || lock.entry.startsWith('../') || lock.entry.includes('/../')) {
+      issues.push({ id, version: lock.version, reason: `lockfile entry 路径逃逸：${lock.entry}` })
+      continue
+    }
     const dir = packageDir(paths, id, lock.version)
     const entryPath = join(dir, lock.entry)
     const manifestPath = join(dir, '.mygo-package.json')
@@ -131,7 +158,16 @@ export async function verifyLockfile(
     if (!(await fileExists(manifestPath))) {
       issues.push({ id, version: lock.version, reason: '.mygo-package.json 缺失' })
     } else {
-      const actualManifest = await sha256File(manifestPath).catch(() => undefined)
+      // manifestSha256 是稳定载荷哈希（不含 installedAt / manifestSha256 自身，
+      // S2 确定性）；校验按同一口径重算。
+      const actualManifest = await readFile(manifestPath, 'utf8')
+        .then(raw => {
+          const fact = JSON.parse(raw) as Record<string, unknown>
+          delete fact.manifestSha256
+          delete fact.installedAt
+          return sha256Text(JSON.stringify(fact))
+        })
+        .catch(() => undefined)
       if (actualManifest !== lock.manifestSha256) {
         issues.push({ id, version: lock.version, reason: '清单哈希不匹配' })
       }

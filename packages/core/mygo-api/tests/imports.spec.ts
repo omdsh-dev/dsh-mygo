@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const SRC_DIR = fileURLToPath(new URL('../src', import.meta.url))
-const CORDIS_SPECIFIER = /(?:from\s*|import\s*\(\s*|import\s+)['"]cordis['"]/
+const CORDIS_SPECIFIER = /(?:from\s*|import\s*\(\s*|import\s+)['"]@deepseek-ai\/cordis['"]/
 
 describe('dsh-mygo-api author surface', () => {
   it('imports no Cordis anywhere in src except the invariant companion', () => {

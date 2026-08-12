@@ -20,11 +20,18 @@ export interface VersionConstraints {
 export interface PluginCandidate {
   readonly version: string
   readonly constraints?: VersionConstraints
+  /** 来源标签：pinned / registry / locked / bundle（全序 tie-break 用）。 */
   readonly source?: string
   /** 本版本对外提供的 id 列表（桥接/分叉，provides 别名解析）。 */
   readonly provides?: readonly string[]
   /** profile 钉定的唯一候选。 */
   readonly pinned?: boolean
+  /** 嵌套深度（bundle 层；越浅越优先，R2 §2 / C3）。 */
+  readonly depth?: number
+  /** 父插件 id（bundle 展开来源；parent 优先级）。 */
+  readonly parent?: string
+  /** manifest sha256 字典序 tie-break（闭合全序，design-r3 §3.1-6）。 */
+  readonly manifestSha256?: string
 }
 
 /** Resolver input: requests, candidate sets, installed facts, core version. */
@@ -39,6 +46,8 @@ export interface ResolverInput {
   readonly coreVersion: string | undefined
   /** profile 钉定：包名 → 精确版本（根节点硬约束，唯一候选）。 */
   readonly pins?: ReadonlyMap<string, { readonly version: string; readonly source?: string }>
+  /** P1-global 回滚报告世代目标（EB-D4：回到哪一代；B7）。 */
+  readonly generation?: { readonly from: string; readonly to: string }
 }
 
 /** One resolved plugin. */
@@ -65,11 +74,40 @@ function sourceOf(candidate: PluginCandidate): string {
   return candidate.pinned === true ? 'pinned' : candidate.source ?? ''
 }
 
-/** Deterministic candidate sort: version desc, then source asc. */
-export function sortCandidates(candidates: readonly PluginCandidate[]): readonly PluginCandidate[] {
+/** 来源优先级：pinned > registry > locked > bundle（R2 §2.2；其余按字典序兜底）。 */
+function sourceRank(candidate: PluginCandidate): number {
+  const source = sourceOf(candidate)
+  if (source === 'pinned') return 0
+  if (source === 'registry' || source === '') return 1
+  if (source === 'locked') return 2
+  if (source === 'bundle') return 3
+  return 4
+}
+
+/**
+ * 确定性候选全序（design-r3 §3.1）：
+ * root 优先 → id 升序 → 版本降序 → 嵌套浅优先 → parent 升序 → 来源序
+ * （pinned > registry > locked > bundle）→ manifest sha256 字典序。
+ */
+export function sortCandidates(
+  candidates: readonly PluginCandidate[],
+): readonly PluginCandidate[] {
   return [...candidates].sort((a, b) => {
     const byVersion = compareVersionsDesc(a.version, b.version)
-    return byVersion !== 0 ? byVersion : sourceOf(a) < sourceOf(b) ? -1 : sourceOf(a) > sourceOf(b) ? 1 : 0
+    if (byVersion !== 0) return byVersion
+    const byId = a.version < b.version ? -1 : a.version > b.version ? 1 : 0
+    if (byId !== 0) return byId
+    const depthA = a.depth ?? 0
+    const depthB = b.depth ?? 0
+    if (depthA !== depthB) return depthA - depthB
+    const parentA = a.parent ?? ''
+    const parentB = b.parent ?? ''
+    if (parentA !== parentB) return parentA < parentB ? -1 : 1
+    const bySource = sourceRank(a) - sourceRank(b)
+    if (bySource !== 0) return bySource
+    const hashA = a.manifestSha256 ?? ''
+    const hashB = b.manifestSha256 ?? ''
+    return hashA < hashB ? -1 : hashA > hashB ? 1 : 0
   })
 }
 
@@ -178,6 +216,12 @@ export function resolve(input: ResolverInput): ResolveOutcome {
     ...input.candidates.keys(),
     ...input.installed.keys(),
   ])].sort()
+  // root 优先：请求根先于纯依赖候选处理（design-r3 §3.1 全序第 1 级）。
+  ids.sort((a, b) => {
+    const aRoot = input.requests.has(a) ? 1 : 0
+    const bRoot = input.requests.has(b) ? 1 : 0
+    return aRoot !== bRoot ? bRoot - aRoot : a < b ? -1 : a > b ? 1 : 0
+  })
 
   // Constraint view: prefer the requested/id's best-known constraints.
   const constraintsOf = (id: string, candidate: PluginCandidate): VersionConstraints | undefined => {
@@ -203,6 +247,7 @@ export function resolve(input: ResolverInput): ResolveOutcome {
       report: {
         code: 'dependency-cycle',
         summary: `检测到环依赖：${cycle.join(' → ')}`,
+        ...(input.generation === undefined ? {} : { generation: input.generation }),
         cycles: [{ cycle }],
         conflicts: [],
       },
@@ -216,6 +261,7 @@ export function resolve(input: ResolverInput): ResolveOutcome {
       report: {
         code: 'dependency-cycle',
         summary: '依赖图无法拓扑排序（存在环）',
+        ...(input.generation === undefined ? {} : { generation: input.generation }),
         cycles: [],
         conflicts: [],
       },
@@ -384,7 +430,8 @@ export function resolve(input: ResolverInput): ResolveOutcome {
       rejected: [...(rejectionLog.get(`${id}@${candidate.version}`) ?? [])],
     })).filter(entry => entry.rejected.length > 0)
     if (allRejections.length === 0 && candidates.length > 0) continue
-    const constraints = constraintsOf(id, candidates[0] as PluginCandidate) ?? {
+    const first = candidates[0]
+    const constraints = (first === undefined ? undefined : constraintsOf(id, first)) ?? {
       depends: {},
       breaks: {},
       core: '*',
@@ -446,6 +493,7 @@ export function resolve(input: ResolverInput): ResolveOutcome {
     report: {
       code: 'resolve-failed',
       summary,
+      ...(input.generation === undefined ? {} : { generation: input.generation }),
       cycles: [],
       conflicts,
     },

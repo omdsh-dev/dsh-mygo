@@ -53,6 +53,8 @@ export const MANIFEST_SCHEMA = z.object({
   kinds: z.array(kindName),
   events: z.array(eventName).optional(),
   requires: z.array(z.string()),
+  serviceRequires: z.record(z.string().min(1), z.union([z.string().min(1), z.array(z.string().min(1))])).optional(),
+  symbolAliases: z.record(z.string().min(1), z.string().min(1)).optional(),
   provides: z.array(z.string()),
   permissions: z.object({
     observe: z.array(z.string()),

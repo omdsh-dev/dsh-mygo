@@ -7,7 +7,7 @@
 
 /** One unsatisfied constraint edge. */
 export interface ConstraintRef {
-  readonly kind: 'depends' | 'breaks' | 'core' | 'entry' | 'pin'
+  readonly kind: 'depends' | 'breaks' | 'core' | 'entry' | 'pin' | 'requires' | 'symbol' | 'alias' | 'pack'
   readonly target: string
   readonly range: string
 }
@@ -39,10 +39,40 @@ export interface CycleEntry {
 
 /** Full structured failure report. */
 export interface ResolutionReport {
-  readonly code: 'resolve-failed' | 'dependency-cycle' | 'lockfile-mismatch' | 'manifest-invalid' | 'symbol-missing'
+  readonly code:
+    | 'resolve-failed' | 'dependency-cycle' | 'lockfile-mismatch'
+    | 'manifest-invalid' | 'symbol-missing' | 'policy-rejected' | 'dispose-timeout'
+    | 'pack-invalid' | 'pack-hash-mismatch'
   readonly summary: string
+  /** 报告作用域：包级求解（默认 package）或服务级政策闸（requires，B6）。 */
+  readonly scope?: 'package' | 'service' | 'pack'
+  /** 失败过渡的世代目标（EB-D4：回到哪一代；P1-global 回滚报告 MUST 携带）。 */
+  readonly generation?: {
+    readonly from: string
+    readonly to: string
+  }
   readonly cycles: readonly CycleEntry[]
   readonly conflicts: readonly ConflictEntry[]
+}
+
+/** 服务级报告（requires 政策闸产物；scope 固定 "service"）。 */
+export interface ServiceResolutionReport extends Omit<ResolutionReport, 'conflicts' | 'scope'> {
+  readonly scope: 'service'
+  readonly conflicts: readonly ServiceConflictEntry[]
+}
+
+/** 服务级违例（requires 政策闸；scope: "service"，design-r3 §4.6）。 */
+export interface ServiceConflictEntry {
+  readonly service: string
+  readonly constraint: ConstraintRef
+  readonly chain: readonly string[]
+  /** 候选集（B19 观测记录：提供者 id + 版本 + 状态）。 */
+  readonly candidates: readonly {
+    readonly plugin: string
+    readonly version?: string
+    readonly state?: string
+  }[]
+  readonly actions: readonly string[]
 }
 
 /** Deterministic order for constraints of one plugin: depends, breaks, core. */

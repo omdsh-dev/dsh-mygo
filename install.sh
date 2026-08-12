@@ -55,6 +55,12 @@ echo "==> 复制 mygo / mygo-api / mygo-panel"
 copy_pkg "$HERE/packages/core/mygo-api" "$CHECKOUT/packages/core/mygo-api"
 copy_pkg "$HERE/packages/cordis/mygo" "$CHECKOUT/packages/cordis/mygo"
 copy_pkg "$HERE/vendor/dsh-mygo-panel" "$CHECKOUT/vendor/dsh-mygo-panel"
+if [ -f "$CHECKOUT/vendor/cordis/package.json" ] \
+  && grep -q '"name": "@deepseek-ai/cordis"' "$CHECKOUT/vendor/cordis/package.json" 2>/dev/null; then
+  echo "==> checkout 已内置 @deepseek-ai/cordis（0811+），跳过 dev 别名复制"
+else
+  copy_pkg "$HERE/vendor/cordis-alias" "$CHECKOUT/vendor/cordis-alias"
+fi
 
 # ---- 3. tsconfig 接线 --------------------------------------------------------
 node - "$CHECKOUT/tsconfig.base.json" <<'NODE'
@@ -91,16 +97,26 @@ const inserts = [
    '    { "path": "./packages/core/scope" },' ],
   ['    { "path": "./packages/self-modification/repository-plugin" },\n    { "path": "./packages/cordis/mygo" },',
    '    { "path": "./packages/self-modification/repository-plugin" },' ],
+  ['    { "path": "./packages/self-modification/tool-cordis" },\n    { "path": "./packages/cordis/mygo" },',
+   '    { "path": "./packages/self-modification/tool-cordis" },' ],
 ]
 let changed = false
+const missing = []
 for (const [wanted, anchor] of inserts) {
-  if (text.includes(wanted)) continue
+  if (text.includes(wanted)) {
+    changed = true
+    continue
+  }
   if (!text.includes(anchor)) {
-    console.error(`tsconfig.host.json: 未找到锚点 ${anchor.trim()}`)
-    process.exit(1)
+    missing.push(anchor.trim())
+    continue
   }
   text = text.replace(anchor, wanted)
   changed = true
+}
+if (missing.length > 0 && !changed) {
+  console.error(`tsconfig.host.json: 未找到锚点 ${missing.join(' / ')}`)
+  process.exit(1)
 }
 if (changed) fs.writeFileSync(path, text)
 NODE

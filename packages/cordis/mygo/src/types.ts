@@ -40,6 +40,8 @@ export interface PluginManagerConfig {
   readonly historyKeep: number
   /** Bounded drain/next-idle wait for replace (HP:139). */
   readonly swapTimeoutMs: number
+  /** dispose/unload 过渡超时（EB-D21/B8）：默认 5000ms，0..30000，0=立即放弃等待。 */
+  readonly disposeTimeoutMs?: number
   /** `'<event>.<property>'` fields that `writes` may not touch (PO:219/SEC:152). */
   readonly protectedFields?: readonly string[]
 }

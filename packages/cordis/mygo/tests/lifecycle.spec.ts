@@ -504,7 +504,7 @@ describe('LifecycleEngine install', () => {
           expect(env.get('other')).toBeUndefined()
           seen.push(env.plugins().length)
           seen.push(env.scope('agent-1' as SessionId))
-          void env.fetch('https://example.dev')
+          void env.fetch('https://example.dev').catch(() => {})
           void env.fs.read('/x').catch(() => {})
           void env.fs.write('/x', 'y').catch(() => {})
           // Self-service updateConfig cannot run while the install lock is held.
@@ -538,6 +538,201 @@ describe('LifecycleEngine install', () => {
     await h.engine.install(source('provider'))
     await h.engine.install(source('consumer'))
     expect(got).toEqual({ v: 1 })
+  })
+
+  it('wraps every provided value at the publish points and records dynamic symbol access (T14/B3)', async () => {
+    const h = harness()
+    const raw = { v: 1, bump(): number { return ++this.v } }
+    let viaGet: unknown
+    let viaInject: unknown
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['svc'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', raw)
+        },
+      },
+    }))
+    h.definitions.set('consumer', fixture('consumer', {
+      requires: ['svc'],
+      hooks: {
+        activate(env) {
+          viaGet = env.get('svc')
+          viaInject = env.scope('agent-1' as SessionId).get('svc')
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    await h.engine.install(source('consumer'))
+
+    // 三路径（ctx.get / ctx.<prop> / ctx.inject 同源）都拿到包装值而非原始引用。
+    expect(viaGet).not.toBe(raw)
+    expect(viaGet).toEqual(raw)
+    expect(viaInject).not.toBe(raw)
+    expect(viaInject).toBe(viaGet)
+    // 动态符号访问被记录（A11 运行时代理兜底）。
+    expect(h.engine.providedAccessLog().some(record => record.capability === 'svc' && record.symbol === 'v')).toBe(true)
+    expect(h.engine.providedAccessLog().some(record => record.capability === 'svc' && record.symbol === 'bump')).toBe(true)
+  })
+
+  it('publishes the wrapped value through the host provide seam and never the raw reference (T14/B3)', async () => {
+    const published = new Map<string, unknown>()
+    const h = harness({
+      hostProvide: (name, value) => {
+        published.set(name, value)
+        return () => published.delete(name)
+      },
+      config: resolvePluginManagerConfig({ grants: { provider: { hostPublish: true } } }),
+    })
+    const raw = { hello: 'world' }
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['bash'],
+      hostPublishAccess: true,
+      hooks: {
+        activate(env) {
+          env.provide('bash', raw)
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    expect(published.get('bash')).not.toBe(raw)
+    expect(published.get('bash')).toEqual(raw)
+    expect(h.engine.provideValue('bash')).toBe(published.get('bash'))
+    await h.engine.uninstall('provider')
+    expect(published.has('bash')).toBe(false)
+  })
+
+  it('freezes the bridge export surface: mutation through the wrapped value is rejected (T14/B4)', async () => {
+    const h = harness()
+    const raw = { version: 1, helper: () => 'ok' }
+    let seen: unknown
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['svc'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', raw)
+        },
+      },
+    }))
+    h.definitions.set('consumer', fixture('consumer', {
+      requires: ['svc'],
+      hooks: {
+        activate(env) {
+          seen = env.get('svc')
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    await h.engine.install(source('consumer'))
+    const wrapped = seen as Record<string, unknown>
+    expect(() => { wrapped.version = 2 }).toThrow(TypeError)
+    expect(() => { delete wrapped.helper }).toThrow(TypeError)
+    // 原始对象未被触碰：冻结只作用于桥接导出面（EB-D8）。
+    expect(raw).toEqual({ version: 1, helper: expect.any(Function) })
+    expect((wrapped as { helper(): string }).helper()).toBe('ok')
+  })
+
+  it('records mount-time export snapshots and provider observations, and clears them on uninstall (B13/B19)', async () => {
+    const h = harness()
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['svc'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', { version: 1, run() { return 'ok' } })
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    const snapshot = h.engine.fineEpoch().get('svc')
+    expect(snapshot?.pluginId).toBe('provider')
+    expect(snapshot?.version).toBe('1.0.0')
+    expect(snapshot?.exports).toContain('version')
+    expect(snapshot?.exports).toContain('run')
+    const observed = h.engine.providerObservationRegistry().candidates('svc')
+    expect(observed).toHaveLength(1)
+    expect(observed[0]?.pluginId).toBe('provider')
+    expect(observed[0]?.state).toBe('active')
+
+    await h.engine.uninstall('provider')
+    expect(h.engine.fineEpoch().get('svc')).toBeUndefined()
+    expect(h.engine.providerObservationRegistry().candidates('svc')).toEqual([])
+  })
+
+  it('refreshes the snapshot on replace and drops stale provides from accounting (B13/B19)', async () => {
+    const h = harness()
+    h.definitions.set('p', fixture('p', {
+      provides: ['svc', 'old'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', { version: 1 })
+          env.provide('old', { legacy: true })
+        },
+      },
+    }))
+    await h.engine.install(source('p'))
+    h.definitions.set('p2', fixture('p', {
+      version: '2.0.0',
+      provides: ['svc'],
+      hooks: {
+        activate(env) {
+          env.provide('svc', { version: 2 })
+        },
+      },
+    }))
+    await h.engine.replace('p', source('p2'))
+    expect(h.engine.fineEpoch().get('svc')?.version).toBe('2.0.0')
+    expect(h.engine.fineEpoch().get('svc')?.exports).toEqual(['version'])
+    expect(h.engine.fineEpoch().get('old')).toBeUndefined()
+    expect(h.engine.providerObservationRegistry().candidates('old')).toEqual([])
+    expect(h.engine.providerObservationRegistry().candidates('svc').map(item => item.version)).toEqual(['2.0.0'])
+  })
+
+  it('requires policy gate: install is not blocked, INACTIVE flips to active when the provider appears (B6/T20)', async () => {
+    const h = harness()
+    h.definitions.set('consumer', fixture('consumer', {
+      serviceRequires: { 'voice-chat': '>=0.1.0' },
+      requires: ['voice-chat'],
+    }))
+    // 安装期不阻断：无提供者时插件仍可安装（仅运行期政策闸）。
+    await h.engine.install(source('consumer'))
+    expect(h.engine.plugins().find(plugin => plugin.id === 'consumer')?.policyStatus).toBe('inactive')
+
+    // 提供者上线 → INACTIVE 自动激活。
+    h.definitions.set('provider', fixture('provider', {
+      provides: ['voice-chat'],
+      hooks: {
+        activate(env) {
+          env.provide('voice-chat', { speak() { return 'ok' } })
+        },
+      },
+    }))
+    await h.engine.install(source('provider'))
+    expect(h.engine.plugins().find(plugin => plugin.id === 'consumer')?.policyStatus).toBe('active')
+
+    // 提供者版本不满足区间 → provider-version-mismatch → INACTIVE。
+    h.definitions.set('p2', fixture('provider', {
+      version: '0.0.9',
+      provides: ['voice-chat'],
+      hooks: {
+        activate(env) {
+          env.provide('voice-chat', { speak() { return 'old' } })
+        },
+      },
+    }))
+    await h.engine.replace('provider', source('p2'))
+    expect(h.engine.plugins().find(plugin => plugin.id === 'consumer')?.policyStatus).toBe('inactive')
+  })
+
+  it('requires policy gate reports candidates from the provider observation registry (B6/B19)', async () => {
+    const h = harness()
+    h.definitions.set('consumer', fixture('consumer', {
+      serviceRequires: { 'voice-chat': '>=0.1.0' },
+    }))
+    await h.engine.install(source('consumer'))
+    const consumer = h.engine.plugins().find(plugin => plugin.id === 'consumer')
+    expect(consumer?.policyStatus).toBe('inactive')
+    // 观测记录仍是空（无提供者出现过）→ 候选集为空但不阻断。
+    expect(h.engine.providerObservationRegistry().candidates('voice-chat')).toEqual([])
   })
 
   it('tags listener modes from declarations and disposes staging disposers', async () => {
@@ -2864,6 +3059,37 @@ describe('settings namespace staging (raw-plugin facade)', () => {
 
     await h.engine.enable('settings-raw')
     expect(settings.namespaces.size).toBe(1)
+  })
+
+  it('bounded dispose: a never-settling settings-owner disposal is abandoned after disposeTimeoutMs (B8/EB-D21)', async () => {
+    const logs: string[] = []
+    const h = harness({
+      config: resolvePluginManagerConfig({ swapTimeoutMs: 40, historyKeep: 2, disposeTimeoutMs: 60 }),
+      logger: { error: m => logs.push(String(m)), info: () => {}, warn: m => logs.push(String(m)), debug: () => {} },
+    })
+    const settings = new FakeSettingsService(h.ctx)
+    await h.engine.adoptRaw(settingsRaw('v1'), { marker: 'v1' }, 'settings-raw')
+    expect(settings.namespaces.size).toBe(1)
+    // 注入永不结束的 settings owner fiber dispose（A2 等价面）。注意必须注入
+    // settingsOwner 本身而不是 settingsOwnerDisposal：disposeGeneration 会从
+    // settingsOwner.fiber.dispose() 构造 disposal，直接注入 promise 会被覆盖（假绿）。
+    const record = (h.engine as unknown as {
+      records: Map<string, { generations: { settingsOwner?: { fiber: { dispose(): Promise<void> } } }[] }>
+    }).records.get('settings-raw')
+    if (record === undefined || record.generations[0] === undefined) throw new Error('record missing')
+    record.generations[0].settingsOwner = {
+      fiber: { dispose: () => new Promise<void>(() => {}) },
+    }
+
+    const started = Date.now()
+    await h.engine.updateConfig('settings-raw', { marker: 'v2' })
+    const elapsed = Date.now() - started
+    // 60ms 超时后放弃并继续 replace：耗时应贴近超时窗口而不是无限等待。
+    expect(elapsed).toBeGreaterThanOrEqual(50)
+    expect(elapsed).toBeLessThan(2000)
+    expect(logs.some(line => line.includes('dispose-abandoned'))).toBe(true)
+    expect(h.engine.plugins()[0]?.version).toBe('0.0.0-raw')
+    expect(h.engine.plugins()[0]?.generation).toBe(2)
   })
 })
 

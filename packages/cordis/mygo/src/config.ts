@@ -28,6 +28,7 @@ export const PluginManagerConfigSchema = z.object({
   stateRoot: z.string(),
   historyKeep: z.number().step(1).min(1).default(2),
   swapTimeoutMs: z.number().step(1).min(1).default(30_000),
+  disposeTimeoutMs: z.number().step(1).min(0).max(30_000).default(5000),
   protectedFields: z.array(z.string()).default([]),
 })
 

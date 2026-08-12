@@ -51,6 +51,8 @@ export {
 } from './compatibility.ts'
 export { isValidRange, matchesVersionRange } from './semver-range.ts'
 export { LifecycleEngine } from './lifecycle.ts'
+export { wrapProvidedValue } from './lifecycle.ts'
+export type { ProvidedAccessRecord } from './lifecycle.ts'
 export { MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from './lifecycle.ts'
 export { PluginManagerService, PluginManagerServiceConfig } from './service.ts'
 import { PluginManagerService } from './service.ts'

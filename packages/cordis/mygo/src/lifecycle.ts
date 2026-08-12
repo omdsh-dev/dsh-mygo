@@ -46,6 +46,51 @@ export const MYGO_MANAGER_ID = 'dsh-mygo'
 export { MYGO_MANAGER_VERSION } from './self.ts'
 import { MYGO_MANAGER_VERSION } from './self.ts'
 export const MYGO_MANAGER_CAPABILITY = 'service:mygo-core'
+
+/**
+ * Runtime record of dynamic symbol access through wrapped provided values
+ * (A11 运行时代理兜底；B13 前置门消费)。只读注册表，随 provideTable 生命周期
+ * 由引擎持有；记录谁在何时访问过哪些符号。
+ */
+export interface ProvidedAccessRecord {
+  readonly capability: string
+  readonly symbol: string
+  readonly at: number
+}
+
+/**
+ * Wrap one provided value so the raw object never escapes the manager
+ * (design-r3 §4.2/§4.3，B3/B4；closeout §16 四发布点)。Proxy get 转发并记录
+ * 动态符号访问；set/deleteProperty 在桥接路径被拒绝并触发政策报告
+ * （exports 冻结，EB-D8）。原始引用不写入 provideTable、不返回、不经 seam 发布。
+ */
+export function wrapProvidedValue(
+  capability: string,
+  value: unknown,
+  _pluginId: string,
+  recordAccess: (record: ProvidedAccessRecord) => void,
+  rejectMutation: (property: string | symbol, action: 'set' | 'delete') => void = () => {},
+): unknown {
+  if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return value
+  return new Proxy(value, {
+    get(target, property, receiver) {
+      if (typeof property === 'string' && property !== 'then') {
+        recordAccess({ capability, symbol: property, at: Date.now() })
+      }
+      return Reflect.get(target, property, receiver)
+    },
+    set(_target, property, _next, _receiver) {
+      // 桥接 exports 冻结（EB-D8）：原地改写被拒绝并产出政策报告。
+      rejectMutation(property, 'set')
+      return false
+    },
+    deleteProperty(_target, property) {
+      // 删除与写入同权：冻结面禁止摘除导出符号。
+      rejectMutation(property, 'delete')
+      return false
+    },
+  })
+}
 import {
   claimEffect,
   createPluginFs,
@@ -87,6 +132,9 @@ import type {
 } from './types.ts'
 import type { PluginLifecycleEventPayload } from './types.ts'
 import type { GenerationRecord, RegistryStore, StatusRecord } from './store.ts'
+import { FineEpochRegistry, captureExports, type ProviderSymbolSnapshot } from './package/fine-epoch.ts'
+import { ProviderObservationRegistry } from './package/provider-observations.ts'
+import { evaluateRequiresGate, type RequiresGateResult } from './package/requires-gate.ts'
 
 /** One staged registration of a generation layer. */
 type StagedRegistration =
@@ -514,6 +562,11 @@ interface ManagedRecord {
   readonly origin: 'static' | InstallOrigin
   readonly source: PluginSource | { readonly type: 'static' }
   status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed'
+  /** 政策/反应式状态（EB-D16 三态：disabled > 政策拒绝 > INACTIVE）。 */
+  policyStatus?: 'active' | 'inactive' | 'policy-rejected'
+  /** BOM 对账事实（entry sha512/fileSize；B9）。 */
+  entrySha512?: string
+  entryFileSize?: number
   reason?: string
   /** Host side effects were revoked by disable; enable must remount. */
   hostSideEffectsDropped?: boolean
@@ -651,6 +704,8 @@ export interface LifecycleEngineOptions {
   readonly historyKeep?: number
   /** Bounded drain/next-idle wait; defaults to Config `swapTimeoutMs`. */
   readonly swapTimeoutMs?: number
+  /** dispose/unload 过渡超时；缺省取 Config `disposeTimeoutMs`（B8/EB-D21）。 */
+  readonly disposeTimeoutMs?: number
   /** Agent-turn busy check for `swapPolicy: 'next-idle'`. */
   readonly isTurnBusy?: () => boolean | Promise<boolean>
   /** Static composition ids (T2-4: static wins over dynamic rows). */
@@ -730,6 +785,7 @@ export class LifecycleEngine {
   private readonly resolveSourcePreview: (source: PluginSource) => Promise<PluginDefinition>
   private readonly historyKeep: number
   private readonly swapTimeoutMs: number
+  private readonly disposeTimeoutMs: number
   private readonly isTurnBusy: () => boolean | Promise<boolean>
   private readonly staticIds: ReadonlySet<string>
   private readonly slotKinds: ReadonlyMap<string, 'host-sorted' | 'chain-ordered'>
@@ -772,10 +828,42 @@ export class LifecycleEngine {
   private readonly commandDisposers = new Map<string, () => void>()
   private readonly hostProvideDisposers = new Map<string, () => void>()
   private readonly hostProvideValues = new Map<string, unknown>()
+  /** 动态符号访问记录（B3/A11 兜底；B13 前置门读取）。 */
+  private readonly providedAccessRecords: ProvidedAccessRecord[] = []
+  /** 细 epoch 前置门：挂载时导出快照注册表（B13）。 */
+  private readonly fineEpochRegistry = new FineEpochRegistry()
+  /** 服务提供者观测记录（B19；报告候选集来源）。 */
+  private readonly providerObservations = new ProviderObservationRegistry()
   private readonly idleDisposers = new Map<string, () => void>()
   private readonly neutral = new Map<string, boolean>()
   private readonly logLimiters = new Map<string, Logger>()
   private nextGeneration = 1
+
+  /** 只读动态符号访问记录（A11/B13）。 */
+  providedAccessLog(): readonly ProvidedAccessRecord[] {
+    return this.providedAccessRecords
+  }
+
+  /** 细 epoch 前置门注册表（B13；只读消费）。 */
+  fineEpoch(): FineEpochRegistry {
+    return this.fineEpochRegistry
+  }
+
+  /** 服务提供者观测注册表（B19；只读消费）。 */
+  providerObservationRegistry(): ProviderObservationRegistry {
+    return this.providerObservations
+  }
+
+  /** B3 单一收口：所有 provide 值 MUST 经此包装后入表/返回/发布。 */
+  private wrapProvided(capability: string, value: unknown, pluginId: string): unknown {
+    return wrapProvidedValue(capability, value, pluginId, record => {
+      this.providedAccessRecords.push(record)
+    }, (property, action) => {
+      this.logger.warn(
+        `exports-frozen: plugin ${pluginId} 尝试通过桥接导出面 ${action} 符号 ${String(property)}（能力 ${capability}）`,
+      )
+    })
+  }
 
   /**
    * Create the engine over a dispatch machine and registry store.
@@ -799,6 +887,7 @@ export class LifecycleEngine {
     this.resolveSourcePreview = options.resolveSourcePreview ?? this.resolveSource
     this.historyKeep = options.historyKeep ?? options.config.historyKeep
     this.swapTimeoutMs = options.swapTimeoutMs ?? options.config.swapTimeoutMs
+    this.disposeTimeoutMs = options.disposeTimeoutMs ?? options.config.disposeTimeoutMs ?? 5000
     this.isTurnBusy = options.isTurnBusy ?? (() => false)
     this.staticIds = new Set(options.staticIds ?? [])
     this.slotKinds = options.slotKinds ?? new Map()
@@ -938,7 +1027,7 @@ export class LifecycleEngine {
       if (existing !== undefined) {
         for (const old of existing.generations) {
           this.disposeGeneration(old)
-          await old.settingsOwnerDisposal
+          await this.disposeGenerationBounded(old)
           this.emit('plugin/deactivated', this.eventPayload(existing.id, old.manifest, old.number))
         }
       }
@@ -968,6 +1057,7 @@ export class LifecycleEngine {
       this.syncSkillState()
       this.syncCommandState()
       this.syncProvideState()
+      this.reconcileRequiresGates()
       await this.commitSettingsRegistrations(generation)
       this.records.set(definition.id, {
         id: definition.id,
@@ -1352,7 +1442,7 @@ export class LifecycleEngine {
         generation!.settingsOwnerDisposal = Promise.resolve(settingsOwner.fiber.dispose()).catch(() => undefined)
         record.hostSideEffectsDropped = true
       }
-      await generation?.settingsOwnerDisposal
+      if (generation !== undefined) await this.disposeGenerationBounded(generation)
       this.refreshOrders()
       this.emit('plugin/disabled', {
         ...this.eventPayload(id, this.manifestOf(record), this.generationNumber(record)),
@@ -1428,6 +1518,68 @@ export class LifecycleEngine {
     return [...this.records.values()]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map(record => this.handleOf(record))
+  }
+
+  /** 当前政策/反应式状态（缺省 active）。 */
+  private policyStatusOf(record: ManagedRecord): 'active' | 'inactive' | 'policy-rejected' {
+    return record.policyStatus ?? 'active'
+  }
+
+  /**
+   * requires 政策闸（B6）：服务级依赖仅运行期求值；INACTIVE 在提供者出现后
+   * 自动激活（EB-D16）。不进依赖图、安装期不阻断。每次 provide 状态变更后调用。
+   */
+  private reconcileRequiresGates(): void {
+    const snapshots: Record<string, ProviderSymbolSnapshot | undefined> = {}
+    for (const { service, snapshot } of this.fineEpochRegistry.entries()) {
+      snapshots[service] = snapshot
+      if (!service.startsWith('service:') && snapshots[`service:${service}`] === undefined) {
+        snapshots[`service:${service}`] = snapshot
+      }
+    }
+    const observations: Record<string, readonly import('./package/provider-observations.ts').ProviderObservation[]> = {}
+    for (const record of this.providerObservationRegistry().entries()) {
+      observations[record.service] = [...(observations[record.service] ?? []), record]
+      if (!record.service.startsWith('service:')) {
+        observations[`service:${record.service}`] = [...(observations[`service:${record.service}`] ?? []), record]
+      }
+    }
+    // 消费者被用符号（B13 动态访问注册表；静态投影由外部校验补充）。
+    const consumerSymbols: Record<string, readonly string[]> = {}
+    for (const access of this.providedAccessRecords) {
+      const current = consumerSymbols[access.capability] ?? []
+      if (!current.includes(access.symbol)) {
+        consumerSymbols[access.capability] = [...current, access.symbol]
+      }
+    }
+    for (const record of this.records.values()) {
+      if (record.status !== 'enabled') continue
+      const generation = record.generations.at(-1)
+      const requires = generation?.manifest.serviceRequires
+      if (requires === undefined || Object.keys(requires).length === 0) {
+        record.policyStatus = 'active'
+        continue
+      }
+      const result: RequiresGateResult = evaluateRequiresGate({
+        pluginId: record.id,
+        requires,
+        snapshots,
+        observations,
+        consumerSymbols,
+      })
+      if (result.ok) {
+        record.policyStatus = 'active'
+        continue
+      }
+      record.policyStatus = 'inactive'
+      for (const violation of result.violations) {
+        this.logger.warn(
+          `requires-gate: plugin ${record.id} 服务 ${violation.service} ${violation.kind}`
+          + `（区间 ${violation.range}${violation.providerVersion === undefined ? '' : `，提供者 ${violation.providerVersion}`}`
+          + `${violation.missingSymbols === undefined ? '' : `，缺失符号 ${violation.missingSymbols.join(',')}`}）`,
+        )
+      }
+    }
   }
 
   /**
@@ -1836,6 +1988,9 @@ export class LifecycleEngine {
     }
     this.records.clear()
     this.provideTable.clear()
+    this.providedAccessRecords.length = 0
+    for (const { service } of this.fineEpochRegistry.entries()) this.fineEpochRegistry.delete(service)
+    this.providerObservations.clear()
     this.toolIndirections.clear()
     this.promptSectionTable.clear()
     this.locks.clear()
@@ -2334,6 +2489,7 @@ export class LifecycleEngine {
       generations: [generation],
       state: undefined,
     })
+    this.reconcileRequiresGates()
     this.refreshOrders()
     try {
       await this.store.writeGeneration(id, generation.number, {
@@ -2478,6 +2634,7 @@ export class LifecycleEngine {
     this.syncSkillState()
     this.syncCommandState()
     this.syncProvideState()
+    this.reconcileRequiresGates()
     record.generations.push(generation)
     record.status = 'enabled'
     if (snapshot === undefined) delete record.snapshot
@@ -2561,7 +2718,7 @@ export class LifecycleEngine {
     const inFlight = events.filter(event => this.dispatch.inFlightCount(event) > 0)
     if (inFlight.length === 0) {
       this.disposeGeneration(generation)
-      await generation.settingsOwnerDisposal
+      await this.disposeGenerationBounded(generation)
       this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
       return
     }
@@ -2576,7 +2733,7 @@ export class LifecycleEngine {
           for (const disposer of disposers) disposer()
           this.idleDisposers.delete(record.id)
           this.disposeGeneration(generation)
-          await generation.settingsOwnerDisposal
+          await this.disposeGenerationBounded(generation)
           this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
           settle()
         }))
@@ -2618,6 +2775,7 @@ export class LifecycleEngine {
     this.syncSkillState()
     this.syncCommandState()
     this.syncProvideState()
+    this.reconcileRequiresGates()
     const index = record.generations.findIndex(candidate => candidate.number === incumbent.number)
     if (index === -1) record.generations.push(restored)
     else record.generations[index] = restored
@@ -2634,7 +2792,10 @@ export class LifecycleEngine {
       this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
     }
     for (const [capability, entry] of this.provideTable) {
-      if (entry.pluginId === record.id) this.provideTable.delete(capability)
+      if (entry.pluginId === record.id) {
+        this.provideTable.delete(capability)
+        this.dropProvideAccounting(capability, record.id)
+      }
     }
     for (const [name, entry] of this.toolIndirections) {
       if (entry.pluginId === record.id) this.toolIndirections.delete(name)
@@ -2657,6 +2818,7 @@ export class LifecycleEngine {
     this.syncSkillState()
     this.syncCommandState()
     this.syncProvideState()
+    this.reconcileRequiresGates()
     this.idleDisposers.get(record.id)?.()
     this.idleDisposers.delete(record.id)
   }
@@ -2711,6 +2873,42 @@ export class LifecycleEngine {
       }
     } catch (error) {
       this.logger.warn(`plugin ${generation.manifest.id} dispose hook failed: ${String(error)}`)
+    }
+  }
+
+  /**
+   * 有界等待一次 generation 的 dispose 过渡（EB-D21/B8）：默认 5000ms、
+   * 0..30000 可配，0=立即放弃。超时 = 停止等待并放弃所有权（JS 无法中止
+   * 运行中的异步生成器）——后续 resolve/reject 被忽略并计入
+   * `dispose-abandoned` 报告（可能资源泄漏，报告显式警告）；过渡队列已由
+   * 调用方释放，后续过渡不被阻塞。
+   */
+  private async disposeGenerationBounded(generation: EngineGeneration): Promise<void> {
+    const disposal = generation.settingsOwnerDisposal
+    if (disposal === undefined) return
+    const timeoutMs = this.disposeTimeoutMs
+    if (timeoutMs <= 0) {
+      this.logger.warn(
+        `dispose-abandoned: plugin ${generation.manifest.id} 立即放弃等待（disposeTimeoutMs=0）`
+        + `；可能残留资源（generation ${generation.number}）`,
+      )
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`dispose 超时（${timeoutMs}ms）`))
+      }, timeoutMs)
+    })
+    try {
+      await Promise.race([disposal, deadline])
+    } catch {
+      this.logger.warn(
+        `dispose-abandoned: plugin ${generation.manifest.id} 的 dispose 在 ${timeoutMs}ms 内未完成`
+        + `（generation ${generation.number}）；已放弃等待并释放过渡队列，可能资源泄漏`,
+      )
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
   }
 
@@ -2905,8 +3103,24 @@ export class LifecycleEngine {
 
   private updateProvideTable(generation: EngineGeneration, id: string): void {
     for (const [capability, value] of generation.provides) {
-      this.provideTable.set(capability, { pluginId: id, value })
+      const snapshot: ProviderSymbolSnapshot = {
+        pluginId: id,
+        version: generation.manifest.version,
+        exports: captureExports(value),
+        ...(generation.manifest.symbolAliases === undefined
+          ? {}
+          : { aliases: generation.manifest.symbolAliases }),
+      }
+      this.fineEpochRegistry.set(capability, snapshot)
+      this.providerObservations.observe(capability, id, generation.manifest.version, this.now())
+      this.provideTable.set(capability, { pluginId: id, value: this.wrapProvided(capability, value, id) })
     }
+  }
+
+  /** 摘除一个能力的所有运行期记账（快照 + 观测）。 */
+  private dropProvideAccounting(capability: string, id: string): void {
+    this.fineEpochRegistry.delete(capability)
+    this.providerObservations.remove(capability, id)
   }
 
   /**
@@ -3389,7 +3603,10 @@ export class LifecycleEngine {
     for (const capability of previous.provides.keys()) {
       if (next.provides.has(capability)) continue
       const entry = this.provideTable.get(capability)
-      if (entry?.pluginId === id) this.provideTable.delete(capability)
+      if (entry?.pluginId === id) {
+        this.provideTable.delete(capability)
+        this.dropProvideAccounting(capability, id)
+      }
     }
     for (const name of previous.tools.keys()) {
       if (next.tools.has(name)) continue
@@ -3429,6 +3646,7 @@ export class LifecycleEngine {
     for (const [capability, entry] of this.provideTable) {
       if (entry.pluginId === id && !previousGeneration?.provides.has(capability)) {
         this.provideTable.delete(capability)
+        this.dropProvideAccounting(capability, id)
       }
     }
     for (const [name, entry] of this.toolIndirections) {
@@ -3458,7 +3676,7 @@ export class LifecycleEngine {
     }
     if (previousGeneration !== null) {
       for (const [capability, value] of previousGeneration.provides) {
-        this.provideTable.set(capability, { pluginId: id, value })
+        this.provideTable.set(capability, { pluginId: id, value: this.wrapProvided(capability, value, id) })
       }
       for (const [name, definition] of previousGeneration.tools) {
         this.toolIndirections.set(name, { pluginId: id, definition })
@@ -3482,6 +3700,7 @@ export class LifecycleEngine {
     this.syncSkillState()
     this.syncCommandState()
     this.syncProvideState()
+    this.reconcileRequiresGates()
   }
 
   private refreshOrders(): void {
@@ -3611,6 +3830,9 @@ export class LifecycleEngine {
       ...(generation?.manifest.compatibility === undefined
         ? {}
         : { compatibility: generation.manifest.compatibility }),
+      policyStatus: this.policyStatusOf(record),
+      ...(record.entrySha512 === undefined ? {} : { entrySha512: record.entrySha512 }),
+      ...(record.entryFileSize === undefined ? {} : { entryFileSize: record.entryFileSize }),
     }
   }
 
@@ -3712,6 +3934,7 @@ function emptyManifest(id: string): PluginDefinition {
     version: '',
     kinds: [],
     requires: [],
+    serviceRequires: {},
     provides: [],
     permissions: emptyPermissions(),
     stateful: false,

@@ -60,6 +60,13 @@ export interface PluginDefinition {
   readonly kinds: string[]
   /** Cordis service ids this plugin consumes; an entry containing `@` is reserved (`capability-range-reserved`). */
   readonly requires: readonly string[]
+  /**
+   * 服务级依赖（design-r3 §2.1）：服务名 → npm semver 区间。仅运行期政策闸；
+   * 不进依赖图、安装期不阻断。服务版本 = 提供者插件 manifest 版本（B6）。
+   */
+  readonly serviceRequires?: Readonly<Record<string, string | readonly string[]>>
+  /** 符号别名/兼容映射（别名 → 规范符号，EB-D19；前置门管辖）。 */
+  readonly symbolAliases?: Readonly<Record<string, string>>
   /** Service ids this plugin provides; the manager holds the `provide` registrations. */
   readonly provides: readonly string[]
   /** Declared event permissions and position (§5). */
@@ -994,6 +1001,8 @@ export interface PluginHandleInfo {
   readonly origin: 'static' | InstallOrigin
   /** Lifecycle status of the plugin. */
   readonly status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed' | 'uninstalled'
+  /** 政策/反应式状态（design-r3 §4.4/EB-D16）：INACTIVE 依赖恢复后自动激活。 */
+  readonly policyStatus?: 'active' | 'inactive' | 'policy-rejected'
   /** Recovery reason when `status` is not `enabled`. */
   readonly reason?: string
   /** Declared kinds. */
@@ -1010,4 +1019,8 @@ export interface PluginHandleInfo {
   readonly entrypoints?: readonly string[]
   /** Declared package-level constraints. */
   readonly compatibility?: PluginCompatibility
+  /** BOM 对账：entry 文件 sha512（hex，C5/Rev-2）。 */
+  readonly entrySha512?: string
+  /** BOM 对账：entry 文件字节数（G10）。 */
+  readonly entryFileSize?: number
 }

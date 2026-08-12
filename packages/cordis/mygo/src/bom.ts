@@ -44,6 +44,10 @@ export interface BomMemberLock {
   readonly id: string
   readonly rail: BomRail
   readonly version: string
+  /** BOM 对账：entry 文件 sha512（hex；C5/Rev-2）。 */
+  readonly sha512?: string
+  /** BOM 对账：entry 文件字节数（G10）。 */
+  readonly fileSize?: number
   readonly commit?: string
   /** 序列化来源（v1：仅 self 填 commit；bridge 的 github ref 留面板侧）。 */
   readonly source?: Record<string, unknown>
@@ -211,7 +215,13 @@ export function buildBom(input: BomExportInput): BomDocument {
         : { entrypoints: handle.entrypoints }),
       ...(handle.compatibility === undefined ? {} : { compatibility: handle.compatibility }),
     })
-    locks.push({ id: handle.id, rail: 'bridge', version: handle.version })
+    locks.push({
+      id: handle.id,
+      rail: 'bridge',
+      version: handle.version,
+      ...(handle.entrySha512 === undefined ? {} : { sha512: handle.entrySha512 }),
+      ...(handle.entryFileSize === undefined ? {} : { fileSize: handle.entryFileSize }),
+    })
   }
   for (const bundle of input.bundles ?? []) {
     intents.push({

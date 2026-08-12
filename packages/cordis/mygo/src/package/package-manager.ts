@@ -19,6 +19,14 @@ import { fetchRegistryMetadata, type RegistryVersionInfo } from './registry-clie
 import { resolve, type PluginCandidate, type ResolveOutcome } from './resolver.ts'
 import { extractPlugin, loadPluginEntry } from './entry-loader.ts'
 import type { ResolutionReport } from './report.ts'
+import {
+  buildPluginPack,
+  installPluginPack,
+  type PackBuildOptions,
+  type PackBuildOutcome,
+  type PackInstallOptions,
+  type PackInstallOutcome,
+} from './pack.ts'
 
 export interface PackageManagerOptions {
   readonly paths: MygoPaths
@@ -169,9 +177,24 @@ export class PluginPackageManager {
       ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),
     })
     const scanned = await scanBundles(installedPackage.manifest.id, installedPackage.dir, installedPackage.manifest.bundles)
+    const pkgJson = JSON.parse(await readFile(join(installedPackage.dir, 'package.json'), 'utf8')) as {
+      readonly name?: unknown
+      readonly dependencies?: Readonly<Record<string, unknown>>
+      readonly peerDependencies?: Readonly<Record<string, unknown>>
+      readonly optionalDependencies?: Readonly<Record<string, unknown>>
+    }
+    const declaredSpecifiers = new Set([
+      ...Object.keys(pkgJson.dependencies ?? {}),
+      ...Object.keys(pkgJson.peerDependencies ?? {}),
+      ...Object.keys(pkgJson.optionalDependencies ?? {}),
+    ])
     const undeclared = await detectUndeclaredBundles(
       installedPackage.dir,
       installedPackage.manifest.bundles.map(bundle => bundle.path),
+      {
+        declaredSpecifiers,
+        ...(typeof pkgJson.name === 'string' ? { selfPackageName: pkgJson.name } : {}),
+      },
     )
     if (scanned.problems.length > 0 || undeclared.length > 0) {
       return {
@@ -344,6 +367,8 @@ export class PluginPackageManager {
       breaks: installed.manifest.breaks,
       entrySha256: installed.entrySha256,
       manifestSha256: installed.manifestSha256,
+      ...(installed.entrySha512 === undefined ? {} : { entrySha512: installed.entrySha512 }),
+      ...(installed.entryFileSize === undefined ? {} : { entryFileSize: installed.entryFileSize }),
       packageName,
       ...(installed.manifest.provides.length === 0 ? {} : { provides: installed.manifest.provides }),
       ...(bundles.length === 0
@@ -484,12 +509,15 @@ export class PluginPackageManager {
     const plugin = extractPlugin(module)
     if (plugin === undefined) throw new Error(`插件 ${id} 入口未导出可挂载插件（${lock.entry}）`)
     const manifest: PluginManifestV2 = {
+      formatVersion: 1,
       id,
       version: lock.version,
       entry: lock.entry,
       depends: lock.depends,
       breaks: lock.breaks,
+      requires: {},
       core: lock.core,
+      recommends: {},
       provides: lock.provides ?? [],
       entrypoints: {},
       bundles: [],
@@ -504,8 +532,26 @@ export class PluginPackageManager {
         manifest,
         entrySha256: lock.entrySha256,
         manifestSha256: lock.manifestSha256,
+        ...(lock.entrySha512 === undefined ? {} : { entrySha512: lock.entrySha512 }),
+        ...(lock.entryFileSize === undefined ? {} : { entryFileSize: lock.entryFileSize }),
         ...(lock.integrity === undefined ? {} : { integrity: lock.integrity }),
       },
     }
+  }
+
+  /**
+   * 从当前 lockfile + store 构建确定性 mygo-pack（design-r4 B21/B25）。
+   * 离线；同一 store 两次构建产物字节级一致（T32）。
+   */
+  async buildPack(options: PackBuildOptions): Promise<PackBuildOutcome> {
+    return buildPluginPack(this.options, options)
+  }
+
+  /**
+   * 安装 mygo-pack：清单/成员/哈希预检 → 既有求解器 → store 安装 →
+   * lockfile 写入（design-r4 B23）。全部校验先于任何 store 写入；离线。
+   */
+  async installPack(packPath: string, options: PackInstallOptions = {}): Promise<PackInstallOutcome> {
+    return installPluginPack(this.options, packPath, options)
   }
 }

@@ -101,6 +101,25 @@ export function sourceCallsDshCore(source: string): boolean {
   return /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]@deepseek-ai\//.test(source)
 }
 
+/** 提取一个源码文件里的 `@deepseek-ai/*` 说明符（from/import()/require()）。 */
+export function dshCoreSpecifiers(source: string): readonly string[] {
+  const out: string[] = []
+  const re = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)(['"])(@deepseek-ai\/[^'"]+)\1/g
+  for (const match of source.matchAll(re)) {
+    const specifier = match[2]
+    if (specifier !== undefined && !out.includes(specifier)) out.push(specifier)
+  }
+  return out
+}
+
+/** 从说明符取包名（scoped 取前两段，普通取第一段）。 */
+export function packageNameOfSpecifier(specifier: string): string {
+  const parts = specifier.split('/')
+  return specifier.startsWith('@') && parts.length >= 2
+    ? `${parts[0]}/${parts[1] as string}`
+    : (parts[0] as string)
+}
+
 /**
  * Detect “求解器不可见”打包：未在 bundles 声明、但满足以下任一条件的嵌套包：
  * 1) 本身是插件（有 dsh.mygo）；2) import 任何 @deepseek-ai/*（调用 dsh 核心
@@ -110,6 +129,12 @@ export function sourceCallsDshCore(source: string): boolean {
 export async function detectUndeclaredBundles(
   root: string,
   declaredPaths: readonly string[],
+  options: {
+    /** package.json dependencies/peerDependencies/optionalDependencies 键集。 */
+    readonly declaredSpecifiers?: ReadonlySet<string>
+    /** 插件自身 npm 包名（自身子路径 import 不属未声明，KF-1 裁决）。 */
+    readonly selfPackageName?: string
+  } = {},
 ): Promise<readonly string[]> {
   const problems: string[] = []
   const skip = new Set(declaredPaths.map(path => resolve(root, path)))
@@ -152,7 +177,13 @@ export async function detectUndeclaredBundles(
         try {
           const source = await readFile(full, 'utf8')
           if (sourceCallsDshCore(source)) {
-            problems.push(`未声明 dsh 核心调用：${full}（import @deepseek-ai/* 的内嵌包必须经 bundles 声明）`)
+            for (const specifier of dshCoreSpecifiers(source)) {
+              const pkgName = packageNameOfSpecifier(specifier)
+              if (options.declaredSpecifiers?.has(pkgName) === true || options.selfPackageName === pkgName) continue
+              problems.push(
+                `未声明 dsh 核心调用：${full}（${specifier} 未声明于 dependencies/peerDependencies/optionalDependencies，也未经 bundles 声明）`,
+              )
+            }
           }
         } catch {
           // unreadable source: skip

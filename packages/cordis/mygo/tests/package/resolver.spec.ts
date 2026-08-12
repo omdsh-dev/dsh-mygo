@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { findDependsCycle, resolve, topologicalOrder, type PluginCandidate } from '../../src/package/resolver.ts'
+import { findDependsCycle, resolve, sortCandidates, topologicalOrder, type PluginCandidate } from '../../src/package/resolver.ts'
 
 function candidate(
   version: string,
@@ -129,5 +129,67 @@ describe('plugin resolver', () => {
     expect(topologicalOrder(['A', 'B', 'C', 'D'], edges)).toEqual(['D', 'C', 'B', 'A'])
     expect(findDependsCycle(['A', 'B', 'C', 'D'], edges)).toBeUndefined()
     expect(findDependsCycle(['A', 'B'], new Map([['A', ['B']], ['B', ['A']]]))).toEqual(['A', 'B', 'A'])
+  })
+
+  it('is byte-identical for the same input on two runs, including tie-break candidates (T19)', () => {
+    const build = () => resolve({
+      requests: new Map([['A', {}], ['B', {}]]),
+      candidates: new Map([
+        ['A', [
+          { version: '1.0.0', constraints: { depends: { C: '>=1.0.0' }, breaks: {}, core: '*' }, source: 'registry' },
+          { version: '2.0.0', constraints: { depends: { C: '>=1.0.0' }, breaks: {}, core: '*' }, source: 'bundle', depth: 2, parent: 'root' },
+        ]],
+        ['B', [
+          { version: '1.0.0', constraints: { depends: { C: '>=1.0.0' }, breaks: {}, core: '*' }, source: 'locked' },
+        ]],
+        ['C', [
+          { version: '1.0.0', constraints: { depends: {}, breaks: {}, core: '*' }, source: 'registry' },
+        ]],
+      ]),
+      installed: new Map(),
+      coreVersion: '0.0.1-rc.1',
+    })
+    const first = build()
+    const second = build()
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second))
+    // 全序闭合：同优先级缝隙由 source 序 + sha256 字典序裁决。
+    const ordered = sortCandidates([
+      { version: '1.0.0', source: 'locked', manifestSha256: 'bbb' },
+      { version: '1.0.0', source: 'registry', manifestSha256: 'aaa' },
+      { version: '1.0.0', source: 'bundle', manifestSha256: 'ccc' },
+      { version: '1.0.0', source: 'registry', manifestSha256: 'ddd' },
+      { version: '1.0.0', source: 'pinned', manifestSha256: 'eee' },
+    ])
+    expect(ordered.map(item => `${item.source ?? ''}:${item.manifestSha256 ?? ''}`)).toEqual([
+      'pinned:eee',
+      'registry:aaa',
+      'registry:ddd',
+      'locked:bbb',
+      'bundle:ccc',
+    ])
+    // 嵌套浅优先（depth 升序）与 parent 升序。
+    const nested = sortCandidates([
+      { version: '2.0.0', depth: 3, parent: 'z' },
+      { version: '2.0.0', depth: 1, parent: 'm' },
+      { version: '2.0.0', depth: 1, parent: 'a' },
+      { version: '2.0.0' },
+    ])
+    expect(nested.map(item => `${item.depth ?? 0}:${item.parent ?? ''}`)).toEqual(['0:', '1:a', '1:m', '3:z'])
+  })
+
+  it('carries generation from/to on failure reports for P1-global rollback attribution (B7/EB-D4)', () => {
+    const outcome = resolve({
+      requests: new Map([['A', {}]]),
+      candidates: new Map([
+        ['A', [candidate('1.0.0', { B: '>=2.0.0' })]],
+        ['B', [candidate('1.0.0')]],
+      ]),
+      installed: new Map(),
+      coreVersion: '0.0.1-rc.1',
+      generation: { from: 'g2', to: 'g1' },
+    })
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.report.generation).toEqual({ from: 'g2', to: 'g1' })
   })
 })

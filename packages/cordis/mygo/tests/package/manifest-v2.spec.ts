@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
 
 describe('manifest v2', () => {
@@ -119,5 +120,126 @@ describe('manifest v2', () => {
       dsh: { mygo: { bundles: [{ id: 'b', version: '1.0.0', path: '../outside' }] } },
     })
     expect(result.problems.some(problem => problem.path.includes('path'))).toBe(true)
+  })
+
+  it('parses the v3 field set (formatVersion/requires/recommends/symbolAliases/grants/environment)', () => {
+    const result = parsePackageManifest({
+      name: '@dsh-external/v3',
+      version: '1.0.0',
+      dsh: {
+        mygo: {
+          formatVersion: 1,
+          entry: 'lib/index.js',
+          core: '>=0.0.1-rc.1',
+          requires: { 'voice-chat': '>=0.1.0', 'file-watch': ['>=1.0.0', '<2.0.0'] },
+          recommends: { 'nice-to-have': '^0.1.0' },
+          provides: ['alias-id'],
+          symbolAliases: { b: 'c' },
+          grants: { intercept: true, networkAccess: { allow: ['https://ok.dev'] } },
+          environment: { platform: 'web' },
+        },
+      },
+    })
+    expect(result.problems).toEqual([])
+    expect(result.value).toMatchObject({
+      formatVersion: 1,
+      requires: { 'voice-chat': '>=0.1.0', 'file-watch': ['>=1.0.0', '<2.0.0'] },
+      recommends: { 'nice-to-have': '^0.1.0' },
+      provides: ['alias-id'],
+      symbolAliases: { b: 'c' },
+      grants: { intercept: true, networkAccess: { allow: ['https://ok.dev'] } },
+      environment: { platform: 'web' },
+    })
+  })
+
+  it('rejects an unsupported formatVersion as manifest-invalid', () => {
+    const result = parsePackageManifest({
+      name: 'x',
+      version: '1.0.0',
+      dsh: { mygo: { formatVersion: 2, entry: 'index.js' } },
+    })
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.formatVersion')).toBe(true)
+  })
+
+  it('maps legacy compatibility.requires bare keys to depends and service: keys to requires', () => {
+    const result = parsePackageManifest({
+      name: 'x',
+      version: '1.0.0',
+      main: 'index.js',
+      dsh: {
+        mygo: {
+          compatibility: {
+            requires: {
+              'dsh-voice-chat': '>=0.1.0',
+              'service:voice-chat': '>=0.1.0',
+            },
+          },
+        },
+      },
+    })
+    expect(result.problems).toEqual([])
+    expect(result.value?.depends).toEqual({ 'dsh-voice-chat': '>=0.1.0' })
+    expect(result.value?.requires).toEqual({ 'voice-chat': '>=0.1.0' })
+  })
+
+  it('rejects a service: prefix in the new requires namespace', () => {
+    const result = parsePackageManifest({
+      name: 'x',
+      version: '1.0.0',
+      dsh: { mygo: { requires: { 'service:voice-chat': '>=0.1.0' } } },
+    })
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.requires.service:voice-chat')).toBe(true)
+  })
+
+  it('rejects same-name conflicts between new and compatibility declarations', () => {
+    const result = parsePackageManifest({
+      name: 'x',
+      version: '1.0.0',
+      dsh: {
+        mygo: {
+          requires: { 'voice-chat': '>=0.1.0' },
+          compatibility: { requires: { 'service:voice-chat': '>=0.2.0' } },
+        },
+      },
+    })
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.requires.voice-chat')).toBe(true)
+  })
+
+  it('rejects absolute, drive-letter and parent-traversal patch/bundle paths', () => {
+    const result = parsePackageManifest({
+      name: 'x',
+      version: '1.0.0',
+      dsh: {
+        mygo: {
+          entry: 'C:\\evil\\index.js',
+          bundles: [{ id: 'b', version: '1.0.0', path: '/etc/outside' }],
+          patches: [{ id: 'p1', file: '../../outside.patch', target: { module: 'm', symbol: 's', operation: 'before' } }],
+        },
+      },
+    })
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.entry')).toBe(true)
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.bundles.b.path')).toBe(true)
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.patches.p1.file')).toBe(true)
+  })
+
+  it('accepts the rewritten dsh-vibe-mode reference implementation (T18/B2)', async () => {
+    const raw = await readFile(
+      '/home/rosen/workspace/dsh_dev/dsh-external-src/dsh-vibe-mode/package.json',
+      'utf8',
+    )
+    const result = parsePackageManifest(JSON.parse(raw))
+    expect(result.problems).toEqual([])
+    expect(result.value).toMatchObject({
+      formatVersion: 1,
+      id: 'dsh-vibe-mode',
+      version: '0.1.0',
+      depends: { 'dsh-voice-chat': '>=0.1.0' },
+      requires: { 'voice-chat': '>=0.1.0' },
+    })
+    expect(result.value?.requires).not.toHaveProperty('service:voice-chat')
   })
 })

@@ -9,14 +9,15 @@
  * named domains (`workspace`, `session_projcache`) still land on json.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
-import Loader from '@cordisjs/plugin-loader'
-import Include from '@cordisjs/plugin-include'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Include from '@deepseek-ai/cordis-plugin-include'
+import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import z from 'schemastery'
 import { z as zod } from 'zod'
 import Storage from '@deepseek-ai/dsh-storage'
@@ -53,6 +54,38 @@ declare module 'cordis' {
 
 let root: string | undefined
 let context: Context | undefined
+
+// P-0：npm registry 注入桩。响应数据来自真实 registry 快照（固化在
+// fixtures/registry/missing-pkg.json），测试离线确定，不依赖外网。
+let registryServer: Server | undefined
+let registryUrl = ''
+const registryRequests: string[] = []
+
+beforeAll(async () => {
+  const snapshot = JSON.parse(await readFile(
+    fileURLToPath(new URL('./fixtures/registry/missing-pkg.json', import.meta.url)),
+    'utf8',
+  )) as { readonly status: number; readonly body: { readonly error: string } }
+  registryServer = createServer((request, response) => {
+    registryRequests.push(request.url ?? '')
+    response.writeHead(snapshot.status, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(snapshot.body))
+  })
+  await new Promise<void>(resolve => {
+    registryServer?.listen(0, '127.0.0.1', () => {
+      const address = registryServer?.address()
+      if (address !== null && typeof address === 'object') {
+        registryUrl = `http://127.0.0.1:${(address as { port: number }).port}`
+      }
+      resolve()
+    })
+  })
+})
+
+afterAll(async () => {
+  await new Promise<void>(resolve => registryServer?.close(() => resolve()))
+  registryServer = undefined
+})
 
 afterEach(async () => {
   await context?.fiber.dispose()
@@ -243,6 +276,7 @@ function managerRows(rootDir: string, profile: string, domainConfig: string[]): 
     "- name: '@deepseek-ai/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
+    `    registry: ${JSON.stringify(registryUrl)}`,
     `    stateRoot: ${JSON.stringify(join(rootDir, 'state'))}`,
     '    cpuBudgetMs: 1',
     '',
@@ -423,7 +457,9 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
     expect(state.dshPatternBus).toEqual([{ n: 1 }])
   })
 
-  it('covers replace, updateConfig, plan, and source-resolution failures over a dynamic plugin', async () => {
+  // 全栈 sqlite 组合的集成路径：本环境实测 ~10s（早于 @cordisjs 命名修复，
+  // 该套件在 0811 迁移后从未以默认 5s 超时跑过），显式放宽。
+  it('covers replace, updateConfig, plan, and source-resolution failures over a dynamic plugin', { timeout: 30_000 }, async () => {
     const { ctx } = await loadComposition(bootRoot => managerRows('<root>', 'ops', ['    backend: sqlite'])
       .map(line => line.replace('<root>', bootRoot)))
     await ctx.pluginManager.install({ type: 'inline', code: INLINE_DYNAMIC_CODE })
@@ -447,6 +483,9 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
       .rejects.toMatchObject({ code: 'package-not-resolvable' })
     await expect(ctx.pluginManager.install({ type: 'inline', code: 'module.exports = 42' }))
       .rejects.toThrow(/did not export a PluginDefinition/)
+    // P-0 断言：npm 请求确实打到本地桩（离线确定），且没有外部 host。
+    expect(registryRequests.some(url => url.includes('missing-pkg'))).toBe(true)
+    expect(registryRequests.every(url => url.startsWith('/'))).toBe(true)
   })
 
   it('REAL composition: conflicting, cyclic, and clean fixtures with plugin event flow (PO:249, HP:141)', async () => {

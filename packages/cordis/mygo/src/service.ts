@@ -67,6 +67,8 @@ export const PluginManagerServiceConfig = z.intersect([
   PluginManagerConfigSchema,
   z.object({
     profile: z.string().required(),
+    // npm 源 registry 基址；缺省官方 registry（测试注入本地桩，P-0 离线确定）。
+    registry: z.string().required(false),
     // Internally: mana. Five empty casts and you're benched.
     cpuBudgetMs: z.number().min(0).default(100),
   }),
@@ -75,6 +77,7 @@ export const PluginManagerServiceConfig = z.intersect([
 /** Resolved row config: the §15.6/§17 surface plus the profile name. */
 export type PluginManagerServiceConfigValue = PluginManagerConfig & {
   readonly profile: string
+  readonly registry?: string
   readonly cpuBudgetMs: number
 }
 
@@ -107,6 +110,7 @@ export class PluginManagerService extends Service implements PluginManager {
     this.packageManager = new PluginPackageManager({
       paths,
       profile: config.profile,
+      ...(config.registry === undefined ? {} : { registry: config.registry }),
       ...(coreVersion === undefined ? {} : { coreVersion }),
       managerVersion: MYGO_MANAGER_VERSION,
     })
@@ -426,6 +430,10 @@ export class PluginManagerService extends Service implements PluginManager {
       kinds: [],
       events: [],
       requires: [],
+      serviceRequires: manifest.requires,
+      ...(Object.keys(manifest.symbolAliases ?? {}).length === 0
+        ? {}
+        : { symbolAliases: manifest.symbolAliases }),
       provides: manifest.provides,
       permissions: {
         observe: [],
@@ -464,6 +472,10 @@ export class PluginManagerService extends Service implements PluginManager {
       kinds: [],
       events: [],
       requires: [],
+      serviceRequires: manifest.requires,
+      ...(Object.keys(manifest.symbolAliases ?? {}).length === 0
+        ? {}
+        : { symbolAliases: manifest.symbolAliases }),
       provides: manifest.provides,
       permissions: {
         observe: [],

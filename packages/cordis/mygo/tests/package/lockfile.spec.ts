@@ -6,7 +6,14 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readLockfile, sha256File, sha256Text, verifyLockfile, writeLockfile } from '../../src/package/lockfile.ts'
+import {
+  integritySha512Hex,
+  readLockfile,
+  sha256File,
+  sha256Text,
+  verifyLockfile,
+  writeLockfile,
+} from '../../src/package/lockfile.ts'
 import { packageDir, resolveMygoPaths } from '../../src/package/paths.ts'
 import type { Lockfile } from '../../src/package/lockfile.ts'
 
@@ -79,5 +86,29 @@ describe('lockfile', () => {
 
   it('is pure hash math (never consults a registry)', async () => {
     expect(sha256Text('abc')).toHaveLength(64)
+  })
+
+  it('parses npm integrity sha512-SRI into hex (B9/C5)', () => {
+    const raw = 'sha512-' + Buffer.from('a'.repeat(64), 'hex').toString('base64')
+    expect(integritySha512Hex(raw)).toBe('a'.repeat(64))
+    expect(integritySha512Hex('sha1-abc')).toBeUndefined()
+    expect(integritySha512Hex(undefined)).toBeUndefined()
+  })
+
+  it('rejects an escaping lockfile entry at load time (B10/T8)', async () => {
+    const lockfile = await seed('export default {}')
+    const escaped: Lockfile = {
+      ...lockfile,
+      plugins: {
+        tool: {
+          ...(lockfile.plugins.tool as NonNullable<typeof lockfile.plugins.tool>),
+          entry: '../outside.js',
+        },
+      },
+    }
+    const verified = await verifyLockfile(paths, escaped)
+    expect(verified.ok).toBe(false)
+    if (verified.ok) return
+    expect(verified.issues[0]?.reason).toContain('逃逸')
   })
 })
