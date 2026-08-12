@@ -48,10 +48,12 @@
 1. **live patch disable 面板不对称**：仅编辑 `cordis.patch.yml` 去掉/加回
    `disabled: true` 会热生效（无需重启）；热 enable 干净（200），热 disable 会残留
    `/api/mygo/*` 路由返回 400（`inactive context`），重启后才是 404 干净态。
-2. **mygo-rdb 扩展版本线不匹配**：其 manifest 下限 `service:mygo-core >=0.1.0` 与
-   新版本线 `0.0.1-rc.1` 冲突，`bom.spec` / `extension-mygo-rdb.spec` 相关 3 个用例在
-   rc.1 ambient 下失败；下限改为 `>=0.0.1-rc.1` 可修复。**按用户指示暂不提交**
-   （见 §5）。
+2. **mygo-rdb 暂时 ignore（用户裁决，2026-08-12）**：其 manifest 下限
+   `service:mygo-core >=0.1.0` 与版本线 `0.0.1-rc.1` 冲突，相关 3 个用例在 rc.1
+   ambient 下失败；下限改为 `>=0.0.1-rc.1` 可修复。决策：**修正保留本地不回退、
+   不提交**；打包/安装流程经核查本就不含 mygo-rdb（publish-mygo.mjs 仅发布
+   mygo-api/mygo/panel/cordis-alias；install.sh 不复制 extension/mygo-rdb），
+   维持不打包。提交态（不含修正）下这 3 个用例会失败，待后续单独处理。
 3. **同 profile 双开冲突**：`dsh --profile web mygo …` 与运行中的 3080 会争端口；
    CLI 命令应在独立 profile 或停掉 web 后执行。
 4. **pnpm install 会重建包级 node_modules**（可能清掉手工链接）；install.sh §5.6/5.7
@@ -66,7 +68,7 @@
   `workspace:^` 依赖的打包期归一（F1 同款，修复 communityDeps 区间校验）。
 - 本备忘录。
 
-**暂不提交（mygo-rdb，本地保留）**：
+**mygo-rdb（ignore，本地保留、不提交、不打包）**：
 - `extension/mygo-rdb/package.json`（下限 `>=0.1.0` → `>=0.0.1-rc.1`）。
 - `packages/cordis/mygo/tests/bom.spec.ts`、`tests/extension-mygo-rdb.spec.ts`
   （同一修正的测试断言）。
