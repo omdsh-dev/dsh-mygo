@@ -121,3 +121,33 @@ describe('requires policy gate', () => {
     expect(report.conflicts[0]?.actions.join()).toContain('voice-provider')
   })
 })
+
+describe('原型安全查表（修复批次 2 / review#1 A1）', () => {
+  const snapshot = (version: string, exports: string[]): ProviderSymbolSnapshot => ({
+    pluginId: 'voice-provider',
+    version,
+    exports,
+  })
+
+  it('服务名 toString 无提供者 → service-missing（不命中 Object.prototype、不崩溃）', () => {
+    const result = evaluateRequiresGate({
+      pluginId: 'consumer',
+      requires: { toString: '>=1.0.0' },
+      snapshots: {},
+      observations: {},
+    })
+    expect(result.ok).toBe(false)
+    expect(result.violations[0]).toMatchObject({ kind: 'service-missing', service: 'toString' })
+  })
+
+  it('服务名 toString 有提供者且版本满足 → ok（自有键正常命中）', () => {
+    const withProvider = evaluateRequiresGate({
+      pluginId: 'consumer',
+      requires: { toString: '>=1.0.0' },
+      snapshots: { toString: snapshot('1.0.0', ['x']) },
+      observations: {},
+    })
+    expect(withProvider.ok).toBe(true)
+    expect(withProvider.violations).toEqual([])
+  })
+})

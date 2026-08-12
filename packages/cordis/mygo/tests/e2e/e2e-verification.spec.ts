@@ -23,7 +23,6 @@ import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
 import { constraintsOf } from '../../src/package/manifest-v2.ts'
 import { resolve, type PluginCandidate } from '../../src/package/resolver.ts'
 import { fetchRegistryMetadata } from '../../src/package/registry-client.ts'
-import { evaluateRequiresGate, requiresGateReport } from '../../src/package/requires-gate.ts'
 import { preGate, captureExports } from '../../src/package/fine-epoch.ts'
 import { detectDualPresence } from '../../src/package/dual-presence.ts'
 import { harvestPackageMetadata } from '../../src/package/harvester.ts'
@@ -272,6 +271,7 @@ describe('T23 S3 符号缺失：pre-gate 同步拦截 + symbol-missing 报告 + 
           // 真实动态访问：consumer 在运行期通过包装面取缺失符号。
           const svc = env.get<Record<string, unknown>>('svc')
           void svc?.ghost
+          env.provide('consumer-marker', { live: true })
         },
       },
     }))
@@ -286,15 +286,11 @@ describe('T23 S3 符号缺失：pre-gate 同步拦截 + symbol-missing 报告 + 
     expect(gate.missing).toEqual(['ghost'])
     expect(elapsedMs).toBeLessThan(1)
     expect(h.engine.plugins().find(p => p.id === 'consumer')?.policyStatus).toBe('inactive')
-    const report = requiresGateReport(evaluateRequiresGate({
-      pluginId: 'consumer',
-      requires: { svc: '>=1.0.0' },
-      snapshots: { svc: snapshot },
-      observations: { svc: h.engine.providerObservationRegistry().candidates('svc') },
-      consumerSymbols: { svc: ['ghost'] },
-    }))
-    expect(report.code).toBe('policy-rejected')
-    expect(report.conflicts[0]?.constraint.kind).toBe('symbol')
+    // 行为断言（修复批次 2 / 任务 2.6）：政策停用 → provide 不解析 + 引擎产出
+    // symbol-missing 报告（不再只是标签 + 测试手工调用的纯函数）。
+    expect(h.engine.provideValue('consumer-marker')).toBeUndefined()
+    expect(h.engine.policyReportOf('consumer')?.code).toBe('symbol-missing')
+    expect(h.engine.policyReportOf('consumer')?.conflicts[0]?.constraint.kind).toBe('symbol')
   })
 })
 
@@ -315,14 +311,19 @@ describe('T24 S4 requires 门三态（F4 载体 + 提供者存在/缺失/版本�
         serviceRequires: requires,
         requires: ['voice-chat'],
       }),
-      hooks: { activate: () => {} },
+      hooks: {
+        activate(env) { env.provide('vibe-marker', { live: true }) },
+      },
     }
     h.definitions.set('dsh-vibe-mode', vibeDefinition)
     await h.engine.install(source('dsh-vibe-mode'))
     expect(h.engine.plugins().find(p => p.id === 'dsh-vibe-mode')?.policyStatus).toBe('inactive')
     expect(h.engine.providerObservationRegistry().candidates('voice-chat')).toEqual([])
+    // 行为断言（修复批次 2 / 任务 2.6）：停用 = provide 不解析 + 引擎产出报告。
+    expect(h.engine.provideValue('vibe-marker')).toBeUndefined()
+    expect(h.engine.policyReportOf('dsh-vibe-mode')?.code).toBe('policy-rejected')
 
-    // 提供者出现（版本满足）→ INACTIVE 自动激活。
+    // 提供者出现（版本满足）→ INACTIVE 自动激活（行为：provide 重新解析）。
     h.definitions.set('voice', fixture('voice-chat', {
       version: '0.2.0',
       provides: ['voice-chat'],
@@ -332,10 +333,12 @@ describe('T24 S4 requires 门三态（F4 载体 + 提供者存在/缺失/版本�
     }))
     await h.engine.install(source('voice'))
     expect(h.engine.plugins().find(p => p.id === 'dsh-vibe-mode')?.policyStatus).toBe('active')
+    expect(h.engine.provideValue('vibe-marker')).not.toBeUndefined()
+    expect(h.engine.policyReportOf('dsh-vibe-mode')).toBeUndefined()
     const candidates = h.engine.providerObservationRegistry().candidates('voice-chat')
     expect(candidates.map(item => item.pluginId)).toEqual(['voice-chat'])
 
-    // 版本不符 → provider-version-mismatch → INACTIVE。
+    // 版本不符 → provider-version-mismatch → INACTIVE（行为：provide 再次不解析）。
     h.definitions.set('voice-old', fixture('voice-chat', {
       version: '0.0.9',
       provides: ['voice-chat'],
@@ -345,14 +348,11 @@ describe('T24 S4 requires 门三态（F4 载体 + 提供者存在/缺失/版本�
     }))
     await h.engine.replace('voice-chat', source('voice-old'))
     expect(h.engine.plugins().find(p => p.id === 'dsh-vibe-mode')?.policyStatus).toBe('inactive')
-    const report = requiresGateReport(evaluateRequiresGate({
-      pluginId: 'dsh-vibe-mode',
-      requires,
-      snapshots: { 'voice-chat': h.engine.fineEpoch().get('voice-chat') },
-      observations: { 'voice-chat': h.engine.providerObservationRegistry().candidates('voice-chat') },
-    }))
-    expect(report.conflicts[0]?.constraint.kind).toBe('requires')
-    expect(report.conflicts[0]?.constraint.range).toBe('>=0.1.0')
+    expect(h.engine.provideValue('vibe-marker')).toBeUndefined()
+    const report = h.engine.policyReportOf('dsh-vibe-mode')
+    expect(report?.code).toBe('policy-rejected')
+    expect(report?.conflicts[0]?.constraint.kind).toBe('requires')
+    expect(report?.conflicts[0]?.constraint.range).toBe('>=0.1.0')
   })
 })
 
@@ -361,6 +361,9 @@ describe('T25 S5 提供者消失：unprovide → 细 epoch 记账清理 + 依赖
     const h = engineHarness()
     h.definitions.set('consumer', fixture('consumer', {
       serviceRequires: { svc: '>=1.0.0' },
+      hooks: {
+        activate(env) { env.provide('consumer-marker', { live: true }) },
+      },
     }))
     h.definitions.set('provider', fixture('provider', {
       provides: ['svc'],
@@ -372,6 +375,7 @@ describe('T25 S5 提供者消失：unprovide → 细 epoch 记账清理 + 依赖
     await h.engine.install(source('provider'))
     expect(h.engine.plugins().find(p => p.id === 'consumer')?.policyStatus).toBe('active')
     expect(h.engine.fineEpoch().get('svc')).toBeDefined()
+    expect(h.engine.provideValue('consumer-marker')).not.toBeUndefined()
 
     h.definitions.set('provider2', fixture('provider', {
       version: '2.0.0',
@@ -382,6 +386,9 @@ describe('T25 S5 提供者消失：unprovide → 细 epoch 记账清理 + 依赖
     expect(h.engine.fineEpoch().get('svc')).toBeUndefined()
     expect(h.engine.providerObservationRegistry().candidates('svc')).toEqual([])
     expect(h.engine.plugins().find(p => p.id === 'consumer')?.policyStatus).toBe('inactive')
+    // 行为断言（修复批次 2 / 任务 2.6）：停用 = provide 不解析 + 报告。
+    expect(h.engine.provideValue('consumer-marker')).toBeUndefined()
+    expect(h.engine.policyReportOf('consumer')?.code).toBe('policy-rejected')
   })
 })
 

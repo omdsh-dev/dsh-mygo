@@ -58,8 +58,15 @@ export function evaluateRequiresGate(input: RequiresGateInput): RequiresGateResu
   }[] = []
   for (const [service, rawRange] of Object.entries(input.requires).sort()) {
     const ranges = Array.isArray(rawRange) ? rawRange : [rawRange]
-    const snapshot = input.snapshots[service]
-    const candidates = input.observations[service] ?? []
+    // 原型安全查表（修复批次 2 / review#1 A1）：`snapshots`/`observations` 为
+    // 普通对象时，键名 "toString"/"constructor" 等会命中 Object.prototype 的
+    // 继承成员造成误判/崩溃——一律 hasOwn 判定。
+    const snapshot = Object.prototype.hasOwnProperty.call(input.snapshots, service)
+      ? input.snapshots[service]
+      : undefined
+    const candidates = Object.prototype.hasOwnProperty.call(input.observations, service)
+      ? input.observations[service] ?? []
+      : []
     if (snapshot === undefined) {
       violations.push({
         kind: 'service-missing',
@@ -79,7 +86,10 @@ export function evaluateRequiresGate(input: RequiresGateInput): RequiresGateResu
       })
       continue
     }
-    const used = input.consumerSymbols?.[service]
+    const used = input.consumerSymbols !== undefined
+      && Object.prototype.hasOwnProperty.call(input.consumerSymbols, service)
+      ? input.consumerSymbols[service]
+      : undefined
     if (used !== undefined && used.length > 0) {
       const gate = preGate(used, snapshot)
       if (!gate.ok) {
@@ -97,7 +107,11 @@ export function evaluateRequiresGate(input: RequiresGateInput): RequiresGateResu
   return { pluginId: input.pluginId, ok: violations.length === 0, violations }
 }
 
-/** 把一次 requires 政策闸结果渲染为服务级结构化报告（design-r3 §4.6/B7）。 */
+/**
+ * 把一次 requires 政策闸结果渲染为服务级结构化报告（design-r3 §4.6/B7）。
+ * 词汇分工（修复批次 2 / 任务 2.2）：全部违例均为符号缺失 → `symbol-missing`；
+ * 含服务缺失/版本不符 → `policy-rejected`，两者不混用。
+ */
 export function requiresGateReport(result: RequiresGateResult): ServiceResolutionReport {
   const conflicts = result.violations.map(violation => {
     const kind: 'requires' | 'symbol' = violation.kind === 'symbol-missing' ? 'symbol' : 'requires'
@@ -121,8 +135,10 @@ export function requiresGateReport(result: RequiresGateResult): ServiceResolutio
           : [`提供者补齐符号：${(violation.missingSymbols ?? []).join(', ')}，或由消费者迁移到新符号`],
     }
   })
+  const allSymbolMissing = result.violations.length > 0
+    && result.violations.every(violation => violation.kind === 'symbol-missing')
   return {
-    code: 'policy-rejected',
+    code: allSymbolMissing ? 'symbol-missing' : 'policy-rejected',
     summary: `requires 政策闸：${result.pluginId} 有 ${conflicts.length} 个服务约束不满足`,
     scope: 'service',
     cycles: [],

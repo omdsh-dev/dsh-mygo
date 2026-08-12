@@ -26,25 +26,29 @@ export interface PreGateResult {
   readonly aliased: readonly string[]
 }
 
-/** 挂载时缓存导出快照（纯内存，A5：10k 符号亚毫秒）。 */
+/**
+ * 挂载时缓存导出快照（纯内存，A5：10k 符号亚毫秒）。
+ * 键处理口径（修复批次 2 / review#1 A16 镜像）：自有键全量收录——包括名为
+ * `constructor` / `__proto__` 的自有导出（defineProperty 声明的合法符号面）；
+ * 原型层继续过滤这三个键并止步于 Object.prototype（防原型链污染），
+ * 与 requires-gate.ts 的原型安全查表同口径。
+ */
 export function captureExports(value: unknown): readonly string[] {
   const keys = new Set<string>()
   let current: unknown = value
-  while (typeof current === 'object' && current !== null) {
-    for (const key of Object.getOwnPropertyNames(current)) {
-      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue
+  let level = 0
+  for (;;) {
+    const isObject = typeof current === 'object' && current !== null
+    const isRootFunction = level === 0 && typeof current === 'function'
+    if (!isObject && !isRootFunction) break
+    for (const key of Object.getOwnPropertyNames(current as object)) {
+      // 仅原型层过滤：自有层（level 0）是插件的合法导出面，全量收录。
+      if (level > 0 && (key === '__proto__' || key === 'constructor' || key === 'prototype')) continue
       keys.add(key)
     }
-    current = Object.getPrototypeOf(current)
-    // 停止于 Object.prototype 本身（不收录 hasOwnProperty/toString 等内建面）。
+    current = Object.getPrototypeOf(current as object)
+    level += 1
     if (current === Object.prototype) break
-  }
-  if (typeof value === 'function') {
-    for (const key of Object.getOwnPropertyNames(value)) keys.add(key)
-    const proto = Object.getPrototypeOf(value)
-    if (typeof proto === 'object' && proto !== null) {
-      for (const key of Object.getOwnPropertyNames(proto)) keys.add(key)
-    }
   }
   return [...keys].sort()
 }

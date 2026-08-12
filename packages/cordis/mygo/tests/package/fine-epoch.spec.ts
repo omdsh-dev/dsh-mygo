@@ -72,3 +72,16 @@ describe('provider observation registry (B19)', () => {
     expect(registry.entries()).toEqual([])
   })
 })
+
+describe('键处理镜像（修复批次 2 / review#1 A16）', () => {
+  it('自有 constructor/__proto__ 导出收录；原型层过滤防污染', () => {
+    const own = Object.defineProperty({ foo: 1 }, 'constructor', { value: 'x', enumerable: true })
+    expect(captureExports(own)).toEqual(['constructor', 'foo'])
+    const proto = Object.create({ evil: 1 }) as Record<string, unknown>
+    proto.bar = 2
+    expect(captureExports(proto)).toEqual(['bar', 'evil'])
+    class A { m(): number { return 1 } }
+    expect(captureExports(new A())).toEqual(['m'])
+    expect(captureExports(Object.create(Object.prototype))).toEqual([])
+  })
+})

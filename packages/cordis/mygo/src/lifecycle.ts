@@ -51,32 +51,31 @@ export const MYGO_MANAGER_CAPABILITY = 'service:mygo-core'
  * Runtime record of dynamic symbol access through wrapped provided values
  * (A11 运行时代理兜底；B13 前置门消费)。只读注册表，随 provideTable 生命周期
  * 由引擎持有；记录谁在何时访问过哪些符号。
+ * pluginId = 访问发起方（消费方插件 id；A15 归属修复），供政策闸按消费者隔离
+ * 与按代修剪。
  */
 export interface ProvidedAccessRecord {
   readonly capability: string
   readonly symbol: string
   readonly at: number
+  readonly pluginId: string
 }
 
 /**
  * Wrap one provided value so the raw object never escapes the manager
- * (design-r3 §4.2/§4.3，B3/B4；closeout §16 四发布点)。Proxy get 转发并记录
- * 动态符号访问；set/deleteProperty 在桥接路径被拒绝并触发政策报告
- * （exports 冻结，EB-D8）。原始引用不写入 provideTable、不返回、不经 seam 发布。
+ * (design-r3 §4.2/§4.3，B3/B4；closeout §16 四发布点)。Proxy get 转发；
+ * set/deleteProperty 在桥接路径被拒绝并触发政策报告（exports 冻结，EB-D8）。
+ * 原始引用不写入 provideTable、不返回、不经 seam 发布。
+ * 动态符号访问记录自修复批次 2 起由消费方包装面（StagingEnv.get →
+ * trackConsumerAccess）按消费者归属记录（A15）；本包装面不再记录。
  */
 export function wrapProvidedValue(
-  capability: string,
   value: unknown,
-  _pluginId: string,
-  recordAccess: (record: ProvidedAccessRecord) => void,
   rejectMutation: (property: string | symbol, action: 'set' | 'delete') => void = () => {},
 ): unknown {
   if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return value
   return new Proxy(value, {
     get(target, property, receiver) {
-      if (typeof property === 'string' && property !== 'then') {
-        recordAccess({ capability, symbol: property, at: Date.now() })
-      }
       return Reflect.get(target, property, receiver)
     },
     set(_target, property, _next, _receiver) {
@@ -132,9 +131,10 @@ import type {
 } from './types.ts'
 import type { PluginLifecycleEventPayload } from './types.ts'
 import type { GenerationRecord, RegistryStore, StatusRecord } from './store.ts'
-import { FineEpochRegistry, captureExports, type ProviderSymbolSnapshot } from './package/fine-epoch.ts'
-import { ProviderObservationRegistry } from './package/provider-observations.ts'
-import { evaluateRequiresGate, type RequiresGateResult } from './package/requires-gate.ts'
+import { FineEpochRegistry, captureExports, preGate, type ProviderSymbolSnapshot } from './package/fine-epoch.ts'
+import { ProviderObservationRegistry, type ProviderObservation } from './package/provider-observations.ts'
+import { evaluateRequiresGate, requiresGateReport, type RequiresGateResult } from './package/requires-gate.ts'
+import type { ServiceResolutionReport } from './package/report.ts'
 
 /** One staged registration of a generation layer. */
 type StagedRegistration =
@@ -471,20 +471,30 @@ class StagingEnv implements PluginEnv {
   provide(capability: string, value: unknown): () => void {
     this.assertRegistrable('provide')
     claimEffect(this.quotas, 'service', this.pluginId)
-    this.registrations.push({
+    const registration: StagedRegistration = {
       kind: 'provide',
       pluginId: this.pluginId,
       capability,
       value,
       ...(this.scopeLayer === undefined ? {} : { scope: this.scopeLayer }),
-    })
-    return () => {}
+    }
+    this.registrations.push(registration)
+    // A14：真实 disposer——调用后立即撤下该提供（后续解析失败 + 政策重估）。
+    // 配额槽位不回收（保守方向：不放开注册上限）。
+    let disposed = false
+    return () => {
+      if (disposed) return
+      disposed = true
+      const index = this.registrations.indexOf(registration)
+      if (index >= 0) this.registrations.splice(index, 1)
+      this.owner.removeProvidedValue(this.pluginId, capability)
+    }
   }
 
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- T is the caller-chosen service type at each call site.
   get<T>(capability: string): T | undefined {
     const provided = this.owner.provideValue(capability)
-    if (provided !== undefined) return provided as T
+    if (provided !== undefined) return this.owner.trackConsumerAccess(provided, capability, this.pluginId) as T
     if (capability === 'sessionPersistence') return this.owner.sessionPersistenceProjection(this.pluginId) as T | undefined
     const host = this.owner.hostValue(capability)
     if (host !== undefined) return host as T
@@ -527,6 +537,16 @@ interface EngineGeneration {
   readonly registrations: readonly StagedRegistration[]
   /** Disposers removing this generation's registrations from the machine. */
   readonly disposers: (() => void)[]
+  /**
+   * 政策可逆面（修复批次 2 / A1）：受管 dispatch 监听器的注册 disposer，
+   * 政策停用（INACTIVE）时撤销、恢复时重建，与 effect disposers 分离。
+   */
+  readonly policyDisposers: (() => void)[]
+  /**
+   * 政策可逆面（修复批次 2 / A1）：宿主总线监听器（kind 'host-listener'）的
+   * disposer；政策停用与 disable 都会撤销（与既有 disable 语义一致）。
+   */
+  readonly policyHostDisposers: (() => void)[]
   /** Hot-swap retention: events with in-flight dispatches at swap time. */
   remainingEvents: Set<string>
   /** Provided capabilities and their current values (manager-held). */
@@ -828,8 +848,12 @@ export class LifecycleEngine {
   private readonly commandDisposers = new Map<string, () => void>()
   private readonly hostProvideDisposers = new Map<string, () => void>()
   private readonly hostProvideValues = new Map<string, unknown>()
-  /** 动态符号访问记录（B3/A11 兜底；B13 前置门读取）。 */
+  /** 动态符号访问记录（B3/A11 兜底；B13 前置门读取；A15 按消费者归属）。 */
   private readonly providedAccessRecords: ProvidedAccessRecord[] = []
+  /** 消费方访问包装缓存（A15）：(消费者 id, capability) → 包装代理，保身份稳定。 */
+  private readonly consumerWrappers = new Map<string, Map<string, { readonly value: unknown; readonly wrapper: unknown }>>()
+  /** 政策闸报告（修复批次 2 / A1）：plugin id → 最近一次 requires/symbol 违例报告。 */
+  private readonly policyReports = new Map<string, ServiceResolutionReport>()
   /** 细 epoch 前置门：挂载时导出快照注册表（B13）。 */
   private readonly fineEpochRegistry = new FineEpochRegistry()
   /** 服务提供者观测记录（B19；报告候选集来源）。 */
@@ -856,13 +880,36 @@ export class LifecycleEngine {
 
   /** B3 单一收口：所有 provide 值 MUST 经此包装后入表/返回/发布。 */
   private wrapProvided(capability: string, value: unknown, pluginId: string): unknown {
-    return wrapProvidedValue(capability, value, pluginId, record => {
-      this.providedAccessRecords.push(record)
-    }, (property, action) => {
+    return wrapProvidedValue(value, (property, action) => {
       this.logger.warn(
         `exports-frozen: plugin ${pluginId} 尝试通过桥接导出面 ${action} 符号 ${String(property)}（能力 ${capability}）`,
       )
     })
+  }
+
+  /**
+   * A15 消费方访问包装：为 (消费者, capability) 提供身份稳定的记录代理。
+   * 每次 get 校验缓存是否仍包装当前提供值——提供者换代后自动换新包装（自愈）。
+   */
+  trackConsumerAccess(value: unknown, capability: string, consumerId: string): unknown {
+    if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return value
+    let perCapability = this.consumerWrappers.get(consumerId)
+    if (perCapability === undefined) {
+      perCapability = new Map()
+      this.consumerWrappers.set(consumerId, perCapability)
+    }
+    const cached = perCapability.get(capability)
+    if (cached !== undefined && cached.value === value) return cached.wrapper
+    const wrapper = new Proxy(value, {
+      get: (target, property, receiver) => {
+        if (typeof property === 'string' && property !== 'then') {
+          this.providedAccessRecords.push({ capability, symbol: property, at: Date.now(), pluginId: consumerId })
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    perCapability.set(capability, { value, wrapper })
+    return wrapper
   }
 
   /**
@@ -1243,6 +1290,7 @@ export class LifecycleEngine {
       }
       this.releaseRecord(record)
       this.records.delete(id)
+      this.policyReports.delete(id)
       this.refreshOrders()
       this.emit('plugin/uninstalled', {
         ...this.eventPayload(id, this.manifestOf(record), this.generationNumber(record)),
@@ -1433,6 +1481,18 @@ export class LifecycleEngine {
         generation.hostEffectDisposers.length = 0
         record.hostSideEffectsDropped = true
       }
+      // 宿主监听器与 host-effect 同属「disable 立即撤销」线（applyRegistrations
+      // 注释承诺）；修复批次 2 起宿主监听器存于 policyHostDisposers，随本处撤销。
+      if (generation !== undefined && generation.policyHostDisposers.length > 0) {
+        for (const disposer of generation.policyHostDisposers) {
+          try {
+            disposer()
+          } catch (error) {
+            this.logger.warn(`plugin ${id} disable host listener disposer failed: ${String(error)}`)
+          }
+        }
+        generation.policyHostDisposers.length = 0
+      }
       // Settings namespaces ride the same hot-revocable line: a disabled
       // plugin must not keep its Settings UI row (or its namespace claim)
       // while stopped; enable remounts them through the replace protocol.
@@ -1526,52 +1586,47 @@ export class LifecycleEngine {
   }
 
   /**
-   * requires 政策闸（B6）：服务级依赖仅运行期求值；INACTIVE 在提供者出现后
-   * 自动激活（EB-D16）。不进依赖图、安装期不阻断。每次 provide 状态变更后调用。
+   * requires 政策闸（B6，修复批次 2 执行面接线 / A1）：服务级依赖仅运行期求值；
+   * 违例 → 政策停用（policyStop：provide 不解析、方法不可达、事件不投递），
+   * 提供者满足 → 真实恢复（policyStart，EB-D16 INACTIVE 自动激活）。
+   * 不进依赖图、安装期不阻断。每次 provide 状态变更后调用。
    */
   private reconcileRequiresGates(): void {
-    const snapshots: Record<string, ProviderSymbolSnapshot | undefined> = {}
+    // 原型安全（修复批次 2 / review#1 A1）：null-prototype 聚合表，键名
+    // "toString"/"constructor" 等服务名不会命中 Object.prototype。
+    const snapshots = Object.create(null) as Record<string, ProviderSymbolSnapshot | undefined>
     for (const { service, snapshot } of this.fineEpochRegistry.entries()) {
       snapshots[service] = snapshot
-      if (!service.startsWith('service:') && snapshots[`service:${service}`] === undefined) {
-        snapshots[`service:${service}`] = snapshot
-      }
     }
-    const observations: Record<string, readonly import('./package/provider-observations.ts').ProviderObservation[]> = {}
+    const observations = Object.create(null) as Record<string, readonly ProviderObservation[]>
     for (const record of this.providerObservationRegistry().entries()) {
       observations[record.service] = [...(observations[record.service] ?? []), record]
-      if (!record.service.startsWith('service:')) {
-        observations[`service:${record.service}`] = [...(observations[`service:${record.service}`] ?? []), record]
-      }
     }
-    // 消费者被用符号（B13 动态访问注册表；静态投影由外部校验补充）。
-    const consumerSymbols: Record<string, readonly string[]> = {}
-    for (const access of this.providedAccessRecords) {
-      const current = consumerSymbols[access.capability] ?? []
-      if (!current.includes(access.symbol)) {
-        consumerSymbols[access.capability] = [...current, access.symbol]
-      }
-    }
+    const symbolsByPlugin = this.symbolsByPlugin()
     for (const record of this.records.values()) {
       if (record.status !== 'enabled') continue
       const generation = record.generations.at(-1)
       const requires = generation?.manifest.serviceRequires
       if (requires === undefined || Object.keys(requires).length === 0) {
-        record.policyStatus = 'active'
+        if (record.policyStatus === 'inactive') this.policyStart(record)
+        else record.policyStatus = 'active'
         continue
       }
+      const ownSymbols = symbolsByPlugin.get(record.id)
       const result: RequiresGateResult = evaluateRequiresGate({
         pluginId: record.id,
         requires,
         snapshots,
         observations,
-        consumerSymbols,
+        ...(ownSymbols === undefined ? {} : { consumerSymbols: ownSymbols }),
       })
       if (result.ok) {
-        record.policyStatus = 'active'
+        if (record.policyStatus === 'inactive') this.policyStart(record)
+        else record.policyStatus = 'active'
         continue
       }
-      record.policyStatus = 'inactive'
+      if (record.policyStatus !== 'inactive') this.policyStop(record)
+      this.policyReports.set(record.id, requiresGateReport(result))
       for (const violation of result.violations) {
         this.logger.warn(
           `requires-gate: plugin ${record.id} 服务 ${violation.service} ${violation.kind}`
@@ -1580,6 +1635,214 @@ export class LifecycleEngine {
         )
       }
     }
+  }
+
+  /** A15：按消费者 pluginId 聚合动态符号访问（无跨消费者交叉污染）。 */
+  private symbolsByPlugin(): Map<string, Record<string, readonly string[]>> {
+    const byPlugin = new Map<string, Record<string, string[]>>()
+    for (const access of this.providedAccessRecords) {
+      let byCapability = byPlugin.get(access.pluginId)
+      if (byCapability === undefined) {
+        byCapability = Object.create(null) as Record<string, string[]>
+        byPlugin.set(access.pluginId, byCapability)
+      }
+      const current = byCapability[access.capability] ?? []
+      if (!current.includes(access.symbol)) byCapability[access.capability] = [...current, access.symbol]
+    }
+    return byPlugin
+  }
+
+  /**
+   * 政策停用（修复批次 2 / A1 执行面）：撤销事件面（受管 dispatch + 宿主
+   * 监听器）、提供面（provideTable + seam + 记账）、方法面（工具/提示/路由/
+   * 技能/命令/入口贡献）。不跑 deactivate/dispose 钩子、不动 effect 与设置
+   * 命名空间——政策停用可逆（policyStart 重建），插件自持资源保持。
+   */
+  private policyStop(record: ManagedRecord): void {
+    if (record.policyStatus === 'inactive') return
+    const generation = record.generations.at(-1)
+    if (generation === undefined) return
+    record.policyStatus = 'inactive'
+    for (const disposer of generation.policyDisposers.splice(0)) {
+      try {
+        disposer()
+      } catch (error) {
+        this.logger.warn(`plugin ${record.id} policy stop listener disposer failed: ${String(error)}`)
+      }
+    }
+    for (const disposer of generation.policyHostDisposers.splice(0)) {
+      try {
+        disposer()
+      } catch (error) {
+        this.logger.warn(`plugin ${record.id} policy stop host listener disposer failed: ${String(error)}`)
+      }
+    }
+    for (const capability of generation.provides.keys()) {
+      const entry = this.provideTable.get(capability)
+      if (entry?.pluginId === record.id) {
+        this.provideTable.delete(capability)
+        this.dropProvideAccounting(capability, record.id)
+      }
+    }
+    for (const name of generation.tools.keys()) {
+      if (this.toolIndirections.get(name)?.pluginId === record.id) this.toolIndirections.delete(name)
+    }
+    for (const name of generation.promptSections.keys()) {
+      if (this.promptSectionTable.get(name)?.pluginId === record.id) this.promptSectionTable.delete(name)
+    }
+    for (const key of generation.httpRoutes.keys()) {
+      if (this.httpRouteIndirections.get(key)?.pluginId === record.id) this.httpRouteIndirections.delete(key)
+    }
+    for (const name of generation.skills.keys()) {
+      if (this.skillIndirections.get(name)?.pluginId === record.id) this.skillIndirections.delete(name)
+    }
+    for (const name of generation.commands.keys()) {
+      if (this.commandIndirections.get(name)?.pluginId === record.id) this.commandIndirections.delete(name)
+    }
+    for (const token of generation.entrypointTokens.splice(0)) this.entrypoints.removeToken(token)
+    this.syncToolPublishState()
+    this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
+  }
+
+  /**
+   * 政策恢复（修复批次 2 / A1 执行面）：重挂可逆执行面——listener /
+   * host-listener / entrypoint 从既有注册表重建，提供与工具等由
+   * update*Table 从世代 Map 重建。不重跑 activate（EB-D16 自动激活语义）。
+   */
+  private policyStart(record: ManagedRecord): void {
+    if (record.policyStatus !== 'inactive') return
+    const generation = record.generations.at(-1)
+    if (generation === undefined) return
+    this.applyPolicyFace(generation)
+    this.updateProvideTable(generation, record.id)
+    this.updateToolTable(generation, record.id)
+    this.updatePromptSectionTable(generation, record.id)
+    this.updateHttpRouteTable(generation, record.id)
+    this.updateSkillTable(generation, record.id)
+    this.updateCommandTable(generation, record.id)
+    this.syncToolPublishState()
+    this.syncPromptSectionState()
+    this.syncHttpRouteState()
+    this.syncSkillState()
+    this.syncCommandState()
+    this.syncProvideState()
+    this.refreshOrders()
+    record.policyStatus = 'active'
+    this.policyReports.delete(record.id)
+  }
+
+  /** 政策恢复专用重建：仅可逆执行面（listener / host-listener / entrypoint）。 */
+  private applyPolicyFace(generation: EngineGeneration): void {
+    for (const registration of generation.registrations) {
+      if (registration.kind === 'listener') {
+        if (!this.dispatch.knows(registration.event)) {
+          this.dispatch.declareEvent(registration.event)
+        }
+        const disposer = this.dispatch.register(registration.event, {
+          pluginId: registration.pluginId,
+          mode: registration.mode,
+          position: registration.position,
+          ...(registration.returns === undefined ? {} : { returns: registration.returns }),
+          ...(registration.scope === undefined ? {} : { scope: registration.scope }),
+          listener: registration.listener,
+        })
+        generation.policyDisposers.push(disposer)
+      } else if (registration.kind === 'host-listener') {
+        const host = this.ctx as unknown as {
+          on(
+            name: string,
+            listener: (...args: unknown[]) => unknown,
+            options?: { readonly prepend?: boolean },
+          ): () => boolean
+          once(
+            name: string,
+            listener: (...args: unknown[]) => unknown,
+            options?: { readonly prepend?: boolean },
+          ): () => boolean
+        }
+        const options = registration.prepend === true ? { prepend: true } : undefined
+        const disposer = registration.once === true
+          ? host.once(registration.event, registration.listener, options)
+          : host.on(registration.event, registration.listener, options)
+        generation.policyHostDisposers.push(disposer)
+      } else if (registration.kind === 'entrypoint') {
+        const token = this.entrypoints.add(registration.pluginId, registration.key, registration.raw)
+        generation.entrypointTokens.push(token)
+      }
+    }
+  }
+
+  /**
+   * A2 reload 前置门（replaceTables 消费）：提供者换代后，把消费者的被用符号
+   * 投影对照新导出快照；缺符号 → 政策停用 + symbol-missing 报告
+   * （词汇分工：符号缺失 → symbol-missing，任务 2.2）。
+   */
+  private verifyConsumerSymbolsAfterReplace(next: EngineGeneration): void {
+    const capabilities = [...next.provides.keys()]
+    if (capabilities.length === 0) return
+    const symbolsByPlugin = this.symbolsByPlugin()
+    for (const record of this.records.values()) {
+      if (record.status !== 'enabled' || record.id === next.manifest.id) continue
+      const requires = record.generations.at(-1)?.manifest.serviceRequires
+      if (requires === undefined) continue
+      const used = symbolsByPlugin.get(record.id)
+      if (used === undefined) continue
+      const violations: {
+        readonly kind: 'symbol-missing'
+        readonly service: string
+        readonly range: string
+        readonly providerVersion?: string
+        readonly missingSymbols?: readonly string[]
+        readonly candidates: readonly ProviderObservation[]
+      }[] = []
+      for (const capability of capabilities) {
+        if (!Object.prototype.hasOwnProperty.call(requires, capability)) continue
+        const symbols = used[capability]
+        if (symbols === undefined || symbols.length === 0) continue
+        const snapshot = this.fineEpochRegistry.get(capability)
+        const gate = preGate(symbols, snapshot)
+        if (gate.ok) continue
+        const rawRange = requires[capability]
+        violations.push({
+          kind: 'symbol-missing',
+          service: capability,
+          range: (Array.isArray(rawRange) ? rawRange : [rawRange]).join(' || '),
+          ...(snapshot?.version === undefined ? {} : { providerVersion: snapshot.version }),
+          missingSymbols: gate.missing,
+          candidates: this.providerObservationRegistry().candidates(capability),
+        })
+      }
+      if (violations.length === 0) continue
+      this.policyStop(record)
+      this.policyReports.set(record.id, requiresGateReport({ pluginId: record.id, ok: false, violations }))
+      for (const violation of violations) {
+        this.logger.warn(
+          `pre-gate: plugin ${record.id} 服务 ${violation.service} symbol-missing`
+          + `（缺失符号 ${(violation.missingSymbols ?? []).join(',')}）`,
+        )
+      }
+    }
+  }
+
+  /** A14：真实撤下一条提供——摘表 + 摘记账 + 政策重估（后续解析失败）。 */
+  removeProvidedValue(pluginId: string, capability: string): void {
+    const entry = this.provideTable.get(capability)
+    if (entry?.pluginId !== pluginId) return
+    this.provideTable.delete(capability)
+    this.dropProvideAccounting(capability, pluginId)
+    // 政策恢复不得复活已被撤下的提供：同步从世代 provides Map 摘除。
+    this.records.get(pluginId)?.generations.at(-1)?.provides.delete(capability)
+    this.syncProvideState()
+    this.reconcileRequiresGates()
+  }
+
+  /** 最近一次 requires/symbol 政策报告（修复批次 2 / A1 报告面）。 */
+  policyReportOf(id: string): ServiceResolutionReport | undefined {
+    return this.policyReports.get(id)
   }
 
   /**
@@ -1876,6 +2139,8 @@ export class LifecycleEngine {
             resolvedConfig: this.resolveConfig(definition, record.resolvedConfig),
             registrations: [],
             disposers: [],
+            policyDisposers: [],
+            policyHostDisposers: [],
             remainingEvents: new Set(),
             provides: new Map(),
             tools: new Map(),
@@ -1984,11 +2249,15 @@ export class LifecycleEngine {
     for (const record of this.records.values()) {
       for (const generation of record.generations) {
         for (const disposer of generation.disposers) disposer()
+        for (const disposer of generation.policyDisposers) disposer()
+        for (const disposer of generation.policyHostDisposers) disposer()
       }
     }
     this.records.clear()
     this.provideTable.clear()
     this.providedAccessRecords.length = 0
+    this.consumerWrappers.clear()
+    this.policyReports.clear()
     for (const { service } of this.fineEpochRegistry.entries()) this.fineEpochRegistry.delete(service)
     this.providerObservations.clear()
     this.toolIndirections.clear()
@@ -2413,6 +2682,8 @@ export class LifecycleEngine {
       resolvedConfig,
       registrations,
       disposers: [],
+      policyDisposers: [],
+      policyHostDisposers: [],
       remainingEvents: new Set(),
       provides: new Map(),
       tools: new Map(),
@@ -2508,6 +2779,7 @@ export class LifecycleEngine {
     } catch (error) {
       this.compensate(id, generation, previousOrders, previousGeneration)
       this.records.delete(id)
+      this.policyReports.delete(id)
       const table = String(error).includes('gens') ? 'gens' : 'status'
       throw fail('persist-failed', { operation: 'install', table }, id, error)
     }
@@ -2835,8 +3107,17 @@ export class LifecycleEngine {
       }
     }
     generation.hostEffectDisposers.length = 0
+    for (const disposer of generation.policyDisposers) disposer()
+    generation.policyDisposers.length = 0
+    for (const disposer of generation.policyHostDisposers) disposer()
+    generation.policyHostDisposers.length = 0
     for (const disposer of generation.disposers) disposer()
     generation.disposers.length = 0
+    // A15 按代修剪：只移除归属本代插件的动态访问记录与消费方包装缓存。
+    const survivors = this.providedAccessRecords.filter(record => record.pluginId !== generation.manifest.id)
+    this.providedAccessRecords.length = 0
+    this.providedAccessRecords.push(...survivors)
+    this.consumerWrappers.delete(generation.manifest.id)
     // Entrypoint contributions are per-generation: withdraw exactly this
     // generation's tokens so a replaced generation never steals the new one's
     // contributions (same provider id, distinct tokens).
@@ -2967,7 +3248,7 @@ export class LifecycleEngine {
           ...(registration.scope === undefined ? {} : { scope: registration.scope }),
           listener: registration.listener,
         })
-        generation.disposers.push(disposer)
+        generation.policyDisposers.push(disposer)
       } else if (registration.kind === 'host-listener') {
         // Zero-intrusion raw-facade surface: register directly on the raw
         // host bus so the listener keeps real Cordis semantics (options,
@@ -2993,8 +3274,9 @@ export class LifecycleEngine {
           // Host listeners are hot-revocable: disable revokes them right
           // away (unlike managed dispatch registrations, which keep the
           // "stopped" interception semantics), and replace/uninstall drain
-          // them again through the host-effect list.
-          generation.hostEffectDisposers.push(disposer)
+          // them again through the host-effect list. 修复批次 2 起入
+          // policyHostDisposers：政策停用（INACTIVE）同样撤销、恢复重建。
+          generation.policyHostDisposers.push(disposer)
         } catch (error) {
           throw fail('staging-failed', {
             stage: 'host-listener',
@@ -3594,6 +3876,9 @@ export class LifecycleEngine {
       generation owned that `next` does not re-register (§14 step ⑤). */
   private replaceTables(id: string, previous: EngineGeneration | null, next: EngineGeneration): void {
     this.updateProvideTable(next, id)
+    // A2：reload 前置门——被替换能力的导出快照 vs 消费者被用符号投影，
+    // 缺符号 → 政策停用 + symbol-missing 报告（词汇分工，任务 2.2）。
+    this.verifyConsumerSymbolsAfterReplace(next)
     this.updateToolTable(next, id)
     this.updatePromptSectionTable(next, id)
     this.updateHttpRouteTable(next, id)
