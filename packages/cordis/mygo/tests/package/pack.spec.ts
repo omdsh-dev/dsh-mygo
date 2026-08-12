@@ -47,8 +47,12 @@ function sampleManifest(overrides: Partial<PackManifest> = {}): PackManifest {
           core: '*',
           depends: {},
           breaks: {},
+          // 修复批次 3（A3/DG-2）：新 schema 必填字段。
+          requires: {},
+          symbolAliases: {},
           entrySha256: 'a'.repeat(64),
           manifestSha256: 'b'.repeat(64),
+          entrySha512: 'd'.repeat(128),
         },
       },
     },
@@ -207,6 +211,7 @@ describe('KF-1 分类修正（design-r4 §9 / B26）', () => {
 // ---------------------------------------------------------------------------
 
 const sha256Text = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
+const sha512Text = (text: string): string => createHash('sha512').update(text, 'utf8').digest('hex')
 const sha512Bytes = (bytes: Uint8Array): string => createHash('sha512').update(bytes).digest('hex')
 
 interface CraftedPlugin {
@@ -265,7 +270,11 @@ async function craftPlugin(
     manifestSha256,
     lockEntry: {
       version, entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
-      entrySha256: sha256Text(entryBytes), manifestSha256, packageName: `@test/${id}`,
+      // 修复批次 3（A3/DG-2）：新 schema 必填字段。
+      requires: {}, symbolAliases: {},
+      entrySha256: sha256Text(entryBytes), manifestSha256,
+      entrySha512: sha512Text(entryBytes),
+      packageName: `@test/${id}`,
     },
     factFile: factBase,
   }
@@ -337,11 +346,15 @@ async function seedProfile(home: string, ids: readonly string[]): Promise<{ read
       dsh: { mygo: { formatVersion: 1, id, version, entry: 'lib/index.js', depends: {}, breaks: {}, requires: {}, core: '*' } },
     }, null, 2))
     await writeFile(join(dir, '.mygo-package.json'), JSON.stringify({
-      ...factBase, manifestSha256, installedAt: '2026-08-12T00:00:00.000Z',
+      ...factBase, entrySha512: sha512Text(entryBytes), manifestSha256, installedAt: '2026-08-12T00:00:00.000Z',
     }, null, 2))
     plugins[id] = {
       version, entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
-      entrySha256: sha256Text(entryBytes), manifestSha256, packageName: `@test/${id}`,
+      // 修复批次 3（A3/DG-2）：新 schema 必填字段。
+      requires: {}, symbolAliases: {},
+      entrySha256: sha256Text(entryBytes), manifestSha256,
+      entrySha512: sha512Text(entryBytes),
+      packageName: `@test/${id}`,
     }
   }
   await mkdir(paths.lockfileDir, { recursive: true })

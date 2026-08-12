@@ -1846,6 +1846,19 @@ export class LifecycleEngine {
   }
 
   /**
+   * DG-2（修复批次 3）：把 lockfile 的 BOM 对账事实（真 entrySha512 /
+   * entryFileSize）灌入运行时 record——恢复路径的唯一写入点，BOM 输出消费。
+   */
+  attachBomFacts(facts: ReadonlyMap<string, { readonly entrySha512: string; readonly entryFileSize?: number }>): void {
+    for (const [id, fact] of facts) {
+      const record = this.records.get(id)
+      if (record === undefined) continue
+      record.entrySha512 = fact.entrySha512
+      if (fact.entryFileSize !== undefined) record.entryFileSize = fact.entryFileSize
+    }
+  }
+
+  /**
    * Current resolved config of one managed plugin's live generation.
    * @param id - plugin id.
    * @returns the resolved config, or `undefined` when unknown.

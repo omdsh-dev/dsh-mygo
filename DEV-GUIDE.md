@@ -137,13 +137,21 @@ root 优先 → id 升序 → 版本降序 → 嵌套浅优先 → parent 升序
 { "format": "dsh.lock/v1", "generated": { "by": "dsh-mygo", "version": "...",
   "profile": "web", "core": "...", "at": "..." },
   "plugins": { "<id>": { "version", "entry", "core", "depends", "breaks",
-    "entrySha256", "manifestSha256", "entrySha512", "entryFileSize",
-    "integrity", "source", "packageName", "provides", "bundles", "symbols" } } }
+    "requires", "symbolAliases",           // 修复批次 3（A3）：重启还原闸输入
+    "entrySha256", "manifestSha256",
+    "entrySha512",                         // 修复批次 3（DG-2）：入口文件哈希（必填）
+    "tarballSha512",                       // 修复批次 3（DG-2）：vendored tarball 哈希（可选）
+    "entryFileSize", "integrity", "source", "packageName", "provides",
+    "bundles", "symbols" } } }
 ```
 
-- `verifyAtBoot`：只对照 lockfile 校验磁盘（版本 + 哈希），**不重新求解**。
-- BOM 对账（P4）：entry 文件 sha512 + 字节数进入 lockfile，`bomCheck` 报告
-  missing/extra/drift/约束违例链。
+- 修复批次 3 起 schema 显式演进：`requires` / `symbolAliases` / `entrySha512`
+  为必填字段；旧 schema lockfile 读入 → `lockfile-mismatch` + 重新
+  restore/重装指引（MUST NOT 静默补默认值，A12）。
+- `verifyAtBoot`：先做形状校验（带字段指针），再只对照 lockfile 校验磁盘
+  （版本 + 哈希），**不重新求解**。
+- BOM 对账（P4）：entry 文件 sha512（真入口哈希）+ 字节数进入 lockfile，
+  `bomCheck` 报告 missing/extra/drift/约束违例链。
 
 ### 3.3 不可变 store（`package/package-store.ts`）
 

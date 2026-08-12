@@ -26,8 +26,10 @@ export interface InstalledPackage {
   readonly manifest: PluginManifestV2
   readonly entrySha256: string
   readonly manifestSha256: string
-  /** entry 文件 sha512（hex；npm integrity 优先，缺省现场计算）。 */
-  readonly entrySha512?: string
+  /** 入口文件内容 sha512（hex；DG-2 拆字段后的真 entrySha512，安装时现场计算）。 */
+  readonly entrySha512: string
+  /** vendored tarball 整体 sha512（hex；npm integrity 解析转 hex，缺省缺省）。 */
+  readonly tarballSha512?: string
   /** entry 文件字节数。 */
   readonly entryFileSize?: number
   readonly integrity?: string
@@ -122,8 +124,15 @@ export async function installPackageToStore(
       throw new Error(`包内 manifest 路径逃逸：${pathProblems.map(problem => `${problem.path}: ${problem.message}`).join('；')}`)
     }
     assertInside(pkgRoot, parsed.value.entry)
+    // DG-2 拆字段（修复批次 3）：entrySha512 = 入口文件内容哈希（现场计算，
+    // 真实写入点）；tarballSha512 = vendored tarball 整体哈希（npm integrity
+    // 解析转 hex；integrity 不可解析或缺省时缺省）。两者都在落盘前计算，
+    // 保证事实文件与 lockfile 载荷同源。
+    const entrySha512 = await sha512File(assertInside(pkgRoot, parsed.value.entry))
+    const tarballSha512 = integritySha512Hex(versionInfo.integrity)
     // 确定性（S2/T19 真实图扩展）：manifestSha256 只对稳定载荷计算；
-    // installedAt 仅作来源信息保留在事实文件里，不进哈希（否则同输入两次安装产物不等）。
+    // installedAt / entrySha512 仅作尾部记账字段保留在事实文件里，不进哈希
+    // （否则同输入两次安装产物不等）。
     const factBase = {
       format: 'dsh.mygo-package/v1',
       id: parsed.value.id,
@@ -131,11 +140,12 @@ export async function installPackageToStore(
       entry: parsed.value.entry,
       manifest: parsed.value,
       ...(versionInfo.integrity === undefined ? {} : { integrity: versionInfo.integrity }),
+      ...(tarballSha512 === undefined ? {} : { tarballSha512 }),
     }
     const manifestSha256 = sha256Text(JSON.stringify(factBase))
     await writeFile(
       join(pkgRoot, '.mygo-package.json'),
-      JSON.stringify({ ...factBase, manifestSha256, installedAt: new Date().toISOString() }, null, 2),
+      JSON.stringify({ ...factBase, entrySha512, manifestSha256, installedAt: new Date().toISOString() }, null, 2),
     )
     await mkdir(dirname(target), { recursive: true })
     await rename(pkgRoot, target)
@@ -150,7 +160,8 @@ export async function installPackageToStore(
       manifest: parsed.value,
       entrySha256,
       manifestSha256,
-      entrySha512: integritySha512Hex(versionInfo.integrity) ?? await sha512File(entryPath),
+      entrySha512,
+      ...(tarballSha512 === undefined ? {} : { tarballSha512 }),
       entryFileSize: entryStats.size,
       ...(versionInfo.integrity === undefined ? {} : { integrity: versionInfo.integrity }),
     }
@@ -177,6 +188,7 @@ export async function readInstalledPackage(
       readonly entrySha256?: unknown
       readonly manifestSha256?: unknown
       readonly entrySha512?: unknown
+      readonly tarballSha512?: unknown
       readonly entryFileSize?: unknown
     }
     if (fact.format !== 'dsh.mygo-package/v1' || fact.id !== id || fact.version !== version) return undefined
@@ -189,6 +201,7 @@ export async function readInstalledPackage(
         const stable = JSON.parse(raw) as Record<string, unknown>
         delete stable.manifestSha256
         delete stable.installedAt
+        delete stable.entrySha512
         return sha256Text(JSON.stringify(stable))
       })()
     return {
@@ -199,10 +212,11 @@ export async function readInstalledPackage(
       manifest,
       entrySha256,
       manifestSha256,
+      // DG-2（修复批次 3）：entrySha512 有事实文件写入点；旧事实文件回退现场计算。
       entrySha512: typeof fact.entrySha512 === 'string'
         ? fact.entrySha512
-        : integritySha512Hex(typeof fact.integrity === 'string' ? fact.integrity : undefined)
-          ?? await sha512File(assertInside(dir, fact.entry)),
+        : await sha512File(assertInside(dir, fact.entry)),
+      ...(typeof fact.tarballSha512 === 'string' ? { tarballSha512: fact.tarballSha512 } : {}),
       entryFileSize: typeof fact.entryFileSize === 'number'
         ? fact.entryFileSize
         : (await stat(assertInside(dir, fact.entry))).size,

@@ -85,9 +85,18 @@ export class PluginPackageManager {
     return lockfilePath(this.options.paths, this.options.profile)
   }
 
-  /** Read the current lockfile (undefined when legacy/no lockfile). */
+  /**
+   * Read the current lockfile; `undefined` when missing（legacy profile）。
+   * 形状非法（旧 schema / 损坏）→ 抛出带字段指针的 Error（修复批次 3 / A12，
+   * 显式演进，不静默补默认值）；调用方自行决定转报告或上抛。
+   */
   async readLock(): Promise<Lockfile | undefined> {
-    return readLockfile(this.lockPath())
+    const result = await readLockfile(this.lockPath())
+    if (result === undefined) return undefined
+    if (!result.ok) {
+      throw new Error(`lockfile 形状无效：${result.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`)
+    }
+    return result.lockfile
   }
 
   /**
@@ -365,9 +374,15 @@ export class PluginPackageManager {
       core: installed.manifest.core,
       depends: installed.manifest.depends,
       breaks: installed.manifest.breaks,
+      // A3（修复批次 3）：requires / symbolAliases 落盘，loadEntry 据此还原。
+      requires: installed.manifest.requires,
+      symbolAliases: installed.manifest.symbolAliases ?? {},
       entrySha256: installed.entrySha256,
       manifestSha256: installed.manifestSha256,
-      ...(installed.entrySha512 === undefined ? {} : { entrySha512: installed.entrySha512 }),
+      // DG-2（修复批次 3）：真 entrySha512（入口文件哈希）必填落盘；
+      // tarballSha512（vendored tarball 哈希）有则落盘。
+      entrySha512: installed.entrySha512,
+      ...(installed.tarballSha512 === undefined ? {} : { tarballSha512: installed.tarballSha512 }),
       ...(installed.entryFileSize === undefined ? {} : { entryFileSize: installed.entryFileSize }),
       packageName,
       ...(installed.manifest.provides.length === 0 ? {} : { provides: installed.manifest.provides }),
@@ -403,11 +418,30 @@ export class PluginPackageManager {
 
   /**
    * Load-time verification (MUST NOT re-solve): pure disk check against the
-   * lockfile. Missing lockfile = legacy profile (ok).
+   * lockfile. Missing lockfile = legacy profile (ok)；形状非法（旧 schema /
+   * 损坏）→ 显式 lockfile-mismatch（修复批次 3 / A12，不静默迁移）。
    */
   async verifyAtBoot(): Promise<{ readonly ok: true } | { readonly ok: false; readonly report: ResolutionReport }> {
-    const lockfile = await this.readLock()
-    if (lockfile === undefined) return { ok: true }
+    const read = await readLockfile(this.lockPath())
+    if (read === undefined) return { ok: true }
+    if (!read.ok) {
+      return {
+        ok: false,
+        report: {
+          code: 'lockfile-mismatch',
+          summary: `lockfile 形状无效：${read.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`,
+          cycles: [],
+          conflicts: [{
+            plugin: 'lockfile',
+            constraint: { kind: 'entry', target: 'lockfile', range: 'schema' },
+            chain: ['lockfile'],
+            candidates: [{ version: '<lockfile>', rejected: [read.problem] }],
+            actions: ['重新 restore/重装以生成新 schema lockfile'],
+          }],
+        },
+      }
+    }
+    const lockfile = read.lockfile
     const verified = await verifyLockfile(this.options.paths, lockfile)
     if (verified.ok) {
       const importIssues = await this.verifySymbolImportsAgainstLock(lockfile)
@@ -515,7 +549,9 @@ export class PluginPackageManager {
       entry: lock.entry,
       depends: lock.depends,
       breaks: lock.breaks,
-      requires: {},
+      // A3（修复批次 3）：requires/symbolAliases 从 lockfile 还原，不再硬编码 {}。
+      requires: lock.requires,
+      ...(Object.keys(lock.symbolAliases).length === 0 ? {} : { symbolAliases: lock.symbolAliases }),
       core: lock.core,
       recommends: {},
       provides: lock.provides ?? [],
@@ -532,7 +568,9 @@ export class PluginPackageManager {
         manifest,
         entrySha256: lock.entrySha256,
         manifestSha256: lock.manifestSha256,
-        ...(lock.entrySha512 === undefined ? {} : { entrySha512: lock.entrySha512 }),
+        // DG-2（修复批次 3）：新 schema 的 entrySha512 必填（形状校验保证）。
+        entrySha512: lock.entrySha512,
+        ...(lock.tarballSha512 === undefined ? {} : { tarballSha512: lock.tarballSha512 }),
         ...(lock.entryFileSize === undefined ? {} : { entryFileSize: lock.entryFileSize }),
         ...(lock.integrity === undefined ? {} : { integrity: lock.integrity }),
       },

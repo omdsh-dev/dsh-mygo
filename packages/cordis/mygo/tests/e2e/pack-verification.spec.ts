@@ -410,7 +410,10 @@ describe('T38/T39/T41/T42 失败语义', () => {
       manifest.lockfile.plugins = {
         calc: {
           version: '1.0.0', entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
+          // 修复批次 3（A3/DG-2）：新 schema 必填字段（T41 的拒绝点仍在 files[].path）。
+          requires: {}, symbolAliases: {},
           entrySha256: 'a'.repeat(64), manifestSha256: 'b'.repeat(64),
+          entrySha512: 'd'.repeat(128),
         },
       }
       manifest.files = [{ path: '../evil.tgz', pluginId: 'calc', packageName: '@test/calc', sha512: 'c'.repeat(128), fileSize: 0 }]

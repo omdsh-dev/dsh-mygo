@@ -323,6 +323,31 @@ export class PluginManagerService extends Service implements PluginManager {
     })
     holder.engine = engine
     await engine.recover()
+    // DG-2（修复批次 3）：把 lockfile 的 entry 级哈希/字节数灌入运行时 record
+    // （恢复路径写入点；BOM 对账输出消费）。readLock 形状校验失败在此前
+    // verifyAtBoot 已硬阻断，这里只可能 undefined（无 lockfile）或合法载荷。
+    try {
+      const lockfile = await this.packageManager.readLock()
+      if (lockfile !== undefined) {
+        const facts = new Map<string, { readonly entrySha512: string; readonly entryFileSize?: number }>()
+        for (const [id, lock] of Object.entries(lockfile.plugins)) {
+          facts.set(id, {
+            entrySha512: lock.entrySha512,
+            ...(lock.entryFileSize === undefined ? {} : { entryFileSize: lock.entryFileSize }),
+          })
+        }
+        engine.attachBomFacts(facts)
+      }
+    } catch (error) {
+      throw new PluginError(
+        'package-not-resolvable',
+        formatPluginError('package-not-resolvable', {
+          package: 'lockfile',
+          anchors: error instanceof Error ? error.message : String(error),
+        }),
+        { package: 'lockfile' },
+      )
+    }
     this.engine = engine
     this.persistence = persistence
     // Publish the aggregation service so host-shaped raw plugins can own

@@ -17,7 +17,7 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 import { constraintsOf, isEscapingPath, parsePackageManifest, pathProblemsOf, type PluginManifestV2 } from './manifest-v2.ts'
 import { lockfilePath, packageDir, type MygoPaths } from './paths.ts'
 import { installPackageToStore, readInstalledPackage } from './package-store.ts'
-import { sha256Text, writeLockfile, readLockfile, type Lockfile, type LockedPlugin } from './lockfile.ts'
+import { sha256Text, writeLockfile, readLockfile, validateLockfileShape, type Lockfile, type LockedPlugin } from './lockfile.ts'
 import { resolve, type PluginCandidate } from './resolver.ts'
 import type { ConflictEntry, ResolutionReport } from './report.ts'
 import { isValidRange, matchesVersionRange } from '../semver-range.ts'
@@ -95,36 +95,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
-  if (!isRecord(value)) return false
-  return Object.values(value).every(item => typeof item === 'string')
-}
-
-/** 轻量 lockfile 结构校验（语义载荷形状；不校验哈希——哈希由安装期验证）。 */
-function validateLockfileShape(value: unknown): readonly string[] {
-  const problems: string[] = []
-  if (!isRecord(value) || value.format !== 'dsh.lock/v1' || !isRecord(value.plugins)) {
-    problems.push('lockfile 不是 dsh.lock/v1（缺 format/plugins）')
-    return problems
-  }
-  for (const [id, entry] of Object.entries(value.plugins)) {
-    if (!isRecord(entry)) {
-      problems.push(`lockfile.plugins.${id} 不是对象`)
-      continue
-    }
-    if (typeof entry.version !== 'string' || typeof entry.entry !== 'string'
-      || typeof entry.core !== 'string') {
-      problems.push(`lockfile.plugins.${id} 缺 version/entry/core`)
-    }
-    if (!isStringRecord(entry.depends) || !isStringRecord(entry.breaks)) {
-      problems.push(`lockfile.plugins.${id} 的 depends/breaks 必须是 string map`)
-    }
-    if (typeof entry.entrySha256 !== 'string' || typeof entry.manifestSha256 !== 'string') {
-      problems.push(`lockfile.plugins.${id} 缺 entrySha256/manifestSha256`)
-    }
-  }
-  return problems
-}
+// 轻量 lockfile 结构校验自修复批次 3 起复用 lockfile.ts 的统一形状校验
+// （validateLockfileShape：新 schema 显式演进，requires/symbolAliases/
+// entrySha512 必填；A12 + B5 重复代码收口）。
 
 /** 解析并校验 pack 清单；返回问题清单（一次输出全部）。 */
 export function parsePackManifest(raw: unknown): {
@@ -505,8 +478,31 @@ export async function buildPluginPack(
   ctx: PackContext,
   options: PackBuildOptions,
 ): Promise<PackBuildOutcome> {
-  const lockfile = await readLockfile(lockfilePath(ctx.paths, ctx.profile))
-  if (lockfile === undefined || Object.keys(lockfile.plugins).length === 0) {
+  const read = await readLockfile(lockfilePath(ctx.paths, ctx.profile))
+  if (read === undefined) {
+    return { ok: false, report: packReport('没有可打包的 lockfile（插件集为空）', []) }
+  }
+  if (!read.ok) {
+    // A12（修复批次 3）：目标 profile lockfile 形状非法 → 显式拒绝，不静默。
+    return {
+      ok: false,
+      report: {
+        code: 'lockfile-mismatch',
+        summary: `lockfile 形状无效：${read.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`,
+        scope: 'package',
+        cycles: [],
+        conflicts: [{
+          plugin: 'lockfile',
+          constraint: { kind: 'entry', target: 'lockfile', range: 'schema' },
+          chain: ['lockfile'],
+          candidates: [{ version: '<lockfile>', rejected: [read.problem] }],
+          actions: ['重新 restore/重装以生成新 schema lockfile'],
+        }],
+      },
+    }
+  }
+  const lockfile = read.lockfile
+  if (Object.keys(lockfile.plugins).length === 0) {
     return { ok: false, report: packReport('没有可打包的 lockfile（插件集为空）', []) }
   }
   const work = await mkdtemp(join(ctx.paths.tmpDir, 'mygo-pack-'))
@@ -1013,7 +1009,26 @@ export async function installPluginPack(
   for (const [id, lock] of Object.entries(manifest.lockfile.plugins)) {
     pins.set(id, { version: lock.version, source: 'pack' })
   }
-  const currentLock = await readLockfile(lockfilePath(ctx.paths, ctx.profile))
+  const currentRead = await readLockfile(lockfilePath(ctx.paths, ctx.profile))
+  if (currentRead !== undefined && !currentRead.ok) {
+    // A12（修复批次 3）：目标 profile lockfile 形状非法 → 显式拒绝，零写入。
+    return {
+      ok: false,
+      report: {
+        code: 'lockfile-mismatch',
+        summary: `目标 profile lockfile 形状无效：${currentRead.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`,
+        cycles: [],
+        conflicts: [{
+          plugin: 'lockfile',
+          constraint: { kind: 'entry', target: 'lockfile', range: 'schema' },
+          chain: ['lockfile'],
+          candidates: [{ version: '<lockfile>', rejected: [currentRead.problem] }],
+          actions: ['重新 restore/重装以生成新 schema lockfile'],
+        }],
+      },
+    }
+  }
+  const currentLock = currentRead === undefined ? undefined : currentRead.lockfile
   const installed = new Map<string, PluginCandidate>()
   if (currentLock !== undefined) {
     for (const [id, lock] of Object.entries(currentLock.plugins)) {
@@ -1125,7 +1140,8 @@ export async function installPluginPack(
     }
     if (fact === undefined || fact.entrySha256 !== lock.entrySha256
       || fact.manifestSha256 !== lock.manifestSha256
-      || (lock.entrySha512 !== undefined && fact.entrySha512 !== lock.entrySha512)
+      || fact.entrySha512 !== lock.entrySha512
+      || (lock.tarballSha512 !== undefined && fact.tarballSha512 !== lock.tarballSha512)
       || (lock.entryFileSize !== undefined && fact.entryFileSize !== lock.entryFileSize)) {
       await rollback()
       return {
@@ -1136,7 +1152,7 @@ export async function installPluginPack(
           chain: [resolved.id],
           candidates: [{
             version: lock.version,
-            rejected: ['entrySha256/manifestSha256/entrySha512/fileSize 与 pack lockfile 不一致'],
+            rejected: ['entrySha256/manifestSha256/entrySha512/tarballSha512/fileSize 与 pack lockfile 不一致'],
           }],
           actions: ['检查磁盘/存储完整性后重新安装 pack'],
         }]),
