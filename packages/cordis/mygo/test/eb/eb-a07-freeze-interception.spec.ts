@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
-const PANEL_SRC = new URL('../../../../../vendor/dsh-mygo-panel/src/index.ts', import.meta.url).pathname
+const PANEL_SRC = new URL('../../../../extensions/mygo-panel/src/index.ts', import.meta.url).pathname
 const BUNDLE_RAIL_SRC = new URL('../../src/bundle-rail.ts', import.meta.url).pathname
 
 describe('EB-A7 enforcement point for freeze/proxy on plugin exports', () => {

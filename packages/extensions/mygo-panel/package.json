@@ -1,7 +1,11 @@
 {
-  "name": "@dsh-external/dsh-mygo-panel",
-  "version": "0.1.0-rc.1",
-  "description": "MyGO managed-plugin panel for the dsh web settings page (marisa slot route)",
+  "name": "@r05en1cu/dsh-mygo-ext-panel",
+  "version": "0.2.0-rc.0",
+  "description": "MyGO managed-plugin panel for the dsh web settings page (settings.section slot + /api/mygo/* routes)",
+  "author": "r05En1cU",
+  "maintainers": [
+    "r05En1cU"
+  ],
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -38,19 +42,32 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-mygo": "workspace:^",
-    "@deepseek-ai/dsh-mygo-api": "workspace:^",
-    "@deepseek-ai/cordis": "^4.0.1-rc.1"
+    "@r05en1cu/dsh-mygo": "workspace:^",
+    "@r05en1cu/dsh-mygo-api": "workspace:^",
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "@types/react": "^18.3.12",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lightningcss": "^1.27.0",
+    "@deepseek-ai/dsh-client-runtime": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.0.1-rc.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3"
   },
   "peerDependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "scripts": {
-    "build": "node build.mjs",
+    "build": "tsc -p tsconfig.json && tsdown --config tsdown.config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "test": "node -e \"console.log('mygo-panel: 无包级测试（E2E 由 mygo-cli webui-spike 覆盖）')\"",
     "verify:self-contained": "node scripts/verify-self-contained.mjs",
-    "prepare": "node build.mjs",
-    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/client.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 运行 build.mjs'); process.exit(1)}\""
+    "prepare": "tsc -p tsconfig.json && tsdown --config tsdown.config.mjs",
+    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/client.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先 pnpm run build'); process.exit(1)}\""
   }
 }

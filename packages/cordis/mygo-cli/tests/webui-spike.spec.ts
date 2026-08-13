@@ -12,9 +12,12 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const CHECKOUT = process.env.DSH_CHECKOUT ?? '/home/rosen/workspace/dsh_dev/test-r05En1cU-0811'
+// mygo 仓库根（P3 自包含 workspace；mygo 三包与面板以仓库为准，不再经 checkout 同步）。
+const MYGO_REPO = fileURLToPath(new URL('../../../..', import.meta.url))
 const NPM_RC1 = process.env.DSH_NPM_RC1 ?? '/home/rosen/.npm/_npx/f78199ae95006ae9/node_modules/@deepseek-ai'
 const RC1_BIN = join(NPM_RC1, 'dsh', 'lib', 'bin.js')
 const C811_BIN = join(CHECKOUT, 'apps', 'cli', 'lib', 'bin.js')
@@ -64,7 +67,7 @@ function writeProfile(home: string): void {
     '      config:',
     '        profile: web',
     "    - id: dsh-mygo-panel",
-    "      name: '@dsh-external/dsh-mygo-panel'",
+    "      name: '@r05en1cu/dsh-mygo-ext-panel'",
     '      config: {}',
     '',
   ].join('\n'))
@@ -74,15 +77,12 @@ function writeProfile(home: string): void {
 function linkMygo(home: string): void {
   const pairs: readonly [string, string][] = [
     // 新 scope（P2 迁移后 mygo 三包）。
-    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo'), join(CHECKOUT, 'packages', 'cordis', 'mygo')],
-    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-api'), join(CHECKOUT, 'packages', 'core', 'mygo-api')],
-    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-cli'), join(CHECKOUT, 'packages', 'cordis', 'mygo-cli')],
-    // 旧 scope 链接保留：vendor 面板（P3 才迁移）仍按旧名解析 mygo。
-    [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-mygo'), join(CHECKOUT, 'packages', 'cordis', 'mygo')],
-    [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-mygo-api'), join(CHECKOUT, 'packages', 'core', 'mygo-api')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo'), join(MYGO_REPO, 'packages', 'cordis', 'mygo')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-api'), join(MYGO_REPO, 'packages', 'core', 'mygo-api')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-cli'), join(MYGO_REPO, 'packages', 'cordis', 'mygo-cli')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-ext-panel'), join(MYGO_REPO, 'packages', 'extensions', 'mygo-panel')],
+    // 宿主侧包（storage-sqlite 等）仍链接 0811 checkout。
     [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-storage-sqlite'), join(CHECKOUT, 'packages', 'storage', 'storage-sqlite')],
-    [join(home, 'profiles', 'node_modules', '@dsh-external', 'dsh-mygo-panel'), join(CHECKOUT, 'vendor', 'dsh-mygo-panel')],
-    [join(home, 'profiles', 'node_modules', '@dsh-external', 'dsh-mygo-cli'), join(CHECKOUT, 'packages', 'cordis', 'mygo-cli')],
   ]
   for (const [link, target] of pairs) {
     try {
@@ -169,11 +169,11 @@ describe.skipIf(!ENV_OK)('Phase C webui spike（T50/T51）', () => {
     const root = await fetch(`http://127.0.0.1:${port}/`)
     expect(root.ok).toBe(true)
     const html = await root.text()
-    expect(html).toContain('/plugins/@dsh-external/dsh-mygo-panel/client.js')
+    expect(html).toContain('/plugins/@r05en1cu/dsh-mygo-ext-panel/client.js')
 
     const planPayload = {
       method: 'folder',
-      path: join(CHECKOUT, 'packages', 'cordis', 'mygo-cli'),
+      path: join(MYGO_REPO, 'packages', 'cordis', 'mygo-cli'),
       installDeps: false,
     }
     const plan1 = await postJson<{ ok: boolean; id: string; plan: { accepted: boolean } }>(port, '/api/mygo/install-plan', planPayload)
@@ -182,7 +182,7 @@ describe.skipIf(!ENV_OK)('Phase C webui spike（T50/T51）', () => {
     expect(plan1).toMatchObject({ ok: true, id: 'dsh-mygo-cli', plan: { accepted: true } })
 
     const installed = await postJson<{ ok: boolean; id: string; message: string }>(port, '/api/mygo/install', planPayload)
-    expect(installed.ok).toBe(true)
+    expect(installed.ok, JSON.stringify(installed)).toBe(true)
     expect(installed.id).toBe('dsh-mygo-cli')
 
     const plugins = await getJson<{ ok: boolean; plugins: readonly { id: string; status: string }[] }>(port, '/api/mygo/plugins')
@@ -190,8 +190,7 @@ describe.skipIf(!ENV_OK)('Phase C webui spike（T50/T51）', () => {
 
     const patch = await import('node:fs/promises').then(fs => fs.readFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'))
     expect(patch).toContain('dsh-mygo-cli-mygo')
-    // 桥接包名由面板按自身命名约定生成（旧 scope）；面板 P3 迁移后此处改为 @r05en1cu。
-    expect(patch).toContain("name: '@dsh-external/dsh-mygo-cli-mygo'")
+    expect(patch).toContain("name: '@r05en1cu/dsh-mygo-cli-mygo'")
 
     const again = await postJson<{ ok: boolean; error: string }>(port, '/api/mygo/install', planPayload)
     expect(again.ok).toBe(false)

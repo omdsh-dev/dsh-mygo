@@ -3,28 +3,29 @@
  * surface plus a local plugin installer. Sources: GitHub clone, local
  * folder, and zip/tar.gz archives. Installed plugins are copied into
  * `$DSH_HOME/mygo-plugins/<id>`, wrapped in a projected bridge package
- * (`@dsh-external/<id>-mygo`) so both halves reach the web app: the node
+ * (`@r05en1cu/<id>-mygo`) so both halves reach the web app: the node
  * half re-adopts through mygo, and the browser half (dshClient) is served
  * from the bridge and enters the client roster via a profile patch row.
- * @module @dsh-external/dsh-mygo-panel
+ * @module @r05en1cu/dsh-mygo-ext-panel
  */
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, openSync } from 'node:fs'
 import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { basename, delimiter, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
-import type { PluginManager } from '@deepseek-ai/dsh-mygo'
-import { compatibilityViolationLines, compatibilityWarningLines } from '@deepseek-ai/dsh-mygo'
+import type { PluginManager } from '@r05en1cu/dsh-mygo'
+import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
 import type {
   PluginCompatibility,
   PluginHandleInfo,
   RawCordisFunctionPlugin,
   RawPluginDeclaration,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 
 const execFileAsync = promisify(execFile)
 
@@ -152,8 +153,6 @@ interface InstallRequest {
   readonly config?: unknown
   /** Install the plugin's runtime `dependencies` with npm (opt-in). */
   readonly installDeps?: boolean
-  /** Resolve required-by activation actions (enable disabled deps) before adopting. */
-  readonly autoResolve?: boolean
 }
 
 /** Remote repository provenance recorded for GitHub-installed plugins/apps. */
@@ -217,7 +216,7 @@ function bridgeDirOf(id: string): string {
 
 /** Bridge package name for one installed plugin id. */
 function bridgeNameOf(id: string): string {
-  return `@dsh-external/${id}-mygo`
+  return `@r05en1cu/${id}-mygo`
 }
 
 /** Client service id → provider package map for bridge dependency completion. */
@@ -440,15 +439,42 @@ async function copyPluginTree(source: string, target: string): Promise<void> {
   })
 }
 
-/** Link the harness node_modules into an installed plugin dir so bare imports resolve. */
+/** mygo 体系运行包：安装目录 node_modules 链接的固定清单。 */
+const MYGO_RUNTIME_PACKAGES = [
+  '@r05en1cu/dsh-mygo',
+  '@r05en1cu/dsh-mygo-api',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/schemastery',
+] as const
+
+/**
+ * Link the runtime packages an installed plugin needs into its node_modules.
+ * P3 起不再假设 dsh checkout：链接对象 = 固定 mygo 体系包 ∪ 目标插件
+ * package.json 声明的 dependencies，全部从面板自身模块解析链取真实目录
+ * （workspace 链接或宿主安装均可）。解析失败的跳过（装载期以原始错误
+ * fail loud）。
+ */
 async function ensureNodeModulesLink(target: string): Promise<void> {
-  if (CHECKOUT === undefined) return
-  const link = join(target, 'node_modules')
+  const require = createRequire(import.meta.url)
+  const names = new Set<string>(MYGO_RUNTIME_PACKAGES)
   try {
-    await symlink(join(CHECKOUT, 'node_modules'), link, 'dir')
-  } catch (error) {
-    if (!(error instanceof Error) || (error as { code?: string }).code !== 'EEXIST') {
-      throw error
+    const pkg = JSON.parse(await readFile(join(target, 'package.json'), 'utf8')) as {
+      readonly dependencies?: Readonly<Record<string, unknown>>
+    }
+    for (const name of Object.keys(pkg.dependencies ?? {})) names.add(name)
+  } catch {
+    // 无 package.json 时只链固定清单
+  }
+  for (const name of names) {
+    try {
+      const pkgDir = dirname(require.resolve(`${name}/package.json`))
+      const link = join(target, 'node_modules', name)
+      await mkdir(dirname(link), { recursive: true })
+      await symlink(pkgDir, link, 'dir')
+    } catch (error) {
+      if (!(error instanceof Error) || (error as { code?: string }).code !== 'EEXIST') {
+        if ((error as { code?: string }).code !== 'MODULE_NOT_FOUND') throw error
+      }
     }
   }
 }
@@ -1241,7 +1267,7 @@ async function ensureProjectedBridge(manifest: InstallManifest): Promise<void> {
  * Generated dsh-mygo bridge for installed plugin ${manifest.id} (do not edit).
  * bridge template v3: host-service retry + stale-install recovery.
  */
-import type { PluginManager } from '@deepseek-ai/dsh-mygo'
+import type { PluginManager } from '@r05en1cu/dsh-mygo'
 
 export const name = ${JSON.stringify(`${manifest.id}-mygo`)}
 export const inject = ['pluginManager']
@@ -1351,13 +1377,13 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
   // Project into the active profile's node_modules (npm-native). 源码模式
   // 下额外投影到 checkout，兼容旧布局；npm 布局不写 dsh 安装目录。
   if (CHECKOUT !== undefined) {
-    const scopeDir = join(CHECKOUT, 'node_modules', '@dsh-external')
+    const scopeDir = join(CHECKOUT, 'node_modules', '@r05en1cu')
     await mkdir(scopeDir, { recursive: true })
     const link = join(scopeDir, `${manifest.id}-mygo`)
     await rm(link, { force: true, recursive: false })
     await symlink(bridgeDir, link, 'dir')
   }
-  const profileScope = join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@dsh-external')
+  const profileScope = join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@r05en1cu')
   await mkdir(profileScope, { recursive: true })
   const profileLink = join(profileScope, `${manifest.id}-mygo`)
   await rm(profileLink, { force: true, recursive: false })
@@ -1368,9 +1394,9 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
 async function removeProjectedBridge(id: string): Promise<void> {
   await rm(bridgeDirOf(id), { recursive: true, force: true })
   if (CHECKOUT !== undefined) {
-    await rm(join(CHECKOUT, 'node_modules', '@dsh-external', `${id}-mygo`), { force: true, recursive: false })
+    await rm(join(CHECKOUT, 'node_modules', '@r05en1cu', `${id}-mygo`), { force: true, recursive: false })
   }
-  await rm(join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@dsh-external', `${id}-mygo`), {
+  await rm(join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@r05en1cu', `${id}-mygo`), {
     force: true,
     recursive: false,
   })
@@ -2343,7 +2369,6 @@ async function installFromRoot(
   installDeps = false,
   idOverride?: string,
   remote?: RemoteRef,
-  autoResolve = false,
 ): Promise<{ readonly ok: true; readonly id: string; readonly message: string }> {
   let id = idOverride
   if (id === undefined || id.length === 0) {
@@ -2392,29 +2417,9 @@ async function installFromRoot(
     }
     const declarative = await readDeclarativeManifest(target)
     const declaration = toDeclaration(declarative)
-    if (autoResolve) {
-      // The solver previews the whole activation plan; on confirmation the
-      // panel enables required-by dependencies before the bridge adopts the
-      // new plugin.
-      const plan = await pluginManager.planInstall({
-        id,
-        ...(declaration === undefined
-          ? {}
-          : {
-              ...(declaration.version === undefined ? {} : { version: declaration.version }),
-              ...(declaration.compatibility === undefined ? {} : { compatibility: declaration.compatibility }),
-              ...(declaration.provides === undefined ? {} : { provides: declaration.provides }),
-            }),
-      })
-      if (!plan.accepted || plan.error !== undefined) {
-        throw new Error(`兼容性冲突，拒绝安装：\n${plan.error?.message ?? 'plan 未通过'}`)
-      }
-      for (const action of plan.actions ?? []) {
-        if (action.op === 'enable' && action.kind === 'required-by') {
-          await pluginManager.enable(action.id)
-        }
-      }
-    } else {
+    // P1 起求解器级联动作已删除：安装前做 plan 预览（求值，拒绝即报错），
+    // 不再连带启用下游。
+    {
       // Compatibility preflight against the live managed set before any bridge
       // row is written: a broken combination is refused with the constraint
       // chain instead of surfacing at the next boot.
@@ -2753,7 +2758,6 @@ function helperToolSurface(ctx: PanelContext): unknown[] {
         path: { type: 'string' },
         config: { type: 'object' },
         installDeps: { type: 'boolean' },
-        autoResolve: { type: 'boolean' },
       },
       required: ['method'],
       additionalProperties: false,
@@ -2776,7 +2780,6 @@ function helperToolSurface(ctx: PanelContext): unknown[] {
           args.installDeps === true,
           undefined,
           prepared.remote,
-          args.autoResolve === true,
         )
       } finally {
         await prepared.cleanup()
@@ -3178,7 +3181,6 @@ export function apply(ctx: PanelContext): void {
               accepted: result.plan.accepted,
               ...(result.plan.error === undefined ? {} : { error: result.plan.error }),
               ...(result.plan.warnings === undefined || result.plan.warnings.length === 0 ? {} : { warnings: result.plan.warnings }),
-              ...(result.plan.actions === undefined || result.plan.actions.length === 0 ? {} : { actions: result.plan.actions }),
             },
             ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
           })
@@ -3201,7 +3203,6 @@ export function apply(ctx: PanelContext): void {
               body2.installDeps === true,
               undefined,
               prepared.remote,
-              body2.autoResolve === true,
             ))
           } finally {
             await prepared.cleanup()
@@ -3245,7 +3246,6 @@ export function apply(ctx: PanelContext): void {
                 accepted: plan.accepted,
                 ...(plan.error === undefined ? {} : { error: plan.error }),
                 ...(plan.warnings === undefined || plan.warnings.length === 0 ? {} : { warnings: plan.warnings }),
-                ...(plan.actions === undefined || plan.actions.length === 0 ? {} : { actions: plan.actions }),
               },
             })
           } finally {
@@ -3394,7 +3394,6 @@ export function apply(ctx: PanelContext): void {
               accepted: plan.accepted,
               ...(plan.error === undefined ? {} : { error: plan.error }),
               ...(plan.warnings === undefined || plan.warnings.length === 0 ? {} : { warnings: plan.warnings }),
-              ...(plan.actions === undefined || plan.actions.length === 0 ? {} : { actions: plan.actions }),
             },
           })
           return

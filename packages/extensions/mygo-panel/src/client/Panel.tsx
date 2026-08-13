@@ -79,25 +79,10 @@ interface ApiResult {
   readonly messages?: readonly HelperMessage[]
 }
 
-interface PlanAction {
-  readonly op: string
-  readonly id: string
-  readonly kind: string
-  readonly reason: string
-}
-
 interface PlanShape {
   readonly accepted: boolean
   readonly error?: { readonly code: string; readonly message: string }
   readonly warnings?: readonly string[]
-  readonly actions?: readonly PlanAction[]
-}
-
-const ACTION_KIND_LABEL: Readonly<Record<string, string>> = {
-  'user-requested': '直接操作',
-  'required-by': '连带启用',
-  'conflict-resolution': '消解冲突',
-  advisory: '建议',
 }
 
 interface PendingAction {
@@ -450,9 +435,8 @@ export function Panel(): JSX.Element {
       })
       const plan = preview.plan
       if (plan === undefined) throw new Error('plan 接口未返回计划')
-      const extra = (plan.actions ?? [])
-        .filter(entry => !(entry.op === action && entry.kind === 'user-requested' && entry.id === id))
-      if (plan.accepted && extra.length === 0) {
+      // P1 起求解器级联动作已删除：plan 只剩求值结论（accepted/error/warnings）。
+      if (plan.accepted) {
         const result = await api<ApiResult>(`/plugins/${id}/${action}`, 'POST')
         setNotice(result.message)
         setError(undefined)
@@ -485,11 +469,6 @@ export function Panel(): JSX.Element {
         })
         setNotice(result.message)
       } else {
-        for (const entry of current.plan?.actions ?? []) {
-          if (entry.op === 'enable' && entry.kind === 'required-by') {
-            await api<ApiResult>(`/plugins/${entry.id}/enable`, 'POST')
-          }
-        }
         const result = await api<ApiResult>(`/plugins/${current.id}/enable`, 'POST')
         setNotice(result.message)
       }
@@ -748,11 +727,8 @@ export function Panel(): JSX.Element {
           body: payload,
         })
         const plan = result.plan
-        const extra = (plan?.actions ?? [])
-          .filter(entry => !(entry.op === 'install' && entry.kind === 'user-requested' && entry.id === result.id))
         if (plan !== undefined
-          && (extra.length > 0
-            || (plan.warnings ?? []).length > 0
+          && ((plan.warnings ?? []).length > 0
             || (result.hostConflicts ?? []).length > 0)) {
           setInstallPending({
             id: result.id ?? '',
@@ -788,12 +764,10 @@ export function Panel(): JSX.Element {
           payload.config = JSON.parse(template)
           setNotice('已按插件 schema 自动生成配置模板，可编辑后直接安装')
         }
-        const extra = (plan.actions ?? [])
-          .filter(entry => !(entry.op === 'install' && entry.kind === 'user-requested' && entry.id === preview.id))
-        if (extra.length === 0 && (plan.warnings ?? []).length === 0) {
+        if ((plan.warnings ?? []).length === 0) {
           const result = await api<ApiResult>('/install', {
             method: 'POST',
-            body: { ...payload, autoResolve: true },
+            body: { ...payload },
           })
           setNotice(result.message ?? '插件已安装')
           setError(undefined)
@@ -856,17 +830,10 @@ export function Panel(): JSX.Element {
     setInstalling(true)
     try {
       const result = current.payload.method === 'bundle'
-        ? await (async () => {
-            for (const entry of current.plan.actions ?? []) {
-              if (entry.op === 'enable' && entry.kind === 'required-by') {
-                await api<ApiResult>(`/plugins/${entry.id}/enable`, 'POST')
-              }
-            }
-            return { message: `bundle ${current.id} 已安装` } as ApiResult
-          })()
+        ? ({ message: `bundle ${current.id} 已安装` } as ApiResult)
         : await api<ApiResult>('/install', {
             method: 'POST',
-            body: { ...current.payload, autoResolve: true },
+            body: { ...current.payload },
           })
       setNotice(result.message ?? '插件已安装')
       setError(undefined)
@@ -1055,17 +1022,6 @@ export function Panel(): JSX.Element {
             <div className={css.inlineTitle}>安装 {installPending.id}</div>
             {installPending.plan.error !== undefined && (
               <div className={css.inlineError}>{installPending.plan.error.message}</div>
-            )}
-            {installPending.plan.actions !== undefined && installPending.plan.actions.length > 0 && (
-              <div className={css.inlineList}>
-                {installPending.plan.actions.map((entry, index) => (
-                  <div key={index} className={css.inlineLine}>
-                    <span className={css.pill}>{ACTION_KIND_LABEL[entry.kind] ?? entry.kind}</span>
-                    <span>{entry.op === 'disable' ? '停用' : entry.op === 'enable' ? '启用' : entry.op} {entry.id}</span>
-                    <span className={css.inlineReason}>{entry.reason}</span>
-                  </div>
-                ))}
-              </div>
             )}
             {installPending.plan.warnings !== undefined && installPending.plan.warnings.length > 0 && (
               <div className={css.inlineWarnings}>
@@ -1257,18 +1213,6 @@ export function Panel(): JSX.Element {
                     {pending.action !== 'uninstall' && pending.plan?.error !== undefined && (
                       <div className={css.inlineError}>{pending.plan.error.message}</div>
                     )}
-                    {pending.action !== 'uninstall' && pending.plan?.actions !== undefined
-                      && pending.plan.actions.length > 0 && (
-                        <div className={css.inlineList}>
-                          {pending.plan.actions.map((entry, index) => (
-                            <div key={index} className={css.inlineLine}>
-                              <span className={css.pill}>{ACTION_KIND_LABEL[entry.kind] ?? entry.kind}</span>
-                              <span>{entry.op === 'disable' ? '停用' : entry.op === 'enable' ? '启用' : entry.op} {entry.id}</span>
-                              <span className={css.inlineReason}>{entry.reason}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
                     {pending.action !== 'uninstall' && pending.plan?.warnings !== undefined
                       && pending.plan.warnings.length > 0 && (
                         <div className={css.inlineWarnings}>
