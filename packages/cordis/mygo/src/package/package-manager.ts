@@ -1,22 +1,21 @@
 /**
- * 插件包管理器（《收敛任务》总编排）：安装时求解 → 下载入 store → 写
- * lockfile；加载时只校验（不重新求解、不查 registry）；失败输出全量结构化报告。
+ * 插件包管理器（《收敛任务》总编排，2026-08-13 范围重塑）：单插件版本选择
+ * （无跨插件约束求解）→ 下载入 store → 写 lockfile；加载时只校验（不重新
+ * 求解、不查 registry）；失败输出全量结构化报告。
  * @module @deepseek-ai/dsh-mygo/src/package/package-manager
  */
 
 import { readLockfile, verifyLockfile, writeLockfile, type Lockfile, type LockedPlugin } from './lockfile.ts'
 import { detectUndeclaredBundles, scanBundles, type ScannedBundle } from './bundle-scan.ts'
 import { probePackageExports, scanPluginImports, verifyPluginSymbols, type SymbolCheck } from './symbol-verify.ts'
-import { matchesVersionRange } from '../semver-range.ts'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { constraintsOf, type PluginManifestV2 } from './manifest-v2.ts'
-import { computeMountOrder, type MountEdge } from './mount-order.ts'
+import type { PluginManifestV2 } from './manifest-v2.ts'
 import { installPackageToStore, type InstalledPackage } from './package-store.ts'
 import { lockfilePath, packageDir, type MygoPaths } from './paths.ts'
 import { fetchRegistryMetadata } from './registry-client.ts'
-import { resolve, type PluginCandidate, type ResolveOutcome } from './resolver.ts'
+import { selectVersion, type VersionCandidate, type VersionSelectOutcome } from './version-select.ts'
 import { extractPlugin, loadPluginEntry } from './entry-loader.ts'
 import type { ResolutionReport } from './report.ts'
 import {
@@ -100,8 +99,8 @@ export class PluginPackageManager {
   }
 
   /**
-   * Install one npm plugin package: registry metadata → candidates →
-   * deterministic resolve → store install → lockfile write.
+   * Install one npm plugin package: registry metadata → deterministic
+   * version selection → store install → lockfile write.
    */
   async resolveInstall(
     source: { readonly package: string; readonly range?: string },
@@ -123,7 +122,7 @@ export class PluginPackageManager {
               version: version.version,
               rejected: version.manifestProblems ?? ['无有效 manifest'],
             })),
-            actions: ['由插件作者补充 dsh.mygo（id/version/entry/depends/breaks/core）'],
+            actions: ['由插件作者补充 dsh.mygo（id/version/entry/core）'],
           }],
         },
       }
@@ -133,69 +132,38 @@ export class PluginPackageManager {
     if (canonicalId === undefined) {
       return { ok: false, report: { code: 'resolve-failed', summary: `${source.package} 无 manifest id`, cycles: [], conflicts: [] } }
     }
-    const candidates = new Map<string, readonly PluginCandidate[]>()
-    candidates.set(canonicalId, idCandidates.map(entry => ({
-      version: entry.version,
-      ...(entry.manifest === undefined ? {} : { constraints: constraintsOf(entry.manifest) }),
-      ...(entry.manifest === undefined || entry.manifest.provides.length === 0
-        ? {}
-        : { provides: entry.manifest.provides }),
-      source: 'registry',
-    })))
-    const lockfile = await this.readLock()
-    const installed = new Map<string, PluginCandidate>()
-    if (lockfile !== undefined) {
-      for (const [id, lock] of Object.entries(lockfile.plugins)) {
-        installed.set(id, {
-          version: lock.version,
-          constraints: { depends: lock.depends, breaks: lock.breaks, core: lock.core, entry: lock.entry },
-          ...(lock.provides === undefined || lock.provides.length === 0 ? {} : { provides: lock.provides }),
-          source: 'locked',
-        })
+    const selected = this.selectVersion(idCandidates, source.range, canonicalId)
+    if (!selected.ok) {
+      return {
+        ok: false,
+        report: {
+          code: 'resolve-failed',
+          summary: `${canonicalId} 版本选择失败：${selected.reasons.join('；')}`,
+          cycles: [],
+          conflicts: [{
+            plugin: canonicalId,
+            constraint: { kind: 'entry', target: canonicalId, range: source.range ?? '*' },
+            chain: [canonicalId],
+            candidates: idCandidates.map(entry => ({ version: entry.version, rejected: [] })),
+            actions: ['调整请求区间或 profile 钉定版本后重试'],
+          }],
+        },
       }
     }
-    if (lockfile !== undefined) {
-      for (const [owner, lock] of Object.entries(lockfile.plugins)) {
-        for (const bundle of lock.bundles ?? []) {
-          const existing = candidates.get(bundle.id) ?? []
-          candidates.set(bundle.id, [...existing, {
-            version: bundle.version,
-            constraints: { depends: bundle.depends, breaks: bundle.breaks, core: bundle.core },
-            ...(bundle.provides === undefined || bundle.provides.length === 0 ? {} : { provides: bundle.provides }),
-            source: `bundle:${owner}`,
-          }])
-        }
-      }
-    }
-    const requests = new Map([[canonicalId, { ...(source.range === undefined ? {} : { range: source.range }) }]])
-    const outcome = resolve({
-      requests,
-      candidates,
-      installed,
-      coreVersion: this.options.coreVersion,
-      ...(this.options.pins === undefined ? {} : { pins: this.options.pins }),
-    })
-    if (!outcome.ok) return outcome
-    const chosen = (outcome as Extract<ResolveOutcome, { ok: true }>).resolved.find(plugin => plugin.id === canonicalId)
-    if (chosen === undefined) {
-      return { ok: false, report: { code: 'resolve-failed', summary: '求解结果缺少目标插件', cycles: [], conflicts: [] } }
-    }
-    // 修复批次 4（review#2 A5）：消除 as-cast——pin 指向 registry 不存在的版本
-    // （候选集/已装集有该版本时求解可过）→ 显式 resolve-failed，MUST NOT
-    // 以 undefined 继续（原 TypeError）。
-    const versionInfo = idCandidates.find(entry => entry.version === chosen.version)
+    const versionInfo = idCandidates.find(entry => entry.version === selected.version)
+    // 选择结果必来自候选集；防御性保留（旧 A5 修复语义：MUST NOT 以 undefined 继续）。
     if (versionInfo === undefined) {
       return {
         ok: false,
         report: {
           code: 'resolve-failed',
-          summary: `求解选定的版本 ${chosen.version} 不在 registry 候选集中（profile 钉定指向不存在版本？）`,
+          summary: `选定版本 ${selected.version} 不在 registry 候选集中`,
           cycles: [],
           conflicts: [{
             plugin: canonicalId,
-            constraint: { kind: 'pin', target: canonicalId, range: chosen.version },
+            constraint: { kind: 'pin', target: canonicalId, range: selected.version },
             chain: [canonicalId],
-            candidates: [{ version: chosen.version, rejected: ['registry 元数据无该版本'] }],
+            candidates: [{ version: selected.version, rejected: ['registry 元数据无该版本'] }],
             actions: ['调整 profile 钉定版本或解除钉定', '选择 registry 现存版本重新安装'],
           }],
         },

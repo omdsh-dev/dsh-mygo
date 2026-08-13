@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, rename, mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
 import { packageDir, type MygoPaths } from './paths.ts'
 
 /** One locked plugin entry. */
@@ -14,8 +15,6 @@ export interface LockedPlugin {
   readonly version: string
   readonly entry: string
   readonly core: string
-  readonly depends: Readonly<Record<string, string>>
-  readonly breaks: Readonly<Record<string, string>>
   /**
    * 服务级依赖声明快照（修复批次 3 / A3）：manifest `requires` 原样落盘，
    * 重启后 loadEntry 从本字段还原（不再硬编码 {}）。值可为区间数组（OR）。
@@ -23,6 +22,11 @@ export interface LockedPlugin {
   readonly requires: Readonly<Record<string, string | readonly string[]>>
   /** 符号别名声明快照（修复批次 3 / A3；EB-D19 载体）。 */
   readonly symbolAliases: Readonly<Record<string, string>>
+  /**
+   * 插件级兼容词汇快照（范围重塑 2026-08-13）：`dsh.mygo.compatibility` 块
+   * 直通落盘（可选），重启后 loadEntry 还原进 manifest（兼容预检/激活规划）。
+   */
+  readonly compatibility?: PluginCompatibility
   readonly entrySha256: string
   readonly manifestSha256: string
   /**
@@ -55,8 +59,6 @@ export interface LockedBundle {
   readonly id: string
   readonly version: string
   readonly path: string
-  readonly depends: Readonly<Record<string, string>>
-  readonly breaks: Readonly<Record<string, string>>
   readonly core: string
   readonly provides?: readonly string[]
 }
@@ -145,6 +147,16 @@ function isRangeMap(value: unknown): value is Readonly<Record<string, string | r
     || (Array.isArray(item) && item.length > 0 && item.every(entry => typeof entry === 'string')))
 }
 
+/** compatibility 块形状：已知词汇键 → string 映射（可空块也接受）。 */
+function isCompatibilityMap(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return Object.entries(value).every(([key, raw]) => {
+    if (key !== 'depends' && key !== 'breaks' && key !== 'requires'
+      && key !== 'recommends' && key !== 'suggests' && key !== 'conflicts') return false
+    return isStringMap(raw)
+  })
+}
+
 /**
  * lockfile 形状校验（修复批次 3 / A12）：schema 显式演进——新字段
  * requires / symbolAliases / entrySha512 为必填，旧 schema（本批前格式）读入
@@ -173,10 +185,15 @@ export function validateLockfileShape(value: unknown): readonly string[] {
     if (typeof entry.version !== 'string' || entry.version === '') problems.push(`${path}.version 必须是非空字符串`)
     if (typeof entry.entry !== 'string' || entry.entry === '') problems.push(`${path}.entry 必须是非空字符串`)
     if (typeof entry.core !== 'string' || entry.core === '') problems.push(`${path}.core 必须是非空字符串`)
-    if (!isStringMap(entry.depends)) problems.push(`${path}.depends 必须是 string 映射`)
-    if (!isStringMap(entry.breaks)) problems.push(`${path}.breaks 必须是 string 映射`)
+    // 范围重塑 2026-08-13：depends/breaks 已从 manifest schema 删除，lockfile
+    // 不再写入；存量 lockfile 中的字段按可选读入（不阻断，不参与任何校验）。
+    if (entry.depends !== undefined && !isStringMap(entry.depends)) problems.push(`${path}.depends 必须是 string 映射`)
+    if (entry.breaks !== undefined && !isStringMap(entry.breaks)) problems.push(`${path}.breaks 必须是 string 映射`)
     if (!isRangeMap(entry.requires)) problems.push(`${path}.requires 必须是 服务名 → 区间(string|string[]) 映射（旧 schema 缺本字段：请重新 restore/重装）`)
     if (!isStringMap(entry.symbolAliases)) problems.push(`${path}.symbolAliases 必须是 string 映射（旧 schema 缺本字段：请重新 restore/重装）`)
+    if (entry.compatibility !== undefined && !isCompatibilityMap(entry.compatibility)) {
+      problems.push(`${path}.compatibility 必须是 兼容词汇块（depends/breaks/requires/recommends/suggests/conflicts → string 映射）`)
+    }
     if (typeof entry.entrySha256 !== 'string' || !SHA256_HEX_RE.test(entry.entrySha256)) problems.push(`${path}.entrySha256 必须是 64 位 hex`)
     if (typeof entry.manifestSha256 !== 'string' || !SHA256_HEX_RE.test(entry.manifestSha256)) problems.push(`${path}.manifestSha256 必须是 64 位 hex`)
     if (typeof entry.entrySha512 !== 'string' || !SHA512_HEX_RE.test(entry.entrySha512)) problems.push(`${path}.entrySha512 必须是 128 位 hex（旧 schema 缺本字段：请重新 restore/重装）`)
@@ -192,9 +209,8 @@ export function validateLockfileShape(value: unknown): readonly string[] {
       } else {
         for (const [index, bundle] of entry.bundles.entries()) {
           if (!isRecord(bundle) || typeof bundle.id !== 'string' || typeof bundle.version !== 'string'
-            || typeof bundle.path !== 'string' || !isStringMap(bundle.depends)
-            || !isStringMap(bundle.breaks) || typeof bundle.core !== 'string') {
-            problems.push(`${path}.bundles[${index}] 形状非法（需 id/version/path/depends/breaks/core）`)
+            || typeof bundle.path !== 'string' || typeof bundle.core !== 'string') {
+            problems.push(`${path}.bundles[${index}] 形状非法（需 id/version/path/core）`)
           }
         }
       }

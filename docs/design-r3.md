@@ -441,3 +441,4 @@
 | 修订编号 | 日期 | 原因 |
 |---|---|---|
 | Rev-I1 | 2026-08-11 | design-r3 实现轮（B1-B18）落地：manifest v3（§2.2）、求解器全序（§3.1）、requires 政策闸（§2.1/B6）、细 epoch 前置门（§4.1/B13）、观测注册表（§2.1/B19）、报告 schema（§4.6/B7）、dispose 超时（§1.7/B8）、BOM sha512+fileSize（§3.5/B9）、路径安全（§3.4/B10）、收割器与双存在（§5.1-5.2/B11-12）、bundle 展开/legacy 映射/模板对齐（§5.3-5.5/B14-16）；实现期新增两处契约字段：`PluginDefinition.serviceRequires`（requires 载体）与 `PluginDefinition.symbolAliases`（EB-D19 载体），均经 MANIFEST_SCHEMA 登记，不影响冻结基线。 |
+| Rev-I2 | 2026-08-12 | 按当前代码修正 epoch 依赖描述（零侵入裁决）：§0 贯穿约束与 §7 侵入等级中「vendor 补丁 #1 epoch getter」的旧表述失效——PATCHES #1 已移除并回滚（fiber.ts / lib/index.js / fiber.d.ts 零残留，vendor/PATCHES.md 标记已移除），原生 fiber epoch 无公开入口；mygo 控制面细 epoch（§1.1 EB-D10 / §4.1）落地口径改为 **FineEpochRegistry 自有记账**（挂载时导出快照 + 提供者观测 + 政策事实记账），与原生 epoch 解耦。见 expected-behavior.md R3（EB-N12/EB-D14/A9 现行描述）。 |
