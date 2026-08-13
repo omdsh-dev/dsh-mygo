@@ -6,19 +6,5 @@
   },
   "include": [
     "src"
-  ],
-  "references": [
-    {
-      "path": "../../../vendor/schemastery"
-    },
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../core/session"
-    },
-    {
-      "path": "../../support/invariants"
-    }
   ]
 }

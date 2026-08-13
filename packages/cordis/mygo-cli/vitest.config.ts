@@ -1,6 +1,7 @@
 /**
- * mygo-cli 测试配置：独立于主套件运行；把本测试图会用到的 @deepseek-ai/*
- * 显式映射到 checkout 源码，避免依赖未安装的包级 node_modules。
+ * mygo-cli 测试配置（P3 自包含 workspace 形态）：@r05en1cu/* 内部包经显式
+ * alias 解析到仓库内源码；@deepseek-ai/* 官方包经 node_modules（公开
+ * registry）解析。
  */
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
@@ -12,15 +13,6 @@ export default defineConfig({
     alias: {
       '@r05en1cu/dsh-mygo': here('../mygo/src/index.ts'),
       '@r05en1cu/dsh-mygo-api': here('../../core/mygo-api/src/index.ts'),
-      '@deepseek-ai/cordis': here('../../../vendor/cordis/src'),
-      '@deepseek-ai/cordis-plugin-loader': here('../../../vendor/loader/src'),
-      '@deepseek-ai/cordis-plugin-include': here('../../../vendor/include/src'),
-      '@deepseek-ai/dsh-storage': here('../../storage/storage/src/index.ts'),
-      '@deepseek-ai/dsh-storage-domain': here('../../storage/storage-domain/src/index.ts'),
-      '@deepseek-ai/dsh-storage-json': here('../../storage/storage-json/src/index.ts'),
-      '@deepseek-ai/dsh-storage-sqlite': here('../../storage/storage-sqlite/src/index.ts'),
-      '@deepseek-ai/dsh-system-prompt': here('../../core/system-prompt/src/index.ts'),
-      '@deepseek-ai/dsh-tools': here('../../core/tools/src/index.ts'),
     },
   },
   test: {

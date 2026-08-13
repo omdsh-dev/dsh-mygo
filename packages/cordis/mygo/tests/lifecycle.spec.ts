@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type { PluginDefinition, PluginHandleInfo, PluginHooks, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {

@@ -14,7 +14,7 @@
  * @module @r05en1cu/dsh-mygo-api/src/adapter
  */
 
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { PluginError, formatPluginError } from './error.ts'
 import type {

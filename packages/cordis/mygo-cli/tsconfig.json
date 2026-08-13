@@ -6,9 +6,6 @@
     "paths": {
       "@r05en1cu/dsh-mygo": [
         "../mygo/src/index.ts"
-      ],
-      "@deepseek-ai/cordis": [
-        "../../../vendor/cordis/src"
       ]
     }
   },
@@ -16,9 +13,6 @@
     "src"
   ],
   "references": [
-    {
-      "path": "../../../vendor/cordis"
-    },
     {
       "path": "../mygo"
     }

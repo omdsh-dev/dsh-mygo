@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type { PluginCompatibility, PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import {
   DispatchMachine,

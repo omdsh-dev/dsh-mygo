@@ -9,7 +9,7 @@
  * @module @r05en1cu/dsh-mygo-api/src/types
  */
 
-import type Schema from 'schemastery'
+import type Schema from '@deepseek-ai/schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
   PluginCommands,

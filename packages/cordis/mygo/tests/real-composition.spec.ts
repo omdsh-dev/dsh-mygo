@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
@@ -28,7 +28,7 @@ import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { guardedPlugin, sandboxDefineTool } from '@deepseek-ai/dsh-tool-cordis/src/guard.ts'
+// dsh-tool-cordis 公开包不再导出 sandbox 助手（host 内部化），F2(b) 改用裸注册等价验证
 import { definePlugin, fromCordisPlugin } from '@r05en1cu/dsh-mygo-api'
 import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 import PluginManagerService from '@r05en1cu/dsh-mygo'
@@ -785,29 +785,22 @@ describe('Proposal A: tools.register bridge (F1/F2 REAL)', () => {
     await expect.poll(() => ctx.tools.schemas().some(schema => schema.name === 'facade_tool')).toBe(false)
   })
 
-  it('F2(b): the tool-cordis sandbox registers a raw tool directly on 0809 (manager bridge removed from core)', async () => {
+  it('F2(b): a raw plugin registering a tool bypasses the manager (P3：sandbox 助手已随公开包内部化)', async () => {
     const { ctx } = await loadComposition(bootRoot => toolCompositionRows('<root>', 'f2b')
       .map(line => line.replace('<root>', bootRoot)))
-    const tool = sandboxDefineTool({
-      name: 'sandbox_tool',
-      description: 'sandbox',
-      parameters: {},
-      output: {
-        schema: { type: 'string' },
-        render: (_args: unknown, value: unknown) => [{ type: 'text', text: String(value) }],
-      },
-      execute: async () => 'sandbox',
-    })
-    ctx.plugin(guardedPlugin({
+    // 公开版 @deepseek-ai/dsh-tool-cordis 不再导出 sandboxDefineTool /
+    // guardedPlugin（host 内部实现）；本用例的核心断言是「raw 直注册不进
+    // 受管集」，用裸 ToolDefinition + 裸函数插件即可等价验证。
+    const tool = rawToolShape('sandbox_tool', 'sandbox')
+    ctx.plugin({
       name: 'raw-mount',
       inject: ['tools'],
       apply: (ctxLike: { tools: { register(tool: unknown): () => void } }): void => {
         ctxLike.tools.register(tool)
       },
-    }))
+    })
     await expect.poll(() => ctx.tools.schemas().some(schema => schema.name === 'sandbox_tool')).toBe(true)
-    // The 0809 tool-cordis sandboxRegisterTool no longer consults the plugin
-    // manager; the tool lands in the raw registry, so the manager stays empty.
+    // raw 注册落在裸注册表：manager 的受管集保持为空。
     expect(ctx.pluginManager.plugins().some(handle => handle.id === 'raw-mount-sandbox_tool')).toBe(false)
   })
 

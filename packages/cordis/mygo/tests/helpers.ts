@@ -2,7 +2,7 @@
  * Shared fixtures for the dsh-mygo suites.
  */
 
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 
 /** A valid minimal plugin manifest; overrides replace whole fields. */

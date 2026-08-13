@@ -26,11 +26,13 @@
       "default": "./lib/invariant.js"
     },
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "cordis.patch.yml",
     "lib/types/**/*.d.ts",
     "src",
     "assets/plugin-template"
@@ -42,23 +44,32 @@
     "test": "vitest run",
     "verify:self-contained": "node scripts/verify-self-contained.mjs",
     "prepare": "node scripts/prepare.mjs",
-    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
+    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在仓库内构建（pnpm run build：tsc -b + tsdown）'); process.exit(1)}\""
   },
   "dependencies": {
-    "@r05en1cu/dsh-mygo": "workspace:^"
+    "@r05en1cu/dsh-mygo": "workspace:^",
+    "@deepseek-ai/dsh-app-boot": "^0.1.0-rc.2"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1-rc.1"
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
-    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/cordis": "^4.0.1",
     "@r05en1cu/dsh-mygo": "workspace:^",
     "@r05en1cu/dsh-mygo-api": "workspace:^",
-    "schemastery": "^3.18.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.6",
+    "@deepseek-ai/dsh-storage": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-storage-json": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-storage-sqlite": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.1-rc.1"
   },
   "dsh": {
     "mygo": {
@@ -75,6 +86,9 @@
       "environment": {
         "platform": "cli"
       }
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   },
   "author": "r05En1cU",

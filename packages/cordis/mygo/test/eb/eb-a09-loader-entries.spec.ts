@@ -9,13 +9,18 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { makeHarness, provider, settle } from './helpers.ts'
+import { createRequire } from 'node:module'
+const require_ = createRequire(import.meta.url)
+const pkgRoot = (name: string): string => dirname(require_.resolve(`${name}/package.json`))
 
-const LOADER_SRC = new URL('../../../../../vendor/loader/src/index.ts', import.meta.url).pathname
-const TREE_SRC = new URL('../../../../../vendor/loader/src/config/tree.ts', import.meta.url).pathname
-const ENTRY_SRC = new URL('../../../../../vendor/loader/src/config/entry.ts', import.meta.url).pathname
-const FIBER_SRC = new URL('../../../../../vendor/cordis/src/fiber.ts', import.meta.url).pathname
+
+const LOADER_SRC = join(pkgRoot('@deepseek-ai/cordis-plugin-loader'), 'src/index.ts')
+const TREE_SRC = join(pkgRoot('@deepseek-ai/cordis-plugin-loader'), 'src/config/tree.ts')
+const ENTRY_SRC = join(pkgRoot('@deepseek-ai/cordis-plugin-loader'), 'src/config/entry.ts')
+const FIBER_SRC = join(pkgRoot('@deepseek-ai/cordis'), 'src/fiber.ts')
 
 describe('EB-A9 mygo can reach fiber.inertia/state via loader entries', () => {
   it('源码路径存在：Loader extends EntryTree；entries() 可枚举；Entry.fiber public；inertia public、epoch 无公开入口', async () => {

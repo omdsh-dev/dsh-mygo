@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { resolvePluginManagerConfig } from '@r05en1cu/dsh-mygo'
-import { dshHomePath } from '@deepseek-ai/dsh-paths'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 
 describe('resolvePluginManagerConfig', () => {
   it('applies the T6 defaults for an absent input', () => {

@@ -6,8 +6,8 @@
  * @module @r05en1cu/dsh-mygo/src/config
  */
 
-import { dshHomePath } from '@deepseek-ai/dsh-paths'
-import z from 'schemastery'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import z from '@deepseek-ai/schemastery'
 import type { PluginManagerConfig } from './types.ts'
 
 /** The schema's normalized output: `stateRoot` is optional until the resolver fills it. */

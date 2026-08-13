@@ -1,7 +1,7 @@
 /**
- * 包级测试配置（官方 plugin-template vitest.config.ts 的 dsh-mygo 适配）：
- * 独立于 checkout 根配置运行本包测试；@deepseek-ai/* 显式映射到 checkout
- * 源码，避免解析到未安装的包级 node_modules 或 lib 产物双实例。
+ * 包级测试配置（P3 自包含 workspace 形态）：@r05en1cu/* 内部引用显式映射到
+ * 仓库内源码（避免 lib 产物双实例）；@deepseek-ai/* 官方包经 node_modules
+ * （公开 registry）解析。
  */
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
@@ -12,10 +12,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@r05en1cu/dsh-mygo-api/invariant': here('./src/invariant.ts'),
-      '@deepseek-ai/cordis': here('../../../vendor/cordis/src'),
-      '@deepseek-ai/dsh-invariants': here('../../support/invariants/src/index.ts'),
       '@r05en1cu/dsh-mygo-api': here('./src/index.ts'),
-      '@deepseek-ai/dsh-session/types': here('../../core/session/src/types.ts'),
     },
   },
   test: {

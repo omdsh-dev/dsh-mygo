@@ -5,11 +5,16 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { makeHarness, provider, settle } from './helpers.ts'
+import { createRequire } from 'node:module'
+const require_ = createRequire(import.meta.url)
+const pkgRoot = (name: string): string => dirname(require_.resolve(`${name}/package.json`))
 
-const ENTRY_SRC = new URL('../../../../../vendor/loader/src/config/entry.ts', import.meta.url).pathname
-const TREE_SRC = new URL('../../../../../vendor/loader/src/config/tree.ts', import.meta.url).pathname
+
+const ENTRY_SRC = join(pkgRoot('@deepseek-ai/cordis-plugin-loader'), 'src/config/entry.ts')
+const TREE_SRC = join(pkgRoot('@deepseek-ai/cordis-plugin-loader'), 'src/config/tree.ts')
 
 describe('EB-A1 entry name is the module specifier (paper url equivalent)', () => {
   it('EntryOptions 声明 name 且不声明 url；tree.import 用 name 加载', async () => {

@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import { createFakeEnv, definePlugin, fromCordisPlugin, PluginError } from '@r05en1cu/dsh-mygo-api'
 import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 

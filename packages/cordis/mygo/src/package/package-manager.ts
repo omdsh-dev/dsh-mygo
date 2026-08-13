@@ -67,7 +67,12 @@ function defaultExportsProvider(
       if (typeof pkg.main === 'string') entry = pkg.main
       const defaultExport = pkg.exports?.['.']?.default
       if (typeof defaultExport === 'string') entry = defaultExport
-      return probePackageExports(join(root, entry))
+      // 探针容错（P3）：入口缺失/不可 import 一律按不可解析（unverified）放行，
+      // 探测失败 MUST NOT 逃逸为未捕获异常。
+      const { existsSync } = await import('node:fs')
+      const entryPath = join(root, entry)
+      if (!existsSync(entryPath)) return undefined
+      return await probePackageExports(entryPath)
     } catch {
       return undefined
     }

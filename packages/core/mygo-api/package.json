@@ -41,27 +41,27 @@
     "test": "vitest run",
     "verify:self-contained": "node scripts/verify-self-contained.mjs",
     "prepare": "node scripts/prepare.mjs",
-    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
+    "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在仓库内构建（pnpm run build：tsc -b + tsdown）'); process.exit(1)}\""
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-session": "^0.0.1-rc.1",
-    "schemastery": "^3.18.0"
+    "@deepseek-ai/schemastery": "3.18.1-rc.1"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "schemastery": "^3.18.0"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "3.18.1-rc.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
-    "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^",
-    "schemastery": "^3.18.0",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-session": "^0.0.1-rc.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@deepseek-ai/schemastery": "3.18.1-rc.1"
   },
   "author": "r05En1cU",
   "maintainers": [

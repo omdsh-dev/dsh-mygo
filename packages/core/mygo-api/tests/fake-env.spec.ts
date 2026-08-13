@@ -5,7 +5,7 @@
  * interface accepts declaration-merging event contributions from any owner.
  */
 
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import { describe, expect, it } from 'vitest'
 import {
   PluginError,

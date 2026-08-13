@@ -22,7 +22,7 @@ import { resolvePluginManagerConfig } from '../../src/config.ts'
 import { InMemoryRegistryStore } from '../../src/store.ts'
 import type { PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import { Context } from '@deepseek-ai/cordis'
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 
 function fixture(
   id: string,

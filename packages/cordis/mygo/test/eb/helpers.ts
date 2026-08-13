@@ -5,8 +5,8 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-// 实验目录独立于 mygo 包依赖树，直接解析 vendored loader 的 lib 产物（lib 模式）。
-import Loader from '../../../../../vendor/loader/lib/index.js'
+// P3 自包含：经 node_modules 解析公开包的 lib 产物（lib 模式语义不变）。
+import Loader from '@deepseek-ai/cordis-plugin-loader'
 
 /** Entry 的结构化视图（避免依赖 loader 包的类型导出形态）。 */
 export interface EntryLike {
