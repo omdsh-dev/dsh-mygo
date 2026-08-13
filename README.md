@@ -39,7 +39,7 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
   （`definePlugin`、manifest/environment 类型、`PluginError` 39 码、fake-env）。
 - **扩展**：
   - `packages/cordis/mygo-cli` —— 用户命令面（pack/restore/init），本身是 mygo 受管插件；
-  - `vendor/dsh-mygo-panel` —— web 设置页「My 插件」面板（`settings.section` 槽 + `/api/mygo/*`）；
+  - `packages/extensions/mygo-panel` —— web 设置页「My 插件」面板（`settings.section` 槽 + `/api/mygo/*`）；
   - `extension/mygo-rdb` —— 外部注册表存储（sqlite/postgres，`RegistryStore` 契约）；
   - loader 契约（v1 内置 standard/mixin）—— 未来 loader 插件化。
 
@@ -60,14 +60,29 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
 
 ## 快速开始
 
-> 安装形态重做中：next 分支已退役 install.sh，新安装形态随 P3 落地。
-> 开发态验证：把三个包目录（packages/core/mygo-api、packages/cordis/mygo、
-> packages/cordis/mygo-cli）同步进 dsh 0811+ checkout 对应路径后，在各包目录
-> 执行 `pnpm run verify:self-contained && pnpm run typecheck && pnpm test && pnpm run build`。
+> P3 起仓库自包含（pnpm workspace + 公开 registry 依赖）；安装形态 =
+> dsh 0812 原生 profile bundle 机制，install.sh 已退役。
+
+### 安装（dsh 0812+ 原生 profile bundle）
+
+mygo / mygo-cli 是标准 `dsh.bundle` 包（包内 `cordis.patch.yml` 层）：
+
+```sh
+# 发布留作 handoff；内测期从仓库 tarball 安装
+dsh plugin --profile web add <dsh-mygo.tgz>     # pnpm add + bundle 层对账
+dsh plugin --profile web add <dsh-mygo-cli.tgz>
+dsh web                                          # profile 组合自动挂载 mygo 行
+```
+
+git spec 渠道（`dsh plugin add github:r05En1cU/dsh-mygo#<commit>&path:/packages/cordis/mygo`
+形态）按 D9 登记，push 禁令解除后生效。
 
 ### 命令面（CLI 扩展插件）
 
 ```sh
+dsh --profile web mygo install <spec> [--json]        # profile 目录 pnpm add + bundle 对账
+dsh --profile web mygo uninstall <name> [--json]
+dsh --profile web mygo enable|disable <id> [--json]   # profile patch 层 disabled 块
 dsh --profile web mygo pack [-o out.mygo-pack] [--json]
 dsh --profile web mygo restore <pack> [--profile <target>] [--json]
 dsh --profile web mygo init <name> [--id <id>] [--dir <dir>] [--json]
@@ -75,6 +90,13 @@ dsh --profile web mygo init <name> [--id <id>] [--dir <dir>] [--json]
 
 CLI 本身是 mygo 受管插件：可经面板 folder 安装激活，也可出现在打包产物中
 （自举：还原后落盘入口与源码逐字节一致）。
+
+### 开发验证（仓内自包含回路）
+
+```sh
+pnpm install
+pnpm -r run verify:self-contained && pnpm -r run typecheck && pnpm -r test && pnpm -r run build
+```
 
 ### Web 面板
 
@@ -89,15 +111,15 @@ BOM 导出、远程更新（外部应用面为旧扩展，按需保留）。
 ## 仓库布局
 
 ```text
-packages/core/mygo-api/      契约层（Cordis-free；definePlugin/类型/PluginError/fake-env）
-packages/cordis/mygo/        核心实现（版本选择/还原/生命周期/政策闸/快照/pack/报告）
-packages/cordis/mygo-cli/    CLI 扩展插件（pack/restore/init + 报告渲染）
-vendor/dsh-mygo-panel/       Web 面板扩展（/api/mygo/* + settings.section）
-extension/mygo-rdb/          外部注册表存储扩展（RegistryStore 契约）
-patches/                     DSH host 补丁提案 / 依赖补丁契约（官方语义，不 apply）
-scripts/publish-mygo.mjs     发布流水线（dry-run 门禁）
-docs/                        设计/验证/备忘录（见下）
-AGENTS.md                    仓库级规则补充（npm SDK / 包级规范 / 提交纪律）
+packages/core/mygo-api/        契约层（Cordis-free；definePlugin/类型/PluginError/fake-env）
+packages/cordis/mygo/          核心实现（版本选择/还原/生命周期/政策闸/快照/pack/报告/治理视图）
+packages/cordis/mygo-cli/      CLI 扩展插件（install/enable/pack/restore/init + 报告渲染）
+packages/extensions/mygo-panel/ Web 面板扩展（/api/mygo/* + settings.section）
+extension/mygo-rdb/            外部注册表存储扩展（RegistryStore 契约）
+patches/                       DSH host 补丁提案 / 依赖补丁契约（官方语义，不 apply）
+scripts/publish-mygo.mjs       发布流水线（dry-run 门禁）
+docs/                          设计/验证/备忘录（见下）
+AGENTS.md                      仓库级规则补充（npm SDK / 包级规范 / 提交纪律）
 ```
 
 ## 文档地图

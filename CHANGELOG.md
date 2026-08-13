@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased · next 分支 P3（2026-08-13）— 自包含 workspace + 安装执行面切原生
+
+### 自包含 workspace 化
+
+- 新建根 package.json（private）+ pnpm-workspace.yaml + 仓内
+  tsconfig.base.json；`@deepseek-ai/*` 依赖全部改走公开 registry
+  （cordis ^4.0.1 / cordis-plugin-loader ^1.0.2 / dsh-* 0.0.1-rc.1 线 /
+  dsh-home-paths 0.1.0-rc.x，dsh-paths 更名迁移）；tsconfig 不再引用任何
+  checkout 路径（守则例外 #5 收口）。
+- 验证回路改为仓内 `pnpm -r run verify:self-contained && pnpm -r run
+  typecheck && pnpm -r test && pnpm -r run build`，不再同步 checkout。
+- 坑位记录：schemastery 需对齐 @deepseek-ai/schemastery@3.18.1-rc.1
+  （dsh-* 行内精确钉版，类型可移植性）；js-yaml/@types/js-yaml 显式声明；
+  exports 探针容错（无 main 的包不再假定 lib/index.js）；dsh-tool-cordis
+  公开包不再导出 sandbox 助手，real-composition F2(b) 改用裸注册等价验证。
+
+### bundle 化 + 安装执行面
+
+- mygo / mygo-cli 携带 `dsh.bundle.patch` + 包内 cordis.patch.yml（insert
+  行按包名引用）；`config.profile` 缺省时从 loader baseUrl 推导 profile 名
+  （bundle patch 层无静态 profile 值）。
+- 安装执行面：`mygo install/uninstall`（profile 目录 pnpm + dsh.bundle
+  对账 dsh.profile.bundles，直接复用 @deepseek-ai/dsh-app-boot profile
+  API）与 `mygo enable/disable`（profile cordis.patch.yml 的 id 定向
+  disabled 块）。
+- GovernanceView 落地（src/governance.ts）：启动时从 profile 实际安装状态
+  （dependencies + dsh.profile.bundles + patch 层 disabled 行）重建治理
+  视图；RegistryStore 降级为运行时缓存；`pluginManager.governanceView()`
+  只读查询面。
+- mygo-self.json 写入者补位：服务启动时从本包 package.json 事实写入
+  （writeMygoSelfInstallation；install.sh 退役后的承接）。
+
+### 面板迁入
+
+- vendor/dsh-mygo-panel → packages/extensions/mygo-panel，包名
+  `@r05en1cu/dsh-mygo-ext-panel`；适配 P1/P2 新 API（plan.actions /
+  autoResolve 消费点全部移除，预检改纯求值预览）；桥接包命名
+  `@dsh-external/*-mygo` → `@r05en1cu/*-mygo`；安装目录依赖链接改为从
+  面板自身解析链推导（不再假设 checkout）；构建自包含（仓内 tsc +
+  tsdown，clientBundle 预设最小面移植）。
+- publish-mygo.mjs 改仓内构建，发布面纳入 CLI 与面板（只改造不执行）。
+
 ## Unreleased · next 分支 P2（2026-08-13）— 契约层重写 + scope 迁移
 
 ### 契约层（packages/core/mygo-api）

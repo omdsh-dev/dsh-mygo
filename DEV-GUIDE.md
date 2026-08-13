@@ -68,6 +68,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `dispatch.ts` | 事件派发机（模式/分支/否决） | `DispatchMachine` |
 | `service.ts` | Cordis 服务面（ctx.pluginManager） | `PluginManagerService` |
 | `bom.ts` | `dsh.bom/v1` 导出/对账（P4） | `buildBom`、`checkBom` |
+| `governance.ts` | 治理视图（P3：pnpm 安装状态实时重建） | `readGovernanceView` |
 | `capabilities.ts` | 能力面与配额（fs/vars/llm/exec/http/fetch） | `createPluginFs` 等 |
 | `session-reader.ts` | jsonl/rdb/sqlite 会话读取 | `JsonlSessionReader` 等 |
 | `sqlite-store.ts` / `persistence.ts` / `store.ts` | 注册表持久化与 `RegistryStore` 契约 | `SqliteRegistryStore`、`RegistryStore` |
@@ -262,10 +263,19 @@ communityDeps/manifestSha256`（2026-08-13 起不再内嵌 dsh.lock/v1 载荷，
 
 ### 6.4 CLI（扩展插件，`packages/cordis/mygo-cli`）
 
-`dsh --profile <p> mygo pack|restore|init`（L0：`ctx.cmdlineArgs`/`appExit`，
-手写最小解析器；`--json` 直通结构化报告；退出码 0/1/2）。`init` 以
-plugin-template@2da8230 资产生成骨架，写盘前过 B1 + `checkTemplateAlignment`
-双校验（含 7 skills + lockfile，`verify:self-contained` 硬性要求）。
+`dsh --profile <p> mygo install|uninstall|enable|disable|pack|restore|init`
+（L0：`ctx.cmdlineArgs`/`appExit`，手写最小解析器；`--json` 直通结构化报告；
+退出码 0/1/2）。install/uninstall 落地为「目标 profile 目录跑 pnpm + 按
+dsh.bundle 对账 dsh.profile.bundles」（复用 @deepseek-ai/dsh-app-boot 的
+profile API）；enable/disable 写 profile cordis.patch.yml 的 id 定向
+disabled 块。`init` 以 plugin-template@2da8230 资产生成骨架，写盘前过
+B1 + `checkTemplateAlignment` 双校验（含 7 skills + lockfile，
+`verify:self-contained` 硬性要求）。
+
+> 已知宿主限制（P3 实测）：web profile 的 web-startup 参数解析器为严格
+> 模式，`dsh --profile web mygo ...` 的内层参数目前到不了 cmdlineArgs
+> 消费方（host 缝隙，待 host 补丁提案）；CLI 面语义由 cli-e2e 进程内测试
+> 覆盖。
 
 ## 7. 报告与错误
 
@@ -334,30 +344,30 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 ## 12. 发布与安装形态
 
-- `scripts/publish-mygo.mjs`：构建 + prepack 自检 + dry-run 门禁；发布面
-  mygo-api / mygo / panel（CLI 待纳入）。包均为 `publishConfig.access:
-  restricted`。
-- 源码态依赖用 `workspace:^`（未发布）；npm rc.1 安装用 `file:/link:` 或
-  profile patch 预置 mygo（design-r5 §1.3），官方包由 dsh 启动器 heal 回退。
-- 安装形态（next 分支）：install.sh 已退役（2026-08-13）；新安装形态走
-  dsh 0812 原生 profile bundle / pnpm 机制，随 P3 落地。开发态验证改为直接
-  同步三个包目录到 checkout（packages/core/mygo-api、packages/cordis/mygo、
-  packages/cordis/mygo-cli）。
+- `scripts/publish-mygo.mjs`：仓内构建 + prepack 自检 + dry-run 门禁；发布面
+  mygo-api / mygo / mygo-cli / mygo-panel。包均为 `publishConfig.access:
+  restricted`（发布留作 handoff）。
+- 仓库自包含（P3）：pnpm workspace + 根 tsconfig.base.json；`@deepseek-ai/*`
+  依赖全部从公开 registry 解析（cordis ^4.0.1 / loader ^1.0.2 / dsh-*
+  0.0.1-rc.1 线 / dsh-home-paths 0.1.0-rc.x）；内部包间维持 `workspace:^`
+  （守则例外 #2 过渡态）。
+- 安装形态（P3 落地）：mygo / mygo-cli 是标准 `dsh.bundle` 包（包内
+  cordis.patch.yml 层，profile 名由服务从 loader baseUrl 推导）；安装 =
+  `dsh plugin --profile <p> add <tarball|git-spec>`（profile 目录 pnpm +
+  dsh.profile.bundles 对账）；`mygo install/uninstall/enable/disable`
+  命令面同语义（enable/disable 写 profile patch 层 id 定向 disabled 块）。
+  install.sh 已退役（2026-08-13）；开发验证全部在仓库内进行，不再同步
+  任何 checkout。
 
 ## 13. 常见任务速查
 
 ```sh
-# 全量测试（无网拦截）
-NODE_OPTIONS="--require /tmp/block-net.cjs" npx vitest run packages/core/mygo-api packages/cordis/mygo --maxWorkers=2
-# CLI 套件
-NODE_OPTIONS="--require /tmp/block-net.cjs" npx vitest run --config packages/cordis/mygo-cli/vitest.config.ts --maxWorkers=2
+# 仓内全量 gates（无网拦截）
+pnpm -r run verify:self-contained && pnpm -r run typecheck && pnpm -r test && pnpm -r run build
 # EB
 NODE_OPTIONS="--require /tmp/block-net.cjs" npx vitest run --config packages/cordis/mygo/test/eb/vitest.config.ts --maxWorkers=2
-# typecheck
-npx tsc -b packages/core/mygo-api/tsconfig.json packages/cordis/mygo/tsconfig.json packages/cordis/mygo-cli/tsconfig.json
-# 同步到 checkout（install.sh 已退役；手动复制三包目录即可）
-rsync -a --delete --exclude=node_modules --exclude=lib --exclude='*.tsbuildinfo' \
-  packages/cordis/mygo/ <dsh-checkout>/packages/cordis/mygo/
+# 安装到临时 profile（冒烟形态）
+dsh plugin --profile <tmp> add <dsh-mygo.tgz>
 # 打包/还原/初始化
 dsh --profile web mygo pack -o out.mygo-pack --json
 dsh --profile web mygo restore out.mygo-pack
