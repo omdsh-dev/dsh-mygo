@@ -10,8 +10,8 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import z from 'schemastery'
-import type Schema from 'schemastery'
+import z from '@deepseek-ai/schemastery'
+import type Schema from '@deepseek-ai/schemastery'
 import { fromCordisPlugin, PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type {
   InstallOptions,
@@ -53,7 +53,9 @@ import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
-import { dshHomePath } from '@deepseek-ai/dsh-paths'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { readGovernanceView, type GovernanceView } from './governance.ts'
+import { writeMygoSelfInstallation } from './self.ts'
 import type {
   PluginManager,
   PluginManagerConfig,
@@ -66,7 +68,8 @@ import type {
 export const PluginManagerServiceConfig = z.intersect([
   PluginManagerConfigSchema,
   z.object({
-    profile: z.string().required(),
+    // bundle 形态（dsh.bundle patch 行）缺省：运行时从 loader baseUrl 推导。
+    profile: z.string().required(false),
     // npm 源 registry 基址；缺省官方 registry（测试注入本地桩，P-0 离线确定）。
     registry: z.string().required(false),
     // Internally: mana. Five empty casts and you're benched.
@@ -76,7 +79,7 @@ export const PluginManagerServiceConfig = z.intersect([
 
 /** Resolved row config: the §15.6/§17 surface plus the profile name. */
 export type PluginManagerServiceConfigValue = PluginManagerConfig & {
-  readonly profile: string
+  readonly profile?: string
   readonly registry?: string
   readonly cpuBudgetMs: number
 }
@@ -103,17 +106,29 @@ export class PluginManagerService extends Service implements PluginManager {
     public readonly config: PluginManagerServiceConfigValue,
   ) {
     super(ctx, 'pluginManager')
+    this.profile = resolveProfileName(ctx, config.profile)
     const { profile: _profile, ...rest } = config
     this.resolved = resolvePluginManagerConfig(rest)
-    const paths = resolveMygoPaths(config.profile)
+    const paths = resolveMygoPaths(this.profile)
     const coreVersion = resolveCoreVersion(process.env)
     this.packageManager = new PluginPackageManager({
       paths,
-      profile: config.profile,
+      profile: this.profile,
       ...(config.registry === undefined ? {} : { registry: config.registry }),
       ...(coreVersion === undefined ? {} : { coreVersion }),
       managerVersion: MYGO_MANAGER_VERSION,
     })
+  }
+
+  /**
+   * 生效 profile 名（bundle 形态推导结果；dsh.bundle patch 行不携带静态
+   * profile 值）。构造期解析，供 CLI / 治理视图消费。
+   */
+  public readonly profile: string
+
+  /** 当前 profile 的治理视图（pnpm 安装状态实时重建；RegistryStore 为其运行时缓存）。 */
+  governanceView(): GovernanceView {
+    return readGovernanceView(join(dshHomePath('profiles'), this.profile), this.profile)
   }
 
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */
@@ -125,13 +140,20 @@ export class PluginManagerService extends Service implements PluginManager {
       ctx.logger.info('[dsh-mygo] 使用外部注册表存储（mygoRegistryStore）')
     }
     const persistence = await RegistryPersistence.open(ctx.storageDomain, {
-      profile: this.config.profile,
+      profile: this.profile,
       stateRoot: this.resolved.stateRoot,
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
     }, externalStore)
-    // 范围重塑（2026-08-13）：dsh.lock/v1 lockfile 已删除，加载期不再有
-    // lockfile↔磁盘校验/拓扑挂载序；pnpm 安装状态为唯一真相源。
+    // P3：pnpm 安装状态为唯一真相源——启动时从 profile 实际安装状态重建
+    // 治理视图（RegistryStore 降级为运行时缓存）；并补写 mygo-self.json
+    // 自身事实（bundle 安装路径，install.sh 退役后的写入者补位）。
+    const governance = this.governanceView()
+    ctx.logger.info(
+      `[dsh-mygo] 治理视图：profile ${governance.profile}，依赖 ${Object.keys(governance.dependencies).length} 项，`
+      + `bundle 层 ${governance.bundles.length} 个，disabled 行 ${governance.disabledRows.length} 个`,
+    )
+    writeMygoSelfInstallation()
     const holder: { engine?: LifecycleEngine } = {}
     const hostLlm = ctx.get('llm') as
       | { stream(options: unknown): AsyncIterable<unknown> }
@@ -246,7 +268,7 @@ export class PluginManagerService extends Service implements PluginManager {
     const sourceCheckout = resolveSourceCheckout()
     const bundleRail = new BundleRail({
       dshHome,
-      profile: this.config.profile,
+      profile: this.profile,
       ...(dshBin === undefined ? {} : { dshBin }),
       ...(dshInstallDir === undefined ? {} : { dshInstallDir }),
       ...(sourceCheckout === undefined ? {} : { checkout: sourceCheckout }),
@@ -522,11 +544,11 @@ export class PluginManagerService extends Service implements PluginManager {
   async bomExport(): Promise<{ readonly bom: BomDocument; readonly jsonPath: string; readonly mdPath: string }> {
     const engine = this.requireEngine()
     const bom = buildBom({
-      profile: this.config.profile,
+      profile: this.profile,
       bridgePlugins: engine.plugins().filter(plugin => plugin.status === 'enabled'),
       bundles: this.bundleList().filter(member => member.enabled),
     })
-    const dir = join(dshHomePath('mygo-boms'), this.config.profile)
+    const dir = join(dshHomePath('mygo-boms'), this.profile)
     await mkdir(dir, { recursive: true })
     const jsonPath = join(dir, 'dsh.bom.json')
     const mdPath = join(dir, 'dsh.bom.md')
@@ -576,7 +598,7 @@ export class PluginManagerService extends Service implements PluginManager {
   }
 
   private async readBom(): Promise<BomDocument> {
-    const path = join(dshHomePath('mygo-boms'), this.config.profile, 'dsh.bom.json')
+    const path = join(dshHomePath('mygo-boms'), this.profile, 'dsh.bom.json')
     let parsed: unknown
     try {
       parsed = JSON.parse(await readFile(path, 'utf8'))
@@ -760,6 +782,22 @@ function resolveSourceCheckout(): string | undefined {
     dir = parent
   }
   return undefined
+}
+
+/**
+ * 推导生效 profile 名：显式 config 优先；缺省（bundle 形态，patch 行不携带
+ * 静态值）从 loader baseUrl（profile 目录 URL，app-boot 在挂载前行设置）
+ * 取目录名。两者皆无 → fail loud。
+ */
+function resolveProfileName(ctx: Context, configured: string | undefined): string {
+  if (typeof configured === 'string' && configured !== '') return configured
+  const baseUrl = (ctx as { readonly baseUrl?: unknown }).baseUrl
+  if (typeof baseUrl === 'string' && baseUrl.startsWith('file:')) {
+    const pathname = decodeURIComponent(new URL(baseUrl).pathname).replace(/\/+$/, '')
+    const name = pathname.split('/').pop()
+    if (name !== undefined && name !== '') return name
+  }
+  throw new Error('dsh-mygo: config.profile 缺失且无法从 loader baseUrl 推导 profile 名')
 }
 
 /** Map one dispatch violation code to the §22.3 audit class. */

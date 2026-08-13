@@ -95,15 +95,15 @@ function cliCorpus(): CorpusPlugin {
     trust: 'trusted',
     reviewNote: 'mygo CLI 插件自身（本仓库包），T47 自举语料',
     packParts: ['package.json', 'src'],
-    versionOverride: '0.0.1-rc.1',
+    versionOverride: '0.2.0-rc.0',
     // 仓库包清单依赖是 workspace:^（未发布）；打包期归一为 semver 占位，
     // 避免 communityDeps 区间校验把 pack 判无效（F1 同款处理）。
     packageJsonOverlay: {
-      dependencies: { '@r05en1cu/dsh-mygo': '*' },
+      dependencies: { '@r05en1cu/dsh-mygo': '*', '@deepseek-ai/dsh-app-boot': '*' },
     },
     manifestOverlay: {
       id: 'dsh-mygo-cli',
-      version: '0.0.1-rc.1',
+      version: '0.2.0-rc.0',
       entry: 'src/index.ts',
       core: '*',
       requires: {},
@@ -226,7 +226,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
 
       // 还原后：CLI 插件在 R 的还原根中，入口文件与仓库源码逐字节一致。
       const pathsR = resolveMygoPaths('cli-r', process.env)
-      const storeEntry = join(pathsR.packagesRoot, 'dsh-mygo-cli', '0.0.1-rc.1', 'src', 'index.ts')
+      const storeEntry = join(pathsR.packagesRoot, 'dsh-mygo-cli', '0.2.0-rc.0', 'src', 'index.ts')
       expect(await sha256File(storeEntry)).toBe(await sha256File(join(CLI_PKG_ROOT, 'src', 'index.ts')))
       const { readdir } = await import('node:fs/promises')
       expect(await readdir(pathsR.packagesRoot)).toEqual(['dsh-mygo-cli'])

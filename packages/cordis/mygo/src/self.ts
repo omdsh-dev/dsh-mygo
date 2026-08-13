@@ -9,10 +9,10 @@
  * @module @r05en1cu/dsh-mygo/src/self
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dshHomePath } from '@deepseek-ai/dsh-paths'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { parseVersion } from './semver-range.ts'
 
 /** mygo 自身安装记录（`mygo-self.json` 的解析结果）。 */
@@ -71,3 +71,40 @@ export const MYGO_SELF = readMygoSelf()
 
 /** mygo 自身在统一依赖图中的版本（`dsh-mygo` 成员版本）。 */
 export const MYGO_MANAGER_VERSION = MYGO_SELF.version
+
+/**
+ * bundle 安装路径的自身事实写入（P3 补位 install.sh 的写入者职责）：
+ * 服务启动时把本包 package.json 事实（版本 + 仓库 url）写入
+ * `$DSH_HOME/mygo-self.json`（内容相同则跳过；失败不阻断启动）。
+ */
+export function writeMygoSelfInstallation(now: () => number = () => Math.floor(Date.now() / 1000)): void {
+  try {
+    let dir = dirname(fileURLToPath(import.meta.url))
+    let pkg: { readonly name?: unknown; readonly version?: unknown; readonly repository?: unknown } | undefined
+    for (let depth = 0; depth < 4; depth += 1) {
+      try {
+        const candidate = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as typeof pkg
+        if (candidate?.name === '@r05en1cu/dsh-mygo') {
+          pkg = candidate
+          break
+        }
+      } catch {
+        // 继续向上找
+      }
+      dir = dirname(dir)
+    }
+    if (pkg === undefined || !isSemver(pkg.version)) return
+    const repo = pkg.repository as { readonly url?: unknown } | undefined
+    const next = {
+      ...(typeof repo?.url === 'string' ? { url: repo.url } : {}),
+      version: pkg.version,
+      installedAt: now(),
+    }
+    const path = dshHomePath('mygo-self.json')
+    const existing = readMygoSelf()
+    if (existing.version === next.version && existing.url === next.url) return
+    writeFileSync(path, JSON.stringify(next) + '\n', 'utf8')
+  } catch {
+    // best-effort：自身事实缺失不阻断服务启动（self.ts 回退链兜底）
+  }
+}

@@ -116,6 +116,8 @@ export interface PluginManager {
   }): Promise<PluginOperationPlan>
   /** Bundle rail members (empty when the rail is not wired). */
   bundleList(): readonly import('./bundle-rail.ts').BundleMember[]
+  /** 当前 profile 的治理视图（P3：pnpm 安装状态为唯一真相源，实时重建）。 */
+  governanceView(): import('./governance.ts').GovernanceView
   /** P4 BOM：导出当前统一依赖图为 `dsh.bom/v1`（JSON + Markdown，原子写）。 */
   bomExport(): Promise<{ readonly bom: import('./bom.ts').BomDocument; readonly jsonPath: string; readonly mdPath: string }>
   /**

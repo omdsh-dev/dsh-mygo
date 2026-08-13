@@ -87,10 +87,23 @@ export function renderInitSuccess(dir: string, fileCount: number, id: string): s
   ].join('\n') + '\n'
 }
 
+/** install/uninstall 成功的人类可读输出（含对账后 bundle 层列表）。 */
+export function renderInstallSuccess(verb: 'install' | 'uninstall', profile: string, bundles: readonly string[]): string {
+  const lines = [`✓ ${verb} 完成 → profile ${profile}`]
+  if (bundles.length > 0) lines.push(`  profile bundle 层：${bundles.join(', ')}`)
+  return lines.join('\n') + '\n'
+}
+
+/** enable/disable 成功的人类可读输出。 */
+export function renderSetEnabledSuccess(verb: 'enable' | 'disable', id: string, profile: string): string {
+  const action = verb === 'enable' ? '已启用' : '已停用'
+  return `✓ ${action} ${id}（profile ${profile} 的 cordis.patch.yml 已更新）\n`
+}
+
 /** 用法文本（mygo 总览 + 可选子命令详情）。 */
-export function renderUsage(topic?: 'pack' | 'restore' | 'init'): string {
+export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable'): string {
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
-  const topics: Record<'pack' | 'restore' | 'init', string> = {
+  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable', string> = {
     pack: [
       '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--no-community-deps] [--json]',
       '',
@@ -113,15 +126,44 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init'): string {
       '  --dir <dir>          输出目录（缺省 ./<包名末段>）',
       common,
     ].join('\n'),
+    install: [
+      '用法：dsh --profile <profile> mygo install <spec> [--json]',
+      '',
+      '  <spec>               pnpm 安装 spec（包名[@版本] / tarball / file: 路径）',
+      '  语义：目标 profile 目录跑 pnpm add，按 dsh.bundle 声明对账 profile 层',
+      common,
+    ].join('\n'),
+    uninstall: [
+      '用法：dsh --profile <profile> mygo uninstall <name> [--json]',
+      '',
+      '  <name>               包名（pnpm remove + bundle 对账）',
+      common,
+    ].join('\n'),
+    enable: [
+      '用法：dsh --profile <profile> mygo enable <id> [--json]',
+      '',
+      '  <id>                 插件 id（移除 profile patch 层的 disabled 块）',
+      common,
+    ].join('\n'),
+    disable: [
+      '用法：dsh --profile <profile> mygo disable <id> [--json]',
+      '',
+      '  <id>                 插件 id（向 profile patch 层写入 disabled 块）',
+      common,
+    ].join('\n'),
   }
   if (topic !== undefined) return topics[topic]
   return [
     '用法：dsh --profile <profile> mygo <command> [args...]',
     '',
     '子命令：',
-    '  pack     从当前 profile 打包（既有 buildPack 翻译）',
-    '  restore  还原 pack 到 profile（既有 installPack 翻译）',
-    '  init     生成官方模板对齐的新插件骨架（B16 落地）',
+    '  pack       从当前 profile 打包（既有 buildPack 翻译）',
+    '  restore    还原 pack 到 profile（既有 installPack 翻译）',
+    '  init       生成官方模板对齐的新插件骨架（B16 落地）',
+    '  install    安装插件到当前 profile（pnpm + dsh.bundle 对账）',
+    '  uninstall  从当前 profile 卸载插件',
+    '  enable     启用插件（移除 profile patch 层 disabled 块）',
+    '  disable    停用插件（写入 profile patch 层 disabled 块）',
     '',
     '全局：--json 机器可读；-h/--help 查看子命令用法。',
     '',

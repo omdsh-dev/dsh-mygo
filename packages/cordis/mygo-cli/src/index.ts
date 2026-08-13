@@ -20,12 +20,15 @@ import { InitError, generatePluginSkeleton } from './init.ts'
 import {
   jsonOutput,
   renderInitSuccess,
+  renderInstallSuccess,
   renderPackSuccess,
   renderReportHuman,
   renderRestoreSuccess,
+  renderSetEnabledSuccess,
   renderUsage,
   renderUsageError,
 } from './render.ts'
+import { profileInstall, profileSetEnabled, profileUninstall } from './install.ts'
 
 /** Cordis 插件名（稳定；manifest id 同源）。 */
 export const name = 'dsh-mygo-cli'
@@ -79,10 +82,10 @@ export async function invokeCli(ctx: CliHost, argv: readonly string[]): Promise<
   return code
 }
 
-/** 当前 profile：pluginManager 行配置（design-r5 §1.2；缺省不可用时操作失败）。 */
+/** 当前 profile：管理器推导值优先，行配置次之（bundle 形态 config 可不携带）。 */
 function profileOf(ctx: CliHost): { readonly ok: true; readonly profile: string } | { readonly ok: false; readonly reason: string } {
-  const manager = ctx.get<{ readonly config?: { readonly profile?: string } }>('pluginManager')
-  const profile = manager?.config?.profile
+  const manager = ctx.get<{ readonly profile?: string; readonly config?: { readonly profile?: string } }>('pluginManager')
+  const profile = manager?.profile ?? manager?.config?.profile
   if (profile === undefined || profile === '') {
     return {
       ok: false,
@@ -122,7 +125,60 @@ async function runCommand(ctx: CliHost, command: CliCommand): Promise<number> {
     case 'pack': return runPack(ctx, command)
     case 'restore': return runRestore(ctx, command)
     case 'init': return runInit(command)
+    case 'install': return runInstall(ctx, command)
+    case 'uninstall': return runUninstall(ctx, command)
+    case 'enable':
+    case 'disable': return runSetEnabled(ctx, command)
   }
+}
+
+/** 安装执行面（P3 原生形态）：目标 profile 目录 pnpm + dsh.bundle 对账。 */
+function runInstall(
+  ctx: CliHost,
+  command: Extract<CliCommand, { readonly kind: 'install' }>,
+): number {
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('install', 'no-profile', current.reason, command.json)
+  const outcome = profileInstall(command.spec, { profile: current.profile })
+  if (!outcome.ok) return errorEnvelope('install', 'install-failed', outcome.error ?? 'pnpm 失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput('install', { ok: true, profile: outcome.profile, bundles: outcome.bundles }))
+  } else {
+    internals.stdout.write(renderInstallSuccess('install', outcome.profile, outcome.bundles ?? []))
+  }
+  return 0
+}
+
+function runUninstall(
+  ctx: CliHost,
+  command: Extract<CliCommand, { readonly kind: 'uninstall' }>,
+): number {
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('uninstall', 'no-profile', current.reason, command.json)
+  const outcome = profileUninstall(command.name, { profile: current.profile })
+  if (!outcome.ok) return errorEnvelope('uninstall', 'uninstall-failed', outcome.error ?? 'pnpm 失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput('uninstall', { ok: true, profile: outcome.profile, bundles: outcome.bundles }))
+  } else {
+    internals.stdout.write(renderInstallSuccess('uninstall', outcome.profile, outcome.bundles ?? []))
+  }
+  return 0
+}
+
+function runSetEnabled(
+  ctx: CliHost,
+  command: Extract<CliCommand, { readonly kind: 'enable' | 'disable' }>,
+): number {
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope(command.kind, 'no-profile', current.reason, command.json)
+  const outcome = profileSetEnabled(command.id, command.kind === 'enable', { profile: current.profile })
+  if (!outcome.ok) return errorEnvelope(command.kind, `${command.kind}-failed`, outcome.error ?? '写入失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput(command.kind, { ok: true, profile: outcome.profile, id: command.id }))
+  } else {
+    internals.stdout.write(renderSetEnabledSuccess(command.kind, command.id, outcome.profile))
+  }
+  return 0
 }
 
 async function runPack(

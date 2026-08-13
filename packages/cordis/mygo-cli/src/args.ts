@@ -25,14 +25,29 @@ export type CliCommand =
     readonly dir?: string
     readonly json: boolean
   }
+  | {
+    readonly kind: 'install'
+    readonly spec: string
+    readonly json: boolean
+  }
+  | {
+    readonly kind: 'uninstall'
+    readonly name: string
+    readonly json: boolean
+  }
+  | {
+    readonly kind: 'enable' | 'disable'
+    readonly id: string
+    readonly json: boolean
+  }
 
 /** 解析结果：一条命令 / 帮助请求 / 用法错误。 */
 export type CliParse =
   | { readonly kind: 'command'; readonly command: CliCommand }
-  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' }
+  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' }
   | { readonly kind: 'usage-error'; readonly message: string }
 
-const COMMANDS = new Set(['pack', 'restore', 'init'])
+const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable'])
 
 /** npm 包名最小校验（手写；task 允许）：小写、URL 安全、非空段。 */
 export function isValidNpmName(name: string): boolean {
@@ -75,9 +90,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (head === undefined) return { kind: 'help' }
   if (head === '-h' || head === '--help') return { kind: 'help' }
   if (!COMMANDS.has(head)) {
-    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init）` }
+    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable）` }
   }
-  const command = head as 'pack' | 'restore' | 'init'
+  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable'
   const positional: string[] = []
   let json = false
   let output = ''
@@ -179,6 +194,32 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         json,
       },
     }
+  }
+  if (command === 'install' || command === 'uninstall') {
+    const spec = positional.shift()
+    if (spec === undefined || spec === '') {
+      return { kind: 'usage-error', message: `${command} 需要一个${command === 'install' ? '安装 spec（包名/版本/tarball/路径）' : '包名'}` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `${command} 只接受一个位置参数：${positional.join(' ')}` }
+    }
+    return {
+      kind: 'command',
+      command: command === 'install' ? { kind: 'install', spec, json } : { kind: 'uninstall', name: spec, json },
+    }
+  }
+  if (command === 'enable' || command === 'disable') {
+    const id = positional.shift()
+    if (id === undefined || id === '') {
+      return { kind: 'usage-error', message: `${command} 需要一个插件 id` }
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(id)) {
+      return { kind: 'usage-error', message: `非法插件 id（须匹配 /^[a-z][a-z0-9-]*$/）：${JSON.stringify(id)}` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `${command} 只接受一个位置参数：${positional.join(' ')}` }
+    }
+    return { kind: 'command', command: { kind: command, id, json } }
   }
   const name = positional.shift()
   if (name === undefined || name === '') {

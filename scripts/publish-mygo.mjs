@@ -1,63 +1,65 @@
 #!/usr/bin/env node
 /**
- * mygo 发布流水线骨架：在 dsh checkout 内构建全部产物、做发布前自检，
- * 然后逐个 `pnpm publish`（不自动执行发布，避免无授权发布）。
+ * mygo 发布流水线骨架（P3 自包含 workspace 形态）：在仓库内构建全部产物、
+ * 做发布前自检，然后逐个 `pnpm publish`（不自动执行发布，避免无授权发布；
+ * 发布留作 handoff，见工作区守则）。
  *
- * 用法：
- *   DSH_CHECKOUT=/path/to/checkout node scripts/publish-mygo.mjs --dry-run
- *   DSH_CHECKOUT=/path/to/checkout node scripts/publish-mygo.mjs
+ * 用法（仓库根）：
+ *   node scripts/publish-mygo.mjs --dry-run
+ *   node scripts/publish-mygo.mjs
  */
 
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const checkout = resolve(process.env.DSH_CHECKOUT ?? process.cwd())
+const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const dryRun = process.argv.includes('--dry-run')
 const node = process.execPath
 
-function run(bin, args, cwd = checkout) {
+function run(bin, args, cwd = root) {
   const result = spawnSync(bin, args, { cwd, stdio: 'inherit', env: process.env })
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 
-const required = [
-  'packages/core/mygo-api/package.json',
-  'packages/cordis/mygo/package.json',
-  'vendor/dsh-mygo-panel/package.json',
-  'node_modules/typescript/bin/tsc',
+const packages = [
+  'packages/core/mygo-api',
+  'packages/cordis/mygo',
+  'packages/cordis/mygo-cli',
+  'packages/extensions/mygo-panel',
 ]
-for (const file of required) {
-  if (!existsSync(join(checkout, file))) {
-    console.error(`缺少 ${file}（请确认 checkout 已装入 mygo 包；next 分支安装形态重做中，见 P3）`)
+for (const pkg of packages) {
+  if (!existsSync(join(root, pkg, 'package.json'))) {
+    console.error(`缺少 ${pkg}/package.json（仓库布局不完整）`)
     process.exit(1)
   }
 }
 
-console.log(`==> 构建 mygo / mygo-api（checkout: ${checkout}）`)
-run(node, [join(checkout, 'node_modules', 'typescript', 'bin', 'tsc'), '-b', 'packages/core/mygo-api', 'packages/cordis/mygo'])
-for (const config of ['packages/core/mygo-api/tsdown.config.ts', 'packages/cordis/mygo/tsdown.config.ts']) {
-  run(node, [join(checkout, 'node_modules', 'tsdown', 'dist', 'run.mjs'), '--config', config])
-}
-
-console.log('==> 构建 mygo-panel')
-run(node, ['build.mjs'], join(checkout, 'vendor', 'dsh-mygo-panel'))
+console.log('==> 全量构建（pnpm -r run build）')
+run('pnpm', ['-r', 'run', 'build'])
 
 console.log('==> prepack 自检（lib + .d.ts 门禁）')
-for (const pkg of ['packages/core/mygo-api', 'packages/cordis/mygo', 'vendor/dsh-mygo-panel']) {
+for (const pkg of packages) {
   // npm pack --dry-run 会执行该包的 prepack（lib/.d.ts 存在性门禁）并列出发布内容。
-  run('npm', ['pack', '--dry-run'], join(checkout, pkg))
+  run('npm', ['pack', '--dry-run'], join(root, pkg))
 }
 
+const names = [
+  '@r05en1cu/dsh-mygo-api',
+  '@r05en1cu/dsh-mygo',
+  '@r05en1cu/dsh-mygo-cli',
+  '@r05en1cu/dsh-mygo-ext-panel',
+]
 if (dryRun) {
   console.log('dry-run：构建与自检通过，未执行发布。')
-  console.log('发布命令（确认 npm 私仓 token 与 scope 权限后执行）：')
-  console.log('  pnpm --filter @r05en1cu/dsh-mygo-api publish --no-git-checks')
-  console.log('  pnpm --filter @r05en1cu/dsh-mygo publish --no-git-checks')
-  console.log('  pnpm --filter @dsh-external/dsh-mygo-panel publish --no-git-checks')
+  console.log('发布命令（确认 scope 权限后执行）：')
+  for (const name of names) {
+    console.log(`  pnpm --filter ${name} publish --no-git-checks`)
+  }
 } else {
-  console.log('==> 发布（请确认 token 权限；本脚本执行 pnpm publish）')
-  run('pnpm', ['--filter', '@r05en1cu/dsh-mygo-api', 'publish', '--no-git-checks'])
-  run('pnpm', ['--filter', '@r05en1cu/dsh-mygo', 'publish', '--no-git-checks'])
-  run('pnpm', ['--filter', '@dsh-external/dsh-mygo-panel', 'publish', '--no-git-checks'])
+  console.log('==> 发布（请确认权限；本脚本执行 pnpm publish）')
+  for (const name of names) {
+    run('pnpm', ['--filter', name, 'publish', '--no-git-checks'])
+  }
 }
