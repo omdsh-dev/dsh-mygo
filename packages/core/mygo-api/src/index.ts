@@ -1,16 +1,17 @@
 /**
  * The Cordis-free upper-level plugin contract: `definePlugin`, manifest and
- * environment types, the `PluginError` vocabulary, and a fake-env test
- * surface. Plugin authors import only this package; the plugin manager
- * bridges these declarations into Cordis at mount time.
- * @module @deepseek-ai/dsh-mygo-api
+ * environment types, the `PluginError` vocabulary, the LoaderAdapter contract,
+ * and a fake-env test surface. Plugin authors import only this package; the
+ * plugin manager bridges these declarations into Cordis at mount time.
+ * @module @r05en1cu/dsh-mygo-api
  */
 
 export { definePlugin } from './define.ts'
+export type { CordisMountShape, DefinedPlugin, ManagerAdoptContext } from './define.ts'
 export { PluginError, formatPluginError } from './error.ts'
 export { createFakeEnv } from './fake.ts'
-export { fromCordisPlugin, toCordisPlugin } from './adapter.ts'
-export type { AdapterContext, CordisFacade, CordisFunctionPluginShape, RawCordisFunctionPlugin } from './adapter.ts'
+export { fromCordisPlugin } from './adapter.ts'
+export type { CordisFacade, RawCordisFunctionPlugin } from './adapter.ts'
 export type {
   FakeFetchCallRecord,
   FakeFsWriteRecord,
@@ -20,6 +21,13 @@ export type {
   FakePluginEnvOptions,
   FakeProvidedRecord,
 } from './fake.ts'
+export type {
+  LoaderAdapter,
+  InstallIntent,
+  InstallReceipt,
+  InstallTarget,
+  RegistryEntry,
+} from './loader.ts'
 export type {
   DeactivateReason,
   CompatibilityEdge,
@@ -37,12 +45,7 @@ export type {
   PermissionsBlock,
   PluginCompatibility,
   PluginDefinition,
-  PluginDirEntry,
   PluginClientDeclaration,
-  PluginCommandDefinition,
-  PluginCommandInvocation,
-  PluginCommandResult,
-  PluginCommands,
   PluginEntrypointContribution,
   PluginEntrypointsDeclaration,
   PluginEnv,
@@ -50,12 +53,25 @@ export type {
   PluginEventName,
   PluginEventListener,
   PluginEvents,
+  PluginHandleInfo,
+  PluginHooks,
+  PluginSource,
+  PreviousGeneration,
+  RawPluginDeclaration,
+  Schemastery,
+  TransformDeclaration,
+} from './types.ts'
+export type {
+  PluginCommandDefinition,
+  PluginCommandInvocation,
+  PluginCommandResult,
+  PluginCommands,
+  PluginDirEntry,
   PluginExec,
   PluginExecRequest,
   PluginExecResult,
   PluginFileStat,
   PluginFs,
-  PluginHandleInfo,
   PluginHttp,
   PluginHttpMethod,
   PluginHttpRequest,
@@ -65,22 +81,16 @@ export type {
   PluginModelMessage,
   PluginModelRequest,
   PluginModelResponse,
-  PluginHooks,
   PluginPromptSection,
-  RawPluginDeclaration,
-  StagedSettingsRegistration,
-  StagedSettingsScope,
   PluginSkillDefinition,
   PluginSkills,
-  PluginSource,
+  PluginToolAgentContext,
   PluginToolDefinition,
   PluginToolExecutionContext,
-  PluginToolAgentContext,
-  PluginToolSessionContext,
   PluginToolRenderIntent,
+  PluginToolSessionContext,
   PluginVars,
-  PreviousGeneration,
-  Schemastery,
-  TransformDeclaration,
-} from './types.ts'
+  StagedSettingsRegistration,
+  StagedSettingsScope,
+} from './env.ts'
 export type { PluginErrorCode } from './error.ts'

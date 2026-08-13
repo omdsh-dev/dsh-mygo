@@ -10,17 +10,21 @@ import { PluginError, formatPluginError } from './error.ts'
 import type {
   Disposable,
   Logger,
-  PluginCommandDefinition,
-  PluginCommands,
   PluginEnv,
   PluginEventArgs,
   PluginEventName,
   PluginEventListener,
+  PluginHandleInfo,
+  PluginSource,
+  InstallOptions,
+} from './types.ts'
+import type {
+  PluginCommandDefinition,
+  PluginCommands,
   PluginExec,
   PluginExecRequest,
   PluginExecResult,
   PluginFs,
-  PluginHandleInfo,
   PluginHttp,
   PluginHttpRouteSpec,
   PluginModel,
@@ -32,9 +36,7 @@ import type {
   StagedSettingsRegistration,
   PluginToolDefinition,
   PluginVars,
-  PluginSource,
-  InstallOptions,
-} from './types.ts'
+} from './env.ts'
 
 /** Options accepted by {@link createFakeEnv}. */
 export interface FakePluginEnvOptions {

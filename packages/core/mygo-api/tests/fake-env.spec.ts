@@ -37,7 +37,7 @@ const fixtureTool: PluginToolDefinition = {
 }
 
 describe('definePlugin', () => {
-  it('is an identity type carrier', () => {
+  it('carries the manifest verbatim and adds a non-enumerable mount surface', () => {
     const definition = {
       id: 'fixture-plugin',
       version: '1.0.0',
@@ -58,7 +58,11 @@ describe('definePlugin', () => {
         activate: () => {},
       },
     } satisfies Parameters<typeof definePlugin>[0]
-    expect(definePlugin(definition)).toBe(definition)
+    const plugin = definePlugin(definition)
+    expect(plugin).toMatchObject(definition)
+    expect(Object.keys(plugin)).toEqual(Object.keys(definition))
+    expect(typeof plugin.apply).toBe('function')
+    expect(plugin.inject).toEqual(['pluginManager'])
   })
 })
 

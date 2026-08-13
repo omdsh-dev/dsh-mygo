@@ -1,8 +1,8 @@
 /**
  * #18 factory-integration REAL boot: Loader + Include compose a test-only
  * cordis.yml over the shipped storage stack and the dsh-mygo service.
- * A bundle row referencing a `definePlugin` package (wrapped by
- * `toCordisPlugin`) self-adopts into the manager and its managed semantics
+ * A bundle row referencing a `definePlugin` package (its non-enumerable
+ * mount surface) self-adopts into the manager and its managed semantics
  * take effect (plugins() view, disable/enable dispatch gating, dynamic
  * install/uninstall). The route-flip negative check mirrors web-app's
  * storage-domain row: the registry domain lands on sqlite while the static
@@ -29,7 +29,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { guardedPlugin, sandboxDefineTool } from '@deepseek-ai/dsh-tool-cordis/src/guard.ts'
-import { fromCordisPlugin, toCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
+import { definePlugin, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
 import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
 import PluginManagerService from '@deepseek-ai/dsh-mygo'
 
@@ -128,9 +128,9 @@ async function loadComposition(build: (root: string) => readonly string[]): Prom
     ['@deepseek-ai/dsh-tools', ToolRegistry],
     ['@deepseek-ai/dsh-mygo/test-session-persistence', StubSessionPersistence],
     ['@deepseek-ai/dsh-mygo', PluginManagerService],
-    ['@deepseek-ai/dsh-mygo/test-static', toCordisPlugin(staticDefinition)],
-    ['@deepseek-ai/dsh-mygo/test-custom-events', toCordisPlugin(customEventFixture())],
-    ['@deepseek-ai/dsh-mygo/test-pattern-events', toCordisPlugin(patternEventFixture())],
+    ['@deepseek-ai/dsh-mygo/test-static', definePlugin(staticDefinition)],
+    ['@deepseek-ai/dsh-mygo/test-custom-events', definePlugin(customEventFixture())],
+    ['@deepseek-ai/dsh-mygo/test-pattern-events', definePlugin(patternEventFixture())],
   ])
   ctx.loader.internal = {
     version: 'v2',

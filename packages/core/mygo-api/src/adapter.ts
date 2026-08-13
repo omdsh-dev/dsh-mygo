@@ -1,13 +1,17 @@
 /**
- * §23.1 Cordis adapters, delivered as structural shapes so the plugin author
- * surface stays Cordis-free (HP:134): `toCordisPlugin` wraps a managed
- * definition as a Loader-mountable function plugin whose `apply` only calls
- * `ctx.pluginManager.adopt` (the `inject` declaration makes a missing manager
- * fail loud at mount); `fromCordisPlugin` bridges a raw Cordis plugin into a
+ * §23.1 Cordis bridge: `fromCordisPlugin` bridges a raw Cordis plugin into a
  * managed definition whose hooks run against a restricted facade
  * (`on`/`get`/`provide`/`logger`), rejecting direct EventOptions with
  * `unsupported-event-option`.
- * @module @deepseek-ai/dsh-mygo-api/src/adapter
+ *
+ * P2 裁决（2026-08-13）：`toCordisPlugin` 已删除——它对 manifest 的包装与
+ * `definePlugin` 的直接产出语义重复（恒等桥接），挂载面并入 define.ts
+ * （非枚举属性形态）。`fromCordisPlugin` 保留且不可替代：它承载零侵入桥接
+ * 的全部真实语义——注册面拦截（tools/systemPrompt/httpServer/skills/
+ * commands/settings/timers/inject/effect 逐世代跟踪）、宿主副作用热撤销
+ * （hostEffect 记账）、node:http 风格 route handler 桥接（SSE 流式响应）、
+ * Service 风格类插件挂载。这些不是恒等包装，删除即丢失 adoptRaw 路径。
+ * @module @r05en1cu/dsh-mygo-api/src/adapter
  */
 
 import z from 'schemastery'
@@ -15,33 +19,20 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { PluginError, formatPluginError } from './error.ts'
 import type {
   Logger,
-  PluginCommandDefinition,
   PluginDefinition,
   PluginEnv,
+  Schemastery,
+} from './types.ts'
+import type {
+  PluginCommandDefinition,
   PluginHttpRequest,
   PluginHttpResponse,
   PluginPromptSection,
-  Schemastery,
   StagedSettingsRegistration,
   StagedSettingsScope,
   PluginSkillDefinition,
   PluginToolDefinition,
-} from './types.ts'
-
-/** The minimal Context surface the self-adoption adapter needs. */
-export interface AdapterContext {
-  readonly pluginManager: {
-    adopt(definition: PluginDefinition, config: unknown): Promise<void>
-  }
-}
-
-/** Structural Cordis function-plugin shape returned by {@link toCordisPlugin}. */
-export interface CordisFunctionPluginShape {
-  readonly name: string
-  readonly inject: readonly string[]
-  readonly Config: unknown
-  apply(ctx: AdapterContext, config: unknown): void
-}
+} from './env.ts'
 
 /**
  * Structural shape of a raw Cordis plugin consumed by {@link fromCordisPlugin}:
@@ -62,28 +53,6 @@ export type RawCordisFunctionPlugin =
     readonly Config?: unknown
     new (ctx: unknown, config?: unknown): unknown
   }
-
-/**
- * Wrap one managed definition as a Loader-mountable function plugin
- * (decision #12): bundle rows referencing a `definePlugin` package keep their
- * ordinary Loader row shape, and the manager's absence fails loud through the
- * `pluginManager` inject declaration.
- * @param definition - the managed manifest and hooks.
- * @returns the cordis plugin shape the Loader mounts.
- */
-export function toCordisPlugin(definition: PluginDefinition): CordisFunctionPluginShape {
-  return {
-    name: definition.id,
-    inject: ['pluginManager'],
-    Config: definition.config,
-    apply(ctx, config) {
-      // Activation is async through the manager's staging; the Loader treats
-      // the adapter fiber as settled and the manager publishes the static
-      // handle when adoption completes.
-      void ctx.pluginManager.adopt(definition, config)
-    },
-  }
-}
 
 /** Restricted facade a raw plugin's `apply` runs against (§23.1 migration bridge). */
 export interface CordisFacade {

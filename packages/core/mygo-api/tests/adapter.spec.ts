@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import z from 'schemastery'
-import { createFakeEnv, fromCordisPlugin, PluginError, toCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
+import { createFakeEnv, definePlugin, fromCordisPlugin, PluginError } from '@deepseek-ai/dsh-mygo-api'
 import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
 
 function fixture(id: string): PluginDefinition {
@@ -24,16 +24,18 @@ function fixture(id: string): PluginDefinition {
   }
 }
 
-describe('toCordisPlugin', () => {
-  it('wraps a definition as a Loader plugin that only self-adopts', async () => {
+describe('definePlugin mount surface (P2 merged toCordisPlugin)', () => {
+  it('produces a ctx.plugin-consumable module that only self-adopts', async () => {
     const definition = fixture('managed')
-    const shape = toCordisPlugin(definition)
+    const shape = definePlugin(definition)
     expect(shape.name).toBe('managed')
     expect(shape.inject).toEqual(['pluginManager'])
     expect(shape.Config).toBe(definition.config)
+    // 挂载面是非枚举属性：strict zod 校验只见 manifest 字段。
+    expect(Object.keys(shape)).toEqual(Object.keys(definition))
     const adopt = vi.fn(async () => {})
     shape.apply({ pluginManager: { adopt } }, { step: 2 })
-    // The adapter hands the definition and the row config to the manager.
+    // The mount surface hands the definition and the row config to the manager.
     expect(adopt).toHaveBeenCalledWith(definition, { step: 2 })
   })
 })
