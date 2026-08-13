@@ -36,9 +36,11 @@
 - 每包 package.json 提供 build / typecheck / test / verify:self-contained /
   prepare 五个标准脚本；exports / files 白名单与 src 布局同步维护。
 - 验证回路（仓内，无网拦截）：
-  `pnpm -r run verify:self-contained && pnpm -r run typecheck && pnpm -r test
-  && pnpm -r run build`；提交前另跑 EB 套件（`test/eb` 独立配置）与
-  全量回归。
+  `pnpm -r run verify:self-contained && pnpm -r run typecheck && pnpm -r run build`
+  可整仓跑；**vitest 必须串行分包跑**（2026-08-13 用户裁决：多包并行 vitest
+  会把机器打爆）——逐包 `pnpm --filter <pkg> test -- --maxWorkers=2`，禁止
+  `pnpm -r test` 并行起多个包的 vitest，禁止并发跑两个以上 vitest 进程；
+  提交前 EB 套件（`test/eb` 独立配置）同样单独跑。
 
 ## 提交纪律
 
