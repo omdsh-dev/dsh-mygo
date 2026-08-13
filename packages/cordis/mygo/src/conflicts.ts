@@ -5,7 +5,7 @@
  * vs `claims-unmanaged-incumbent`, scoped shadowing vs `shadow-undeclared`).
  * Conflicts are a relational predicate over the whole managed set, evaluated
  * only where plugin scope sets intersect.
- * @module @deepseek-ai/dsh-mygo/src/conflicts
+ * @module @r05en1cu/dsh-mygo/src/conflicts
  */
 
 import { deriveOrders } from './order.ts'

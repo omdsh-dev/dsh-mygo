@@ -3,7 +3,7 @@
  * 形态为参考输入，生成/校验 manifest（mygo init 候选，本轮不实现安装）。
  * 参考形态：exports `.`/`./invariant`/`./src/*`、peers `cordis`+`schemastery`、
  * `dsh.bundle.patch`、自包含 prepare 构建、`private→false` 发布门（Rev-6）。
- * @module @deepseek-ai/dsh-mygo/src/package/template-align
+ * @module @r05en1cu/dsh-mygo/src/package/template-align
  */
 
 /** 模板参考形态（npm 强兼容，census §1.2/D7）。 */

@@ -27,9 +27,9 @@ import Storage from '@deepseek-ai/dsh-storage'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
-import PluginManagerService from '@deepseek-ai/dsh-mygo'
-import { fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginDefinition, RawCordisFunctionPlugin, Schemastery } from '@deepseek-ai/dsh-mygo-api'
+import PluginManagerService from '@r05en1cu/dsh-mygo'
+import { fromCordisPlugin } from '@r05en1cu/dsh-mygo-api'
+import type { PluginDefinition, RawCordisFunctionPlugin, Schemastery } from '@r05en1cu/dsh-mygo-api'
 
 declare module 'cordis' {
   interface Events {
@@ -79,7 +79,7 @@ async function boot(profile: string): Promise<Context> {
     ['@deepseek-ai/dsh-storage', Storage],
     ['@deepseek-ai/dsh-storage-sqlite', storageSqlite],
     ['@deepseek-ai/dsh-storage-domain', storageDomain],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
   ])
   ctx.loader.internal = {
     version: 'v2',
@@ -97,7 +97,7 @@ async function boot(profile: string): Promise<Context> {
     "- name: '@deepseek-ai/dsh-storage-domain'",
     '  config:',
     '    backend: sqlite',
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
     `    stateRoot: ${JSON.stringify(join(bootRoot, 'state'))}`,
@@ -164,8 +164,8 @@ async function bootWithServices(profile: string): Promise<Context> {
     ['@deepseek-ai/dsh-storage-domain', storageDomain],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRegistry],
-    ['@deepseek-ai/dsh-mygo/test-session-persistence', StubSessionPersistence],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo/test-session-persistence', StubSessionPersistence],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
   ])
   ctx.loader.internal = {
     version: 'v2',
@@ -185,8 +185,8 @@ async function bootWithServices(profile: string): Promise<Context> {
     '    backend: sqlite',
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
-    "- name: '@deepseek-ai/dsh-mygo/test-session-persistence'",
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo/test-session-persistence'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
     `    stateRoot: ${JSON.stringify(join(bootRoot, 'state'))}`,

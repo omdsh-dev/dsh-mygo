@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import z from 'schemastery'
-import type { PluginDefinition, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import { DispatchMachine } from '../src/dispatch.ts'
 import { InMemoryRegistryStore } from '../src/store.ts'
 import { LifecycleEngine } from '../src/lifecycle.ts'

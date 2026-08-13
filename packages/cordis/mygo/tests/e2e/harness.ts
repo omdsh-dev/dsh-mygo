@@ -1,7 +1,7 @@
 /**
  * E2E harness（验证轮）：离线 registry 桩（真实语料打包 + 真实完整性）、
  * 包管理器安装、cordis 组合挂载。全部离线；不执行任何语料 install 脚本。
- * @module @deepseek-ai/dsh-mygo/tests/e2e/harness
+ * @module @r05en1cu/dsh-mygo/tests/e2e/harness
  */
 
 import { execFile } from 'node:child_process'
@@ -21,7 +21,7 @@ import * as storageJson from '@deepseek-ai/dsh-storage-json'
 import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
-import PluginManagerService from '@deepseek-ai/dsh-mygo'
+import PluginManagerService from '@r05en1cu/dsh-mygo'
 import { PluginPackageManager } from '../../src/package/package-manager.ts'
 import { resolveMygoPaths } from '../../src/package/paths.ts'
 import { expandBundlePatch } from '../../src/package/bundle-expand.ts'
@@ -251,7 +251,7 @@ export async function mountComposition(
     ['@deepseek-ai/dsh-storage-sqlite', storageSqlite],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRegistry],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
     ...modules,
   ])
   ctx.loader.internal = {
@@ -272,7 +272,7 @@ export async function mountComposition(
     '    backend: sqlite',
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
     `    registry: ${JSON.stringify(registryUrl)}`,

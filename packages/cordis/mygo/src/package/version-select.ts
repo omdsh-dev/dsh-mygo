@@ -3,7 +3,7 @@
  * 求解器 resolver）。安装/还原不再做插件图求解：在「带有效 manifest 的候选
  * 版本」内按确定性全序取最高版本；profile 钉定（pins）为精确版本硬选择；
  * `core` 区间只作告警不阻断。同输入必同输出。
- * @module @deepseek-ai/dsh-mygo/src/package/version-select
+ * @module @r05en1cu/dsh-mygo/src/package/version-select
  */
 
 import { compareVersions, matchesVersionRange, parseVersion } from '../semver-range.ts'

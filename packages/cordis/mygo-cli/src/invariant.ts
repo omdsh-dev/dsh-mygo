@@ -1,12 +1,12 @@
 /**
  * 包级 invariant 伴生（官方模板形态）：CLI 包自身无运行期事件序列，
  * 注册空 installer 以保留包级归属（替换为真实不变量后生效）。
- * @module @dsh-external/dsh-mygo-cli/invariant
+ * @module @r05en1cu/dsh-mygo-cli/invariant
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 
-const PACKAGE_NAME = '@dsh-external/dsh-mygo-cli'
+const PACKAGE_NAME = '@r05en1cu/dsh-mygo-cli'
 
 type InvariantInstaller = (ctx: Context, fail: InvariantFailure) => void | Promise<void>
 

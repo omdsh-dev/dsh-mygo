@@ -5,7 +5,7 @@
  * mygo 引用 + settings 写操作 + mygo 状态不变）。
  * 浏览器点击渲染不在本环境能力内（无 headless browser），如实标注为断点。
  * 子进程继承回归的 NODE_OPTIONS 无网拦截；仅访问 127.0.0.1。
- * @module @dsh-external/dsh-mygo-cli/tests/webui-spike
+ * @module @r05en1cu/dsh-mygo-cli/tests/webui-spike
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -33,6 +33,7 @@ function spikeHome(tag: string): string {
   homes.push(home)
   mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
   mkdirSync(join(home, 'profiles', 'node_modules', '@deepseek-ai'), { recursive: true })
+  mkdirSync(join(home, 'profiles', 'node_modules', '@r05en1cu'), { recursive: true })
   mkdirSync(join(home, 'profiles', 'node_modules', '@dsh-external'), { recursive: true })
   mkdirSync(join(home, 'storages'), { recursive: true })
   return home
@@ -59,7 +60,7 @@ function writeProfile(home: string): void {
     "        path: !!js dshHomePath('storages/registry.sqlite')",
     '        journalMode: wal',
     "    - id: dsh-mygo",
-    "      name: '@deepseek-ai/dsh-mygo'",
+    "      name: '@r05en1cu/dsh-mygo'",
     '      config:',
     '        profile: web',
     "    - id: dsh-mygo-panel",
@@ -72,6 +73,11 @@ function writeProfile(home: string): void {
 
 function linkMygo(home: string): void {
   const pairs: readonly [string, string][] = [
+    // 新 scope（P2 迁移后 mygo 三包）。
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo'), join(CHECKOUT, 'packages', 'cordis', 'mygo')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-api'), join(CHECKOUT, 'packages', 'core', 'mygo-api')],
+    [join(home, 'profiles', 'node_modules', '@r05en1cu', 'dsh-mygo-cli'), join(CHECKOUT, 'packages', 'cordis', 'mygo-cli')],
+    // 旧 scope 链接保留：vendor 面板（P3 才迁移）仍按旧名解析 mygo。
     [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-mygo'), join(CHECKOUT, 'packages', 'cordis', 'mygo')],
     [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-mygo-api'), join(CHECKOUT, 'packages', 'core', 'mygo-api')],
     [join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-storage-sqlite'), join(CHECKOUT, 'packages', 'storage', 'storage-sqlite')],
@@ -184,6 +190,7 @@ describe.skipIf(!ENV_OK)('Phase C webui spike（T50/T51）', () => {
 
     const patch = await import('node:fs/promises').then(fs => fs.readFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'))
     expect(patch).toContain('dsh-mygo-cli-mygo')
+    // 桥接包名由面板按自身命名约定生成（旧 scope）；面板 P3 迁移后此处改为 @r05en1cu。
     expect(patch).toContain("name: '@dsh-external/dsh-mygo-cli-mygo'")
 
     const again = await postJson<{ ok: boolean; error: string }>(port, '/api/mygo/install', planPayload)

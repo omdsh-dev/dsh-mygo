@@ -2,7 +2,7 @@
  * CLI E2E 公共装置（design-r5 T44/T45/T47/T49）：在进程内以真实 Cordis
  * 组合挂载 mygo 管理器 + CLI 插件，按官方契约提供 cmdlineArgs/appExit，
  * 并把 CLI 输出重定向到收集器。全程离线（registry 走本地桩）。
- * @module @dsh-external/dsh-mygo-cli/tests/helpers
+ * @module @r05en1cu/dsh-mygo-cli/tests/helpers
  */
 
 import { mkdtemp, writeFile } from 'node:fs/promises'
@@ -18,7 +18,7 @@ import * as storageJson from '@deepseek-ai/dsh-storage-json'
 import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
-import PluginManagerService, { PluginPackageManager, resolveMygoPaths } from '@deepseek-ai/dsh-mygo'
+import PluginManagerService, { PluginPackageManager, resolveMygoPaths } from '@r05en1cu/dsh-mygo'
 import * as cliModule from '../src/index.ts'
 import type { CliHost } from '../src/index.ts'
 import type { PackedPackage } from '../../mygo/tests/e2e/harness.ts'
@@ -103,8 +103,8 @@ export async function mountCliComposition(
     ['@deepseek-ai/dsh-storage-sqlite', storageSqlite],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRegistry],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
-    ['@dsh-external/dsh-mygo-cli', cliModule],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo-cli', cliModule],
     ...(options.extraModules ?? []),
   ])
   ctx.loader.internal = {
@@ -125,13 +125,13 @@ export async function mountCliComposition(
     '    backend: sqlite',
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(options.profile)}`,
     `    registry: ${JSON.stringify(options.registry)}`,
     `    stateRoot: ${JSON.stringify(join(bootRoot, 'state'))}`,
     '    cpuBudgetMs: 1',
-    "- name: '@dsh-external/dsh-mygo-cli'",
+    "- name: '@r05en1cu/dsh-mygo-cli'",
     '',
   ]
   await writeFile(configPath, rows.join('\n'))

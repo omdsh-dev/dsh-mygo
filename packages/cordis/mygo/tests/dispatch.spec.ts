@@ -8,14 +8,14 @@
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { PluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError } from '@r05en1cu/dsh-mygo-api'
 import {
   DispatchMachine,
   managedListenerOptions,
   type DispatchViolation,
   type EventDispatchMode,
   type ManagedListenerMetadata,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 declare module 'cordis' {
   interface Events {

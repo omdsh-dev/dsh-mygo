@@ -1,10 +1,10 @@
 /**
  * T48：报告渲染快照（每个 code 至少一个用例；字节级断言）。
- * @module @dsh-external/dsh-mygo-cli/tests/render
+ * @module @r05en1cu/dsh-mygo-cli/tests/render
  */
 
 import { describe, expect, it } from 'vitest'
-import type { ResolutionReport, ServiceResolutionReport } from '@deepseek-ai/dsh-mygo'
+import type { ResolutionReport, ServiceResolutionReport } from '@r05en1cu/dsh-mygo'
 import { jsonOutput, renderReportHuman, renderRestoreSuccess, renderUsage } from '../src/render.ts'
 
 function resolveFailed(): ResolutionReport {

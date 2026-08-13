@@ -16,7 +16,7 @@ import {
   extractFields,
   parseJsonl,
   scanZstdFrames,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 const HEADER = JSON.stringify({
   type: 'session',

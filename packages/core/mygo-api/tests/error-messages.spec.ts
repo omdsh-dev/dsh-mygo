@@ -10,8 +10,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
+import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
 
 interface MessageCase {
   readonly code: PluginErrorCode

@@ -5,12 +5,12 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { PluginError, definePlugin } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, definePlugin } from '@r05en1cu/dsh-mygo-api'
 import {
   assertEventOptions,
   validateMount,
   type MountValidationOptions,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 import { fixturePlugin } from './helpers.ts'
 
 const BASE_OPTIONS: MountValidationOptions = {

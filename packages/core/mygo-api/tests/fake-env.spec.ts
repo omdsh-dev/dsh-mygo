@@ -1,6 +1,6 @@
 /**
  * Fake-env roundtrip: a fixture plugin authored only against
- * `@deepseek-ai/dsh-mygo-api` (no Cordis import) is unit-testable with
+ * `@r05en1cu/dsh-mygo-api` (no Cordis import) is unit-testable with
  * `createFakeEnv`. The fixture also proves the empty `PluginEvents` base
  * interface accepts declaration-merging event contributions from any owner.
  */
@@ -12,10 +12,10 @@ import {
   createFakeEnv,
   definePlugin,
   type PluginToolDefinition,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
-declare module '@deepseek-ai/dsh-mygo-api' {
+declare module '@r05en1cu/dsh-mygo-api' {
   interface PluginEvents {
     /** Fixture event contributed by this test to the managed event map. */
     'fixture/echo'(event: { readonly text: string }): void

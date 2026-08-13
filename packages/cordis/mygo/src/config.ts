@@ -3,7 +3,7 @@
  * schedule's T6 values: 256KB code, 64MB registry, 1000 dynamic plugins,
  * 50MB audit × 5 files, 2 retained generations.
  * `stateRoot` defaults to the harness-home `plugin-state` directory.
- * @module @deepseek-ai/dsh-mygo/src/config
+ * @module @r05en1cu/dsh-mygo/src/config
  */
 
 import { dshHomePath } from '@deepseek-ai/dsh-paths'

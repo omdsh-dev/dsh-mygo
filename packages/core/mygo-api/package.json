@@ -1,7 +1,7 @@
 {
-  "name": "@deepseek-ai/dsh-mygo-api",
+  "name": "@r05en1cu/dsh-mygo-api",
   "description": "Cordis-free upper-level plugin contract: definePlugin, manifest/environment types, PluginError vocabulary, and fake-env test surface",
-  "version": "0.0.1-rc.1",
+  "version": "0.2.0-rc.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -62,5 +62,9 @@
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
-  }
+  },
+  "author": "r05En1cU",
+  "maintainers": [
+    "r05En1cU"
+  ]
 }

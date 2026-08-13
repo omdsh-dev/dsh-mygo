@@ -6,7 +6,7 @@
  * 内置回退：包自身 package.json 版本（开发/harness 环境）。
  * 统一依赖图（`dsh-mygo` 成员）与 BOM 导出都用这一份事实，避免
  * `MYGO_MANAGER_VERSION` 硬编码漂移（历史坑：常量 0.1.0 与仓库 0.1.1 不一致）。
- * @module @deepseek-ai/dsh-mygo/src/self
+ * @module @r05en1cu/dsh-mygo/src/self
  */
 
 import { readFileSync } from 'node:fs'

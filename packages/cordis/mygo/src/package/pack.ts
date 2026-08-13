@@ -7,7 +7,7 @@
  *   真相源，pack 只搬运 `(id, version)` 粒度的 vendored tarball）。
  * - files[].sha512 + fileSize 成员级校验为 pack 自身完整性服务（保留）。
  * 零新增第三方依赖；tar 头部遍历为最小自实现（design-r4 §3/§6）。
- * @module @deepseek-ai/dsh-mygo/src/package/pack
+ * @module @r05en1cu/dsh-mygo/src/package/pack
  */
 
 import { execFile } from 'node:child_process'

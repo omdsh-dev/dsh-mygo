@@ -52,12 +52,12 @@ for (const pkg of ['packages/core/mygo-api', 'packages/cordis/mygo', 'vendor/dsh
 if (dryRun) {
   console.log('dry-run：构建与自检通过，未执行发布。')
   console.log('发布命令（确认 npm 私仓 token 与 scope 权限后执行）：')
-  console.log('  pnpm --filter @deepseek-ai/dsh-mygo-api publish --no-git-checks')
-  console.log('  pnpm --filter @deepseek-ai/dsh-mygo publish --no-git-checks')
+  console.log('  pnpm --filter @r05en1cu/dsh-mygo-api publish --no-git-checks')
+  console.log('  pnpm --filter @r05en1cu/dsh-mygo publish --no-git-checks')
   console.log('  pnpm --filter @dsh-external/dsh-mygo-panel publish --no-git-checks')
 } else {
   console.log('==> 发布（请确认 token 权限；本脚本执行 pnpm publish）')
-  run('pnpm', ['--filter', '@deepseek-ai/dsh-mygo-api', 'publish', '--no-git-checks'])
-  run('pnpm', ['--filter', '@deepseek-ai/dsh-mygo', 'publish', '--no-git-checks'])
+  run('pnpm', ['--filter', '@r05en1cu/dsh-mygo-api', 'publish', '--no-git-checks'])
+  run('pnpm', ['--filter', '@r05en1cu/dsh-mygo', 'publish', '--no-git-checks'])
   run('pnpm', ['--filter', '@dsh-external/dsh-mygo-panel', 'publish', '--no-git-checks'])
 }

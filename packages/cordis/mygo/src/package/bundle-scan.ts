@@ -1,7 +1,7 @@
 /**
  * 嵌套包（bundled dependencies）治理（《第二轮增强》1–4 条）：
  * 递归扫描 bundles 声明、校验声明与实际一致、检测“求解器不可见”打包。
- * @module @deepseek-ai/dsh-mygo/src/package/bundle-scan
+ * @module @r05en1cu/dsh-mygo/src/package/bundle-scan
  */
 
 import { readFile, readdir, stat } from 'node:fs/promises'

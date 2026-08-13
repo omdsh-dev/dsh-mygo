@@ -5,11 +5,11 @@
  * 只剩求值：兼容预检（evaluateCompatibility）、关系冲突（evaluateConflicts）、
  * requires 级 dependent 检查、displaced bystander 推导。被拒绝的 plan 预览
  * 操作将抛出的确切错误码。
- * @module @deepseek-ai/dsh-mygo/src/plan
+ * @module @r05en1cu/dsh-mygo/src/plan
  */
 
-import { formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+import { formatPluginError } from '@r05en1cu/dsh-mygo-api'
+import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
 import {
   compatibilityViolationLines,
   compatibilityWarningLines,

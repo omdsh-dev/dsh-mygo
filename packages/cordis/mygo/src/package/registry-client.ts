@@ -2,7 +2,7 @@
  * npm registry 客户端（《收敛任务》候选版本来源）：拉取元数据（含每个版本
  * 的 package.json，用于解析 dsh.mygo manifest）与 tarball；支持私有 scope
  * token（NPM_TOKEN 环境变量或显式注入）。
- * @module @deepseek-ai/dsh-mygo/src/package/registry-client
+ * @module @r05en1cu/dsh-mygo/src/package/registry-client
  */
 
 import { createHash } from 'node:crypto'

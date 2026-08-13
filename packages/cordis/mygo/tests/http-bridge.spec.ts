@@ -12,7 +12,7 @@ import { createReadStream } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DispatchMachine, InMemoryRegistryStore, LifecycleEngine, resolvePluginManagerConfig } from '@deepseek-ai/dsh-mygo'
+import { DispatchMachine, InMemoryRegistryStore, LifecycleEngine, resolvePluginManagerConfig } from '@r05en1cu/dsh-mygo'
 
 interface HostRoute {
   readonly kind?: 'exact' | 'prefix'

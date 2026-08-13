@@ -15,7 +15,7 @@
  * - SQLite is opened read-only through `node:sqlite` and maps rows back to
  *   the shared `SessionEvent` envelope.
  *
- * @module @deepseek-ai/dsh-mygo/src/session-reader
+ * @module @r05en1cu/dsh-mygo/src/session-reader
  */
 
 import { existsSync, readFileSync } from 'node:fs'

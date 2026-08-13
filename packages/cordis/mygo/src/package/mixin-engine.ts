@@ -4,7 +4,7 @@
  * facade（CJS/ESM 均可，工作在编译后的 npm lib 产物上，不依赖 tsx/源码），
  * 消费者经 facade 取到被插桩的导出符号。锚点一律是 `module#filePath#symbol`
  * 导出符号路径，禁止行号/语句位置。
- * @module @deepseek-ai/dsh-mygo/src/package/mixin-engine
+ * @module @r05en1cu/dsh-mygo/src/package/mixin-engine
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { evaluateConflicts } from '@deepseek-ai/dsh-mygo'
+import { evaluateConflicts } from '@r05en1cu/dsh-mygo'
 import { plugin, SLOT_KINDS } from './derivation-fixtures.ts'
 
 function issues(plugins: Parameters<typeof evaluateConflicts>[0]['plugins'], heldOutsideManager?: string[]) {

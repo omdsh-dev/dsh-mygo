@@ -4,7 +4,7 @@
  * `auditMaxBytes` × `auditKeepFiles`. Entries follow §22.3; readers tolerate
  * unknown fields and a truncated final line. The writer is the manager's
  * single choke point — `PluginEnv` never exposes it.
- * @module @deepseek-ai/dsh-mygo/src/audit
+ * @module @r05en1cu/dsh-mygo/src/audit
  */
 
 import { appendFile, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises'

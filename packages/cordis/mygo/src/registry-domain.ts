@@ -5,7 +5,7 @@
  * to the boot recovery flow (T4-2/T4-5). Profile names are sanitized to
  * `UNIT_NAME_RE` with the spec's written rules; domain version 1 follows the
  * storage-family `SCHEMA_VERSION` precedent (a bump discards dynamic rows).
- * @module @deepseek-ai/dsh-mygo/src/registry-domain
+ * @module @r05en1cu/dsh-mygo/src/registry-domain
  */
 
 import { z } from 'zod'

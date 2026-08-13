@@ -1,9 +1,9 @@
 /**
- * Type-only contract surface of `@deepseek-ai/dsh-mygo`: the
+ * Type-only contract surface of `@r05en1cu/dsh-mygo`: the
  * `ctx.pluginManager` service key, manager Config, and the mount-time
  * validation options. This module deliberately contains no runtime code; the
  * validation chain itself lives in `mount.ts`.
- * @module @deepseek-ai/dsh-mygo/src/types
+ * @module @r05en1cu/dsh-mygo/src/types
  */
 
 import type {
@@ -18,7 +18,7 @@ import type {
   PluginSource,
   RawCordisFunctionPlugin,
   RawPluginDeclaration,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import type { PluginEventVocabularyEntry } from './event-vocabulary.ts'
 import type { EntrypointsService } from './entrypoints.ts'
 

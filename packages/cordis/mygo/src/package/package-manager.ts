@@ -3,7 +3,7 @@
  * → 下载并普通落盘还原；dsh.lock/v1 lockfile 已删除（pnpm 安装状态为唯一
  * 真相源），加载期不再有「对照 lockfile 校验磁盘」环节。mygo-pack 构建/安装
  * 委派给 pack.ts（确定性 tar 能力保留）。
- * @module @deepseek-ai/dsh-mygo/src/package/package-manager
+ * @module @r05en1cu/dsh-mygo/src/package/package-manager
  */
 
 import { detectUndeclaredBundles, scanBundles } from './bundle-scan.ts'

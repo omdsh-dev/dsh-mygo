@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { fnv1a, pluginRegistryDomainSpec, sanitizeProfileName } from '@deepseek-ai/dsh-mygo'
+import { fnv1a, pluginRegistryDomainSpec, sanitizeProfileName } from '@r05en1cu/dsh-mygo'
 
 describe('sanitizeProfileName', () => {
   it('lowercases and replaces illegal characters with underscores', () => {

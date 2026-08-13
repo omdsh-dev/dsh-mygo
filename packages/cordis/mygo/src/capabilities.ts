@@ -3,11 +3,11 @@
  * layer is removed: filesystem, network, env-var, model, subprocess, and
  * http-route surfaces are direct host passthroughs. Registration surfaces
  * still stage through the manager so HMR can swap/dispose them atomically.
- * @module @deepseek-ai/dsh-mygo/src/capabilities
+ * @module @r05en1cu/dsh-mygo/src/capabilities
  */
 
 import { appendFile, lstat, readdir as fsReaddir, readFile, writeFile, realpath as fsRealpath } from 'node:fs/promises'
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type {
   Logger,
   PluginDirEntry,
@@ -20,7 +20,7 @@ import type {
   PluginModel,
   PluginModelRequest,
   PluginModelResponse,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 
 /** Host I/O seam backing the ungated `env.fs` surface. */
 export interface PluginIo {

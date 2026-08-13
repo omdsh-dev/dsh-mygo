@@ -5,10 +5,10 @@
  * carrying `v: 1` record versions. The engine owns the ordering rules —
  * dependency records before pointers, status before/after runtime commit per
  * class — so a crash between writes leaves a state boot recovery can read.
- * @module @deepseek-ai/dsh-mygo/src/store
+ * @module @r05en1cu/dsh-mygo/src/store
  */
 
-import type { InstallOrigin, PluginDefinition, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type { InstallOrigin, PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
 
 /** One immutable generation record (§22.1 `gens` row). */
 export interface GenerationRecord {

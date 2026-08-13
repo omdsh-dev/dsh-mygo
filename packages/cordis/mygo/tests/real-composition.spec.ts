@@ -29,9 +29,9 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { guardedPlugin, sandboxDefineTool } from '@deepseek-ai/dsh-tool-cordis/src/guard.ts'
-import { definePlugin, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
-import PluginManagerService from '@deepseek-ai/dsh-mygo'
+import { definePlugin, fromCordisPlugin } from '@r05en1cu/dsh-mygo-api'
+import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
+import PluginManagerService from '@r05en1cu/dsh-mygo'
 
 declare module 'cordis' {
   interface Events {
@@ -39,7 +39,7 @@ declare module 'cordis' {
   }
 }
 
-declare module '@deepseek-ai/dsh-mygo-api' {
+declare module '@r05en1cu/dsh-mygo-api' {
   interface PluginEvents {
     'tools/change'(): void
     'custom/thing'(payload: { readonly n: number }): void
@@ -126,11 +126,11 @@ async function loadComposition(build: (root: string) => readonly string[]): Prom
     ['@deepseek-ai/dsh-storage-json', storageJson],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRegistry],
-    ['@deepseek-ai/dsh-mygo/test-session-persistence', StubSessionPersistence],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
-    ['@deepseek-ai/dsh-mygo/test-static', definePlugin(staticDefinition)],
-    ['@deepseek-ai/dsh-mygo/test-custom-events', definePlugin(customEventFixture())],
-    ['@deepseek-ai/dsh-mygo/test-pattern-events', definePlugin(patternEventFixture())],
+    ['@r05en1cu/dsh-mygo/test-session-persistence', StubSessionPersistence],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo/test-static', definePlugin(staticDefinition)],
+    ['@r05en1cu/dsh-mygo/test-custom-events', definePlugin(customEventFixture())],
+    ['@r05en1cu/dsh-mygo/test-pattern-events', definePlugin(patternEventFixture())],
   ])
   ctx.loader.internal = {
     version: 'v2',
@@ -273,7 +273,7 @@ function managerRows(rootDir: string, profile: string, domainConfig: string[]): 
     "- name: '@deepseek-ai/dsh-storage-domain'",
     '  config:',
     ...domainConfig,
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
     `    registry: ${JSON.stringify(registryUrl)}`,
@@ -296,8 +296,8 @@ function toolCompositionRows(rootDir: string, profile: string, managerExtra: rea
     '    backend: sqlite',
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
-    "- name: '@deepseek-ai/dsh-mygo/test-session-persistence'",
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo/test-session-persistence'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     `    profile: ${JSON.stringify(profile)}`,
     `    stateRoot: ${JSON.stringify(join(rootDir, 'state'))}`,
@@ -389,7 +389,7 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
   it('boots a bundle row referencing a definePlugin package into the manager', async () => {
     const { ctx, root: bootRoot } = await loadComposition(bootRoot => [
       ...managerRows('<root>', 'realtest', ['    backend: sqlite']),
-      "- name: '@deepseek-ai/dsh-mygo/test-static'",
+      "- name: '@r05en1cu/dsh-mygo/test-static'",
       '',
     ].map(line => line.replace('<root>', bootRoot)))
     // The manager service is online.
@@ -432,7 +432,7 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
   it('dispatches a plugin-declared custom event through the managed machine', async () => {
     const { ctx } = await loadComposition(bootRoot => [
       ...managerRows('<root>', 'realtest-custom', ['    backend: sqlite']),
-      "- name: '@deepseek-ai/dsh-mygo/test-custom-events'",
+      "- name: '@r05en1cu/dsh-mygo/test-custom-events'",
       '',
     ].map(line => line.replace('<root>', bootRoot)))
     await expect.poll(() => ctx.pluginManager.plugins().map(handle => handle.id)).toContain('custom-events')
@@ -446,7 +446,7 @@ describe('#18 REAL boot: self-adoption and managed semantics', () => {
   it('materializes a namespace-pattern event bus through managed emit', async () => {
     const { ctx } = await loadComposition(bootRoot => [
       ...managerRows('<root>', 'realtest-pattern', ['    backend: sqlite']),
-      "- name: '@deepseek-ai/dsh-mygo/test-pattern-events'",
+      "- name: '@r05en1cu/dsh-mygo/test-pattern-events'",
       '',
     ].map(line => line.replace('<root>', bootRoot)))
     await expect.poll(() => ctx.pluginManager.plugins().map(handle => handle.id)).toContain('pattern-events')

@@ -13,13 +13,13 @@ import z from 'schemastery'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
-import type { PluginDefinition, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import {
   openSqliteRegistryStore,
   pluginRegistryDomainSpec,
   RegistryRowError,
   SqliteRegistryStore,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 function fixture(id: string, version = '1.0.0'): PluginDefinition {
   return {

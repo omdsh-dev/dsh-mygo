@@ -6,10 +6,10 @@
  * one normal registration. Every managed listener runs inside a container
  * that swallows throws, enforces declared return discipline, meters own-time
  * CPU (excluding awaited `next()` windows), and surfaces violations.
- * @module @deepseek-ai/dsh-mygo/src/dispatch
+ * @module @r05en1cu/dsh-mygo/src/dispatch
  */
 
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type { Context, EventOptions } from '@deepseek-ai/cordis'
 import { EVENT_VOCABULARY } from './event-vocabulary.ts'
 

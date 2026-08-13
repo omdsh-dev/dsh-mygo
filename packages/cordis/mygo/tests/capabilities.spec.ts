@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError } from '@r05en1cu/dsh-mygo-api'
 import {
   claimEffect,
   createExecBoundary,
@@ -20,7 +20,7 @@ import {
   nodePluginIo,
   type PluginEffectQuota,
   type PluginIo,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 describe('createPluginFs passthrough', () => {
   it('forwards read/write/append/readdir/stat to the host io seam', async () => {

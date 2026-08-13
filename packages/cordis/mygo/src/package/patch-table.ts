@@ -1,7 +1,7 @@
 /**
  * mixin patch 目标冲突表（《第二轮增强》11 条）：key = module#filePath#symbol；
  * 冲突硬阻断；应用顺序 = 拓扑序优先 + id 字典序兜底（确定性）。
- * @module @deepseek-ai/dsh-mygo/src/package/patch-table
+ * @module @r05en1cu/dsh-mygo/src/package/patch-table
  */
 
 import { computeMountOrder, type MountEdge } from './mount-order.ts'

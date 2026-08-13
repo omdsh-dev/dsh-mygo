@@ -2,7 +2,7 @@
  * profile bundle patch 展开语义（design-r3 §5.3，B14）：`dsh.bundle.patch`
  * → `cordis.patch.yml` 的 insert/override 行展开为 entry 行；mygo 政策层
  * 作用于展开后的行；不新设分发层。纯函数，输入 YAML 文本 → 展开行。
- * @module @deepseek-ai/dsh-mygo/src/package/bundle-expand
+ * @module @r05en1cu/dsh-mygo/src/package/bundle-expand
  */
 
 import * as yaml from 'js-yaml'

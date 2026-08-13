@@ -5,7 +5,7 @@
  * Unparsable rows surface as {@link RegistryRowError} so boot recovery
  * quarantines them with `damaged-record`; damage-class medium failures
  * propagate loudly (the 0809 storage contract removed declared medium reset).
- * @module @deepseek-ai/dsh-mygo/src/sqlite-store
+ * @module @r05en1cu/dsh-mygo/src/sqlite-store
  */
 
 import type { Domain, DomainFacility, DomainSpec, KvTable } from '@deepseek-ai/dsh-storage-domain'

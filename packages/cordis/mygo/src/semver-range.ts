@@ -4,7 +4,7 @@
  * installed, so this is a check-only vocabulary (`*`, exact, `=`, `>`, `>=`,
  * `<`, `<=`, `^`, `~`, space-separated AND, `||` OR). It never resolves,
  * selects, or fetches a version.
- * @module @deepseek-ai/dsh-mygo/src/semver-range
+ * @module @r05en1cu/dsh-mygo/src/semver-range
  */
 
 /** One parsed semver triple plus prerelease/build label. */

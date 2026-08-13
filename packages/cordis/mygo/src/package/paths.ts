@@ -3,7 +3,7 @@
  * 禁止依赖 process.cwd / __dirname / dsh 安装位置 / npx 缓存。
  * 2026-08-13 范围重塑：dsh.lock/v1 lockfile 已删除（pnpm 安装状态为唯一
  * 真相源），路径表同步去掉 lockfile 目录。
- * @module @deepseek-ai/dsh-mygo/src/package/paths
+ * @module @r05en1cu/dsh-mygo/src/package/paths
  */
 
 import { homedir } from 'node:os'

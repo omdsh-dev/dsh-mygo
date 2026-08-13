@@ -5,14 +5,14 @@
  * The harness event vocabulary is the generated `EVENT_VOCABULARY` — no
  * handwritten allowlist — and property/branch names resolve against each
  * event's real return type from the same Typert projection.
- * @module @deepseek-ai/dsh-mygo/src/mount
+ * @module @r05en1cu/dsh-mygo/src/mount
  */
 
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type {
   PluginDefinition,
   PluginErrorCode,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import { EVENT_VOCABULARY } from './event-vocabulary.ts'
 import type { PluginEventVocabularyEntry } from './event-vocabulary.ts'
 import { validateManifest } from './manifest.ts'

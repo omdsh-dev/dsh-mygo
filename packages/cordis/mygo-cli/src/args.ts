@@ -1,7 +1,7 @@
 /**
  * mygo CLI 最小参数解析器（design-r5 §2；任务书 §0 允许手写最小实现）。
  * 零第三方依赖；确定性输出；用法错误与帮助不触发任何 I/O 之外的副作用。
- * @module @dsh-external/dsh-mygo-cli/args
+ * @module @r05en1cu/dsh-mygo-cli/args
  */
 
 /** 一条已解析的 mygo 子命令。 */

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased · next 分支 P2（2026-08-13）— 契约层重写 + scope 迁移
+
+### 契约层（packages/core/mygo-api）
+
+- types.ts 995 → 343 行：只留契约面（PluginDefinition / PluginHooks /
+  PluginEnv / compatibility 只读声明 / 事件词汇 / 管理面句柄）；能力载荷
+  形状拆到 env.ts；逐字段 JSDoc 收敛为分组单行注释。
+- `definePlugin` 产出可直接 `ctx.plugin()` 消费：挂载面（name/inject/
+  Config/apply→adopt）以非枚举属性承载，strict zod 只见 manifest 字段；
+  `toCordisPlugin` 语义重复，删除。`fromCordisPlugin` 保留（零侵入桥接
+  真实语义，模块头注明不可替代性）。
+- 新增 LoaderAdapter 契约（loader.ts：InstallIntent 三态 pnpm/pack/
+  display + InstallReceipt/InstallTarget/RegistryEntry），为 P5 loader
+  扩展体系铺路。
+- 错误闭表维持 P1 裁决 39 码不动。
+
+### scope 迁移与版本线
+
+- 三包改名 `@r05en1cu/dsh-mygo-api` / `@r05en1cu/dsh-mygo` /
+  `@r05en1cu/dsh-mygo-cli`（原 `@deepseek-ai/dsh-mygo-api` /
+  `@deepseek-ai/dsh-mygo` / `@dsh-external/dsh-mygo-cli`），全部 imports /
+  内部依赖 / 脚本 / 配置同步；`author`/`maintainers` 声明 `r05En1cU`。
+- 版本线：VERSION 单源 0.0.1-rc.1 → 0.2.0-rc.0，三包同步；init 模板
+  生成物 author 默认值 `r05En1cU`。
+- checkout 侧（test-r05En1cU-0811）：tsconfig.base.json 增加 @r05en1cu
+  paths 映射；node_modules 增加 @r05en1cu 链接（root / 包级 / profile
+  fallback）；profile cordis.patch.yml 受管块 dsh-mygo 行改名；vendor
+  面板 package.json 依赖名同步 + prepare 暂跳（面板源码仍消费 P1 已删
+  的 plan.actions，列为 P3 阻塞项）。
+
 ## Unreleased · next 分支 P1（2026-08-13）— 核心瘦身：求解/lockfile 体系退役
 
 > 重做线第一阶段：pnpm 安装状态为唯一真相源，mygo 账本降级为治理视图

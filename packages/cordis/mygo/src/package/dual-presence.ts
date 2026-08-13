@@ -2,7 +2,7 @@
  * 双存在检测（design-r3 §5.2/B12；two-tier §10）：同一包既以插件身份被
  * loader 注册、又以 npm 依赖身份嵌套存在于某插件 node_modules 时，输出
  * 重复实例风险警告。MUST NOT 阻断。社区侧永远只读。
- * @module @deepseek-ai/dsh-mygo/src/package/dual-presence
+ * @module @r05en1cu/dsh-mygo/src/package/dual-presence
  */
 
 /** 双存在检测输入：一个插件的包级元数据（npm + mygo 声明）。 */

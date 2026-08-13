@@ -8,11 +8,11 @@
  * 词汇经 `compatibility` 块只读直通（告警/预检面，不参与安装求解）。
  * 纯函数、零运行时依赖；`compatibility.requires` 中 `service:` 前缀键 →
  * 服务级 requires（去前缀）。
- * @module @deepseek-ai/dsh-mygo/src/package/manifest-v2
+ * @module @r05en1cu/dsh-mygo/src/package/manifest-v2
  */
 
 import { isValidRange } from '../semver-range.ts'
-import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginCompatibility } from '@r05en1cu/dsh-mygo-api'
 
 /** A normalized v3 plugin manifest. */
 export interface PluginManifestV3 {

@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+import { formatPluginError } from '@r05en1cu/dsh-mygo-api'
+import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
 
 const SPEC_GROUPS = {
   manifestAndDeclaration: [

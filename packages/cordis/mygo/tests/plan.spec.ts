@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { planOperation, type PlanState } from '@deepseek-ai/dsh-mygo'
+import { planOperation, type PlanState } from '@r05en1cu/dsh-mygo'
 import { plugin, SLOT_KINDS } from './derivation-fixtures.ts'
 
 function state(plugins: PlanState['plugins']): PlanState {

@@ -4,8 +4,9 @@
 > 名字致敬《BanG Dream! It's MyGO!!!!!》——插件们各怀心思，但总有一个地方
 > 会把它们聚在一起。
 
-**版本：0.0.1-rc.1（2026-08-12）** · 与 `@deepseek-ai/dsh` rc.1 同版本线。
-上一线：0.2.x（HMR 受管插件 + 外部应用 + 远程更新，面板中心）。
+**版本：0.2.0-rc.0（2026-08-13，next 重做线）** · 包名统一 `@r05en1cu/dsh-*`，
+author/maintainers 声明 `r05En1cU`（发布留作 handoff）。上一线：0.2.x（HMR 受管
+插件 + 外部应用 + 远程更新，面板中心）与 0.0.1-rc.1（@deepseek-ai scope 内测线）。
 
 > **next 分支重做中（v0.2 线）**：强耦合依赖分析体系（resolver / dsh.lock/v1
 > lockfile / 不可变 package-store / 激活求解器）已退役——pnpm 安装状态是唯一
@@ -21,14 +22,14 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
 
 ### 核心功能定位（本次变更）
 
-| 维度 | 0.2.x（旧） | 0.0.1-rc.1（当前，next 重做后） |
+| 维度 | 0.2.x（旧） | 0.2.0-rc.0（当前，next 重做后） |
 |---|---|---|
 | 核心 | 面板中心的 HMR 生命周期 + 外部应用 + 远程更新 | 包治理核心：单插件版本选择 / 普通落盘还原 / 政策闸 / 符号快照 / 报告（求解器与 lockfile 已退役） |
 | 分发 | GitHub/文件夹/压缩包/官方 bundle tgz（面板装） | `mygo-pack/v1` 确定性打包 + CLI `pack/restore`（离线、原子、可审计） |
 | 依赖管理 | 兼容性告警为主 | manifest v3 兼容词汇直通（告警/预检面）+ 符号前置门 + 双存在告警；跨插件约束求解已删除 |
 | 运行期 | HMR 替换 | 七步替换协议 + swapPolicy + dispose 超时放弃等待（dispose-abandoned，不阻塞回滚） + requires 政策闸（INACTIVE/自动激活） |
 | 用户面 | 设置页「My 插件」面板 | 面板（扩展）+ `dsh --profile <p> mygo pack|restore|init`（扩展插件） |
-| 生态接口 | 直触 manager | `@deepseek-ai/dsh-mygo-api` 契约层（Cordis-free），外部工具 SHOULD 只依赖它 |
+| 生态接口 | 直触 manager | `@r05en1cu/dsh-mygo-api` 契约层（Cordis-free），外部工具 SHOULD 只依赖它 |
 
 ## 设计：轻量核心 + 一切皆扩展
 
@@ -44,14 +45,16 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
 
 ## 版本号与 npm 迁移
 
-- **改版本号**：`VERSION` 与各包 `package.json` 从 0.2.x 迁到 **0.0.1-rc.1**
-  （panel 0.1.0-rc.1），与 `@deepseek-ai/dsh@0.0.1-rc.1`、`@deepseek-ai/cordis@4.0.1-rc.1`
-  同线；安装器写入 `~/.dsh/mygo-self.json`（install.sh 退役后由 P3 新安装形态承担）。
+- **版本线（next 重做）**：`VERSION` 单源 **0.2.0-rc.0**，三包 `package.json`
+  版本同步；包名统一 `@r05en1cu/dsh-mygo-api` / `@r05en1cu/dsh-mygo` /
+  `@r05en1cu/dsh-mygo-cli`，`author`/`maintainers` 声明 `r05En1cU`。
+  安装器写入 `~/.dsh/mygo-self.json`（install.sh 退役后由 P3 新安装形态承担）。
 - **转 npm**：
   - 依赖与 peer 全部改用 `@deepseek-ai/cordis`（rc.1）+ rc peer 区间；
   - `publishConfig.access: restricted`；发布流水线 `scripts/publish-mygo.mjs`
-    （mygo-api / mygo / panel；CLI 待纳入）；
-  - 未发布的内部依赖在源码态用 `workspace:^`，发布后切换为 registry 区间；
+    （mygo-api / mygo / panel；CLI 待纳入），发布留作 handoff；
+  - 未发布的内部依赖在源码态用 `workspace:^`（@deepseek-ai/* 与 @r05en1cu/*
+    过渡豁免），发布后切换为 registry 区间；
   - 安装形态：next 分支重做中（install.sh 已退役；新形态走 dsh 0812 原生
     profile bundle / pnpm 机制，随 P3 落地，见 docs/next/）。
 

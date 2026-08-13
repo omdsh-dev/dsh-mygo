@@ -7,14 +7,14 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import z from 'schemastery'
-import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 import {
   DispatchMachine,
   EntrypointsTable,
   InMemoryRegistryStore,
   LifecycleEngine,
   resolvePluginManagerConfig,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 function plugin(
   id: string,

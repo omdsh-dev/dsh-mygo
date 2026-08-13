@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { resolvePluginManagerConfig } from '@deepseek-ai/dsh-mygo'
+import { resolvePluginManagerConfig } from '@r05en1cu/dsh-mygo'
 import { dshHomePath } from '@deepseek-ai/dsh-paths'
 
 describe('resolvePluginManagerConfig', () => {

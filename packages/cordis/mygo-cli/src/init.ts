@@ -2,7 +2,7 @@
  * init 骨架生成器（design-r5 §5；B16 落地）：以 plugin-template@87acac8
  * 的 vendored 资产为模板，做身份替换 + mygo 词汇增量，写盘前完成 B1 与
  * 模板对齐双重校验。全程不触网、不执行 install/prepare。
- * @module @dsh-external/dsh-mygo-cli/init
+ * @module @r05en1cu/dsh-mygo-cli/init
  */
 
 import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
@@ -11,8 +11,8 @@ import { basename, join, relative, resolve } from 'node:path'
 import {
   checkTemplateAlignment,
   parsePackageManifest,
-} from '@deepseek-ai/dsh-mygo'
-import type { PluginManifestV3 } from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
+import type { PluginManifestV3 } from '@r05en1cu/dsh-mygo'
 import { slugId } from './args.ts'
 
 /** 生成失败的稳定错误码（不进入结构化报告体系；CLI 翻译为退出码 1）。 */
@@ -117,6 +117,8 @@ export async function generatePluginSkeleton(
   const nextPkg: Record<string, unknown> = {
     ...templatePkg,
     name,
+    // 生成物默认作者声明（mygo 体系作者面；2026-08-13 起 r05En1cU）。
+    author: 'r05En1cU',
     dsh: {
       ...(typeof templatePkg.dsh === 'object' && templatePkg.dsh !== null && !Array.isArray(templatePkg.dsh)
         ? { ...(templatePkg.dsh as Record<string, unknown>) }

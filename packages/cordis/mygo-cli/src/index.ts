@@ -5,7 +5,7 @@
  * 注册面（L0）：读取官方启动器提供的 `ctx.cmdlineArgs` / `ctx.appExit`
  * （@deepseek-ai/dsh-cmdline 契约，apps/cli/profile-boot 挂载前提供）。
  * 被动语义：内层参数首 token 非 `mygo` 时 MUST 完全无副作用返回。
- * @module @dsh-external/dsh-mygo-cli
+ * @module @r05en1cu/dsh-mygo-cli
  */
 
 import {
@@ -13,7 +13,7 @@ import {
   PluginPackageManager,
   resolveCoreVersion,
   resolveMygoPaths,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 import { resolve } from 'node:path'
 import { parseCliArgs, type CliCommand } from './args.ts'
 import { InitError, generatePluginSkeleton } from './init.ts'
@@ -225,4 +225,4 @@ async function runInit(command: Extract<CliCommand, { readonly kind: 'init' }>):
 }
 
 /** 供包级 invariant 伴生与测试引用的稳定标识。 */
-export const CLI_PACKAGE_NAME = '@dsh-external/dsh-mygo-cli'
+export const CLI_PACKAGE_NAME = '@r05en1cu/dsh-mygo-cli'

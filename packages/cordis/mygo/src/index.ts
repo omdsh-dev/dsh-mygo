@@ -3,7 +3,7 @@
  * Config, and the §16 group-1/2 mount-time validation chain. The #12 skeleton
  * ships the typed service surface and validation; operation semantics land
  * with the schedule's later stages (#13 plan, #15 lifecycle engine).
- * @module @deepseek-ai/dsh-mygo
+ * @module @r05en1cu/dsh-mygo
  */
 
 export { PluginManagerConfigSchema, resolvePluginManagerConfig } from './config.ts'

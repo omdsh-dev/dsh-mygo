@@ -7,10 +7,10 @@
  * 只读：把 lock 与当前 profile 集合对账（missing / extra / drift /
  * 约束违例链），零修改。生命周期（install/upgrade/apply/reconcile）明确不做，
  * 但格式按可被未来求解器消费的方式设计。
- * @module @deepseek-ai/dsh-mygo/src/bom
+ * @module @r05en1cu/dsh-mygo/src/bom
  */
 
-import type { PluginCompatibility, PluginHandleInfo } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginCompatibility, PluginHandleInfo } from '@r05en1cu/dsh-mygo-api'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {

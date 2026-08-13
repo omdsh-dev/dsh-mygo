@@ -2,7 +2,7 @@
  * design-r4 真实验证轮（T32-T43 / RT1-RT5）：
  * 真实语料（F1/F3/F4 + F2 样本）打包 → 离线还原 → 篡改/路径/社区/原子性。
  * 全部离线；pack 安装路径不触网（T37 计数断言 + 全量 NODE_OPTIONS 拦截）。
- * @module @deepseek-ai/dsh-mygo/tests/e2e/pack-verification
+ * @module @r05en1cu/dsh-mygo/tests/e2e/pack-verification
  */
 
 import { execFile } from 'node:child_process'

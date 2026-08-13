@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from 'schemastery'
-import type { PluginDefinition, PluginHandleInfo, PluginHooks, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginHandleInfo, PluginHooks, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   DispatchMachine,
@@ -23,9 +23,9 @@ import {
   type PromptServiceLike,
   type SessionPersistenceProjection,
   type ToolRegistryLike,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
-declare module '@deepseek-ai/dsh-mygo-api' {
+declare module '@r05en1cu/dsh-mygo-api' {
   interface PluginEvents {
     'lifecycle/emit'(payload: { readonly n: number }): void
     'lifecycle/parallel'(payload: { readonly n: number }): void | Promise<void>

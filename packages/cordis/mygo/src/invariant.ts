@@ -1,13 +1,13 @@
 /**
- * Package-owned invariant companion for `@deepseek-ai/dsh-mygo`.
- * @module @deepseek-ai/dsh-mygo/invariant
+ * Package-owned invariant companion for `@r05en1cu/dsh-mygo`.
+ * @module @r05en1cu/dsh-mygo/invariant
  */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-mygo'
+const PACKAGE_NAME = '@r05en1cu/dsh-mygo'
 
 /** Cordis companion plugin name. */
 export const name = 'dsh-mygo-invariant'

@@ -8,7 +8,7 @@
  * install-denied / ceiling-exceeded / source-not-allowed / provenance-rejected
  * / fs-denied / network-denied / vars-denied / http-denied / emit-denied），
  * 求解体系退役带走 lockfile-mismatch / dependency-cycle / dispose-timeout。
- * @module @deepseek-ai/dsh-mygo-api/src/error
+ * @module @r05en1cu/dsh-mygo-api/src/error
  */
 
 /**

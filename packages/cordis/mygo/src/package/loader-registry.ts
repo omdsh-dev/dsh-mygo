@@ -1,7 +1,7 @@
 /**
  * loader 契约层（《第二轮增强》9/13 条）：mygo 核心只持有契约注册表，
  * 挂载语义（standard / mixin）经契约注入；v1 仅内置两个实现，禁止插件自举。
- * @module @deepseek-ai/dsh-mygo/src/package/loader-registry
+ * @module @r05en1cu/dsh-mygo/src/package/loader-registry
  */
 
 import type { LoaderDeclaration } from './manifest-v2.ts'

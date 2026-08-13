@@ -6,13 +6,13 @@
  * engine's disable protocol (SEC:148) and dispatch violations flow into the
  * audit stream (T5 classes) — and the composition teardown disposes the
  * engine and closes the domain.
- * @module @deepseek-ai/dsh-mygo/src/service
+ * @module @r05en1cu/dsh-mygo/src/service
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from 'schemastery'
 import type Schema from 'schemastery'
-import { fromCordisPlugin, PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
+import { fromCordisPlugin, PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type {
   InstallOptions,
   PluginDefinition,
@@ -24,7 +24,7 @@ import type {
   PluginModelResponse,
   RawCordisFunctionPlugin,
   PluginSource,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import { PluginManagerConfigSchema, resolvePluginManagerConfig } from './config.ts'
 import {
   buildBom,
@@ -505,7 +505,7 @@ export class PluginManagerService extends Service implements PluginManager {
   planInstall(declaration: {
     readonly id: string
     readonly version?: string
-    readonly compatibility?: import('@deepseek-ai/dsh-mygo-api').PluginCompatibility
+    readonly compatibility?: import('@r05en1cu/dsh-mygo-api').PluginCompatibility
     readonly provides?: readonly string[]
   }): Promise<PluginOperationPlan> {
     return this.requireEngine().planInstall(declaration)
@@ -636,7 +636,7 @@ export class PluginManagerService extends Service implements PluginManager {
     raw: RawCordisFunctionPlugin,
     config: unknown,
     id?: string,
-    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+    declaration?: import('@r05en1cu/dsh-mygo-api').RawPluginDeclaration,
   ): Promise<PluginHandleInfo> {
     return this.requireEngine().adoptRaw(raw, config, id, declaration)
   }
@@ -646,7 +646,7 @@ export class PluginManagerService extends Service implements PluginManager {
     raw: RawCordisFunctionPlugin,
     config: unknown,
     id: string,
-    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+    declaration?: import('@r05en1cu/dsh-mygo-api').RawPluginDeclaration,
   ): Promise<PluginHandleInfo> {
     return this.requireEngine().updateRaw(raw, config, id, declaration)
   }
@@ -655,7 +655,7 @@ export class PluginManagerService extends Service implements PluginManager {
   checkSupport(
     raw: RawCordisFunctionPlugin,
     id?: string,
-    declaration?: import('@deepseek-ai/dsh-mygo-api').RawPluginDeclaration,
+    declaration?: import('@r05en1cu/dsh-mygo-api').RawPluginDeclaration,
   ): Promise<PluginSupportCheck> {
     return this.requireEngine().checkSupport(raw, id, declaration)
   }
@@ -664,8 +664,8 @@ export class PluginManagerService extends Service implements PluginManager {
   checkCompatibility(declaration: {
     readonly id: string
     readonly version?: string
-    readonly compatibility?: import('@deepseek-ai/dsh-mygo-api').PluginCompatibility
-  }): import('@deepseek-ai/dsh-mygo-api').CompatibilityReport {
+    readonly compatibility?: import('@r05en1cu/dsh-mygo-api').PluginCompatibility
+  }): import('@r05en1cu/dsh-mygo-api').CompatibilityReport {
     return this.requireEngine().checkCompatibility(declaration)
   }
 

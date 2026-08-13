@@ -8,7 +8,7 @@
  * version (pnpm owns resolution). The `requires` alias normalizes into
  * `depends`; declaring the same key in both is a manifest error surfaced by
  * callers through {@link normalizeCompatibility}.
- * @module @deepseek-ai/dsh-mygo/src/compatibility
+ * @module @r05en1cu/dsh-mygo/src/compatibility
  */
 
 import type {
@@ -18,7 +18,7 @@ import type {
   CompatibilityWarning,
   CompositionFactProvider,
   PluginCompatibility,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import { isValidRange, matchesVersionRange } from './semver-range.ts'
 
 /** One plugin in an evaluated managed set. */

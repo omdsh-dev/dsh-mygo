@@ -4,7 +4,7 @@
  * row, hash-verified reads (a mismatch means "no snapshot" + warn), and boot
  * GC over orphan files. Snapshots are JSON-serializable by contract (§4-3/4),
  * so the file content is the JSON text of the captured state.
- * @module @deepseek-ai/dsh-mygo/src/snapshots
+ * @module @r05en1cu/dsh-mygo/src/snapshots
  */
 
 import { createHash } from 'node:crypto'

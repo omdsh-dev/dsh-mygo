@@ -1,14 +1,14 @@
 /**
  * T46：init 产物通过 B1 schema 校验 + 模板对齐断言 + 可被 pack/restore；
  * 非法包名/非空目录的失败路径。
- * @module @dsh-external/dsh-mygo-cli/tests/init
+ * @module @r05en1cu/dsh-mygo-cli/tests/init
  */
 
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkTemplateAlignment, parsePackageManifest, resolveMygoPaths } from '@deepseek-ai/dsh-mygo'
+import { checkTemplateAlignment, parsePackageManifest, resolveMygoPaths } from '@r05en1cu/dsh-mygo'
 import { internals, invokeCli } from '../src/index.ts'
 import { collector, mountCliComposition, seedStore } from './helpers.ts'
 import { packCorpus, startOfflineRegistry, type PackedPackage } from '../../mygo/tests/e2e/harness.ts'

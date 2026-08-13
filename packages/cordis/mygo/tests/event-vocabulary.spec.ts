@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { EVENT_VOCABULARY } from '@deepseek-ai/dsh-mygo'
+import { EVENT_VOCABULARY } from '@r05en1cu/dsh-mygo'
 
 describe('generated event vocabulary', () => {
   it('covers the harness tier and excludes the inherited tier', () => {

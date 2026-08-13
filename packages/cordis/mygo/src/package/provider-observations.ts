@@ -3,7 +3,7 @@
  * 「提供服务」，requires 报告候选集 MUST 来自运行期观测——谁在何时 provide
  * 过什么服务（插件 id、服务名、时间、生命周期状态）。随 fiber 生命周期清理；
  * 只读、不阻断，仅用于报告与诊断。
- * @module @deepseek-ai/dsh-mygo/src/package/provider-observations
+ * @module @r05en1cu/dsh-mygo/src/package/provider-observations
  */
 
 /** 提供者生命周期状态（供报告归因）。 */

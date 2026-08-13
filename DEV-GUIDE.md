@@ -24,10 +24,10 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 外部工具/插件作者
    │  SHOULD 只依赖
    ▼
-@deepseek-ai/dsh-mygo-api（契约层，Cordis-free）
+@r05en1cu/dsh-mygo-api（契约层，Cordis-free）
    │  fromCordisPlugin / toCordisPlugin / PluginError / definePlugin
    ▼
-@deepseek-ai/dsh-mygo（实现层，Cordis 桥接）
+@r05en1cu/dsh-mygo（实现层，Cordis 桥接）
    ├── package/*       包治理：manifest/版本选择/还原/扫描/打包
    ├── lifecycle.ts    生命周期引擎（七步替换、恢复、政策闸、提供表）
    ├── dispatch.ts     事件派发机（emit/waterfall/parallel/serial）
@@ -79,7 +79,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 ## 2. 插件契约（manifest v3）
 
 插件作者只需在 `package.json` 写 `dsh.mygo` 块（或 legacy
-`dsh.mygo.compatibility`），并 import `@deepseek-ai/dsh-mygo-api`：
+`dsh.mygo.compatibility`），并 import `@r05en1cu/dsh-mygo-api`：
 
 ```jsonc
 "dsh": { "mygo": {

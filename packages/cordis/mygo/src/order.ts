@@ -4,7 +4,7 @@
  * graph, computed per scope with Kahn's algorithm and a plugin-id min-heap.
  * The verdict is a pure function of the installed set — no install history,
  * config line order, import resolution order, or timing enters it.
- * @module @deepseek-ai/dsh-mygo/src/order
+ * @module @r05en1cu/dsh-mygo/src/order
  */
 
 import type {

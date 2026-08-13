@@ -10,8 +10,8 @@ const here = (path: string): string => fileURLToPath(new URL(path, import.meta.u
 export default defineConfig({
   resolve: {
     alias: {
-      '@deepseek-ai/dsh-mygo': here('../mygo/src/index.ts'),
-      '@deepseek-ai/dsh-mygo-api': here('../../core/mygo-api/src/index.ts'),
+      '@r05en1cu/dsh-mygo': here('../mygo/src/index.ts'),
+      '@r05en1cu/dsh-mygo-api': here('../../core/mygo-api/src/index.ts'),
       '@deepseek-ai/cordis': here('../../../vendor/cordis/src'),
       '@deepseek-ai/cordis-plugin-loader': here('../../../vendor/loader/src'),
       '@deepseek-ai/cordis-plugin-include': here('../../../vendor/include/src'),

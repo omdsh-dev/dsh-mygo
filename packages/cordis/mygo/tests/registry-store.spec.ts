@@ -13,8 +13,8 @@ import { pathToFileURL } from 'node:url'
 import {
   InMemoryRegistryStore,
   RegistryPersistence,
-} from '@deepseek-ai/dsh-mygo'
-import type { RegistryPersistenceOptions } from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
+import type { RegistryPersistenceOptions } from '@r05en1cu/dsh-mygo'
 
 function persistenceOptions(root: string): RegistryPersistenceOptions {
   return {

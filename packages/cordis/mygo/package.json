@@ -1,7 +1,7 @@
 {
-  "name": "@deepseek-ai/dsh-mygo",
+  "name": "@r05en1cu/dsh-mygo",
   "description": "Managed-plugin lifecycle and mount-time validation bridge between the dsh-mygo-api contract and Cordis",
-  "version": "0.0.1-rc.1",
+  "version": "0.2.0-rc.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "@r05en1cu/dsh-mygo-api": "workspace:^",
     "@deepseek-ai/dsh-paths": "workspace:^",
     "schemastery": "^3.18.0",
     "zod": "^4.4.3"
@@ -61,7 +61,7 @@
     "@types/node": "^22.20.0",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-paths": "workspace:^",
-    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "@r05en1cu/dsh-mygo-api": "workspace:^",
     "@deepseek-ai/dsh-skill": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
@@ -74,5 +74,9 @@
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
-  }
+  },
+  "author": "r05En1cU",
+  "maintainers": [
+    "r05En1cU"
+  ]
 }

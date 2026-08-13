@@ -2,7 +2,7 @@
  * Fake-env test surface: a faithful-in-shape `PluginEnv` implementation with
  * recording and trigger helpers, so plugin authors can unit-test a
  * `definePlugin` without importing Cordis.
- * @module @deepseek-ai/dsh-mygo-api/src/fake
+ * @module @r05en1cu/dsh-mygo-api/src/fake
  */
 
 import type { SessionId } from '@deepseek-ai/dsh-session/types'

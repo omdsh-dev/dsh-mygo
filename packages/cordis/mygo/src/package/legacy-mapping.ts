@@ -3,7 +3,7 @@
  * 迁移警告（告警级）；不阻断。字段映射：
  * id/version/main/engines.dsh/contributes/client → 规范字段
  * （id/version/entry/core/environment 元数据/client 报告信息）。
- * @module @deepseek-ai/dsh-mygo/src/package/legacy-mapping
+ * @module @r05en1cu/dsh-mygo/src/package/legacy-mapping
  */
 
 import type { PluginManifestV3 } from './manifest-v2.ts'

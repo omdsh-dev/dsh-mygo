@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { deriveOrders, deriveScopeOrder } from '@deepseek-ai/dsh-mygo'
+import { deriveOrders, deriveScopeOrder } from '@r05en1cu/dsh-mygo'
 import { plugin, SLOT_KINDS } from './derivation-fixtures.ts'
 
 function ordersFor(plugins: Parameters<typeof deriveOrders>[0]['plugins']): {

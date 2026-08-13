@@ -1,7 +1,7 @@
 /**
  * 加载挂载序（《收敛任务》不变量 3）：挂载顺序 MUST 等于所接受依赖图的拓扑序，
  * 被依赖者先完成初始化。环 MUST 拒绝。
- * @module @deepseek-ai/dsh-mygo/src/package/mount-order
+ * @module @r05en1cu/dsh-mygo/src/package/mount-order
  */
 
 export interface MountEdge {

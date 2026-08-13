@@ -4,7 +4,7 @@
  * file store and the audit JSONL for the same profile. The engine receives
  * this facade (or runs in-memory without it); the factory composition wiring
  * lands with #18.
- * @module @deepseek-ai/dsh-mygo/src/persistence
+ * @module @r05en1cu/dsh-mygo/src/persistence
  */
 
 import type { Domain, DomainFacility, DomainSpec } from '@deepseek-ai/dsh-storage-domain'

@@ -2,7 +2,7 @@
  * 符号级校验（《第二轮增强》第 7 条，最终事实源）：静态收集插件实际 import
  * 的外部具名符号，对照实际加载包版本的运行时 exports；符号缺失硬阻断，
  * 区间说谎但符号存在 → 警告放行。
- * @module @deepseek-ai/dsh-mygo/src/package/symbol-verify
+ * @module @r05en1cu/dsh-mygo/src/package/symbol-verify
  */
 
 import { readFile, readdir } from 'node:fs/promises'

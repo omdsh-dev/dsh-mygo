@@ -2,7 +2,7 @@
  * Shared pure-derivation fixtures for the #13 suites.
  */
 
-import type { PluginDeclarationInput, SlotKind } from '@deepseek-ai/dsh-mygo'
+import type { PluginDeclarationInput, SlotKind } from '@r05en1cu/dsh-mygo'
 
 /** A derived-position plugin with optional transform declarations. */
 export function plugin(

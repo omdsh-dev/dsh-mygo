@@ -11,10 +11,10 @@ const here = (path: string): string => fileURLToPath(new URL(path, import.meta.u
 export default defineConfig({
   resolve: {
     alias: {
-      '@deepseek-ai/dsh-mygo-api/invariant': here('./src/invariant.ts'),
+      '@r05en1cu/dsh-mygo-api/invariant': here('./src/invariant.ts'),
       '@deepseek-ai/cordis': here('../../../vendor/cordis/src'),
       '@deepseek-ai/dsh-invariants': here('../../support/invariants/src/index.ts'),
-      '@deepseek-ai/dsh-mygo-api': here('./src/index.ts'),
+      '@r05en1cu/dsh-mygo-api': here('./src/index.ts'),
       '@deepseek-ai/dsh-session/types': here('../../core/session/src/types.ts'),
     },
   },

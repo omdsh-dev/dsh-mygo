@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { PluginManagerService, resolvePluginManagerConfig } from '@deepseek-ai/dsh-mygo'
+import { PluginManagerService, resolvePluginManagerConfig } from '@r05en1cu/dsh-mygo'
 
 describe('PluginManagerService', () => {
   it('fails loud before initialization', async () => {

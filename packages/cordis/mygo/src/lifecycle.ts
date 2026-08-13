@@ -5,10 +5,10 @@
  * waits, and T3 persistence ordering through the {@link RegistryStore} seam.
  * T4 boot recovery revalidates every persisted row and mounts or quarantines
  * it. All errors are `PluginError` from the shared template vocabulary.
- * @module @deepseek-ai/dsh-mygo/src/lifecycle
+ * @module @r05en1cu/dsh-mygo/src/lifecycle
  */
 
-import { PluginError, formatPluginError, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError, fromCordisPlugin } from '@r05en1cu/dsh-mygo-api'
 import type {
   CompositionFactProvider,
   CompatibilityReport,
@@ -36,7 +36,7 @@ import type {
   PluginPromptSection,
   RawCordisFunctionPlugin,
   RawPluginDeclaration,
-} from '@deepseek-ai/dsh-mygo-api'
+} from '@r05en1cu/dsh-mygo-api'
 import type { Context } from '@deepseek-ai/cordis'
 import { isDeepStrictEqual } from 'node:util'
 

@@ -3,7 +3,7 @@
  * 只读、告警级、永不阻断。把 `engines.dsh` / `cordis` peer /
  * `@deepseek-ai/dsh-tools` peer 归一为 core 区间；cordis↔dsh 对照表外置
  * （EXT-1：权威来源未定，无法映射的 peer 输出「无法归一」告警，不猜测）。
- * @module @deepseek-ai/dsh-mygo/src/package/harvester
+ * @module @r05en1cu/dsh-mygo/src/package/harvester
  */
 
 /** cordis 版本 ↔ dsh 版本对照锚点（EXT-1；映射表外置可更新）。 */

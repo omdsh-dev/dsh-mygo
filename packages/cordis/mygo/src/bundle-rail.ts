@@ -11,7 +11,7 @@
  *   normal patch HMR.
  * - Every manifest / patch write is atomic (temp + rename) with a snapshot
  *   kept next to the file for rollback.
- * @module @deepseek-ai/dsh-mygo/src/bundle-rail
+ * @module @r05en1cu/dsh-mygo/src/bundle-rail
  */
 
 import { spawnSync } from 'node:child_process'
@@ -25,7 +25,7 @@ import {
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import * as yaml from 'js-yaml'
-import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginCompatibility } from '@r05en1cu/dsh-mygo-api'
 import type { PluginOperationPlan } from './types.ts'
 
 /** One row-level fact extracted from a bundle's `cordis.patch.yml`. */

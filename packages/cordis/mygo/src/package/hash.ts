@@ -2,7 +2,7 @@
  * 内容哈希工具（原 lockfile.ts 拆出的通用部分）：sha256/sha512 文件与文本
  * 哈希、npm integrity（SRI sha512-base64）解析。pack 完整性校验与还原事实
  * 文件共用；与 dsh.lock/v1 账本无关。
- * @module @deepseek-ai/dsh-mygo/src/package/hash
+ * @module @r05en1cu/dsh-mygo/src/package/hash
  */
 
 import { createHash } from 'node:crypto'

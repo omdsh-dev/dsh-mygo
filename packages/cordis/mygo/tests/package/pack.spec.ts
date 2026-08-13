@@ -4,7 +4,7 @@
  * 携带 (id, version) 钉死声明，还原为普通落盘（installRoot），成员级
  * sha512/fileSize 校验为 pack 自身完整性服务（保留）。
  * 字节级确定性断言与真实往返在 tests/e2e/pack-verification.spec.ts（T32+）。
- * @module @deepseek-ai/dsh-mygo/tests/package/pack
+ * @module @r05en1cu/dsh-mygo/tests/package/pack
  */
 
 import { execFile } from 'node:child_process'

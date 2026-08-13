@@ -3,7 +3,7 @@
  * 跨插件约束求解（resolver）、不可变 package-store 语义已退役；pnpm 安装
  * 状态为唯一真相源。保留面：manifest 解析、确定性 mygo-pack 打包/还原
  * （普通落盘）、单插件版本选择、符号/bundle 校验、requires 政策闸。
- * @module @deepseek-ai/dsh-mygo/src/package
+ * @module @r05en1cu/dsh-mygo/src/package
  */
 
 export { extractPlugin, loadPluginEntry } from './entry-loader.ts'

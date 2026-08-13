@@ -17,7 +17,7 @@ import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
-import type { PluginDefinition, PluginHooks, PluginSource } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginHooks, PluginSource } from '@r05en1cu/dsh-mygo-api'
 import {
   DispatchMachine,
   LifecycleEngine,
@@ -32,9 +32,9 @@ import {
   type PluginManagerConfig,
   type RegistryStore,
   type StatusRecord,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
-declare module '@deepseek-ai/dsh-mygo-api' {
+declare module '@r05en1cu/dsh-mygo-api' {
   interface PluginEvents {
     'lifecycle/emit'(payload: { readonly n: number }): void
     'lifecycle/parallel'(payload: { readonly n: number }): void | Promise<void>

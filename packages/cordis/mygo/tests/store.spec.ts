@@ -4,8 +4,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { InMemoryRegistryStore, type GenerationRecord, type StatusRecord } from '@deepseek-ai/dsh-mygo'
-import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
+import { InMemoryRegistryStore, type GenerationRecord, type StatusRecord } from '@r05en1cu/dsh-mygo'
+import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 
 function generation(overrides: Partial<GenerationRecord> = {}): GenerationRecord {
   return {

@@ -8,7 +8,7 @@
  * 该闸是运行期治理面（保留资产），删除本模块会拆掉 policy-gate 链路。
  * 结论：保留注册表与前置门；独立的细 epoch 指纹函数（fineEpoch）无生产
  * 消费者，已删除。P3 治理视图落地时重新评估是否并入 requires-gate。
- * @module @deepseek-ai/dsh-mygo/src/package/fine-epoch
+ * @module @r05en1cu/dsh-mygo/src/package/fine-epoch
  */
 
 /** 提供者符号投影快照（挂载时缓存；纯内存）。 */

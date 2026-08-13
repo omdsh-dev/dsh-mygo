@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { SnapshotStore } from '@deepseek-ai/dsh-mygo'
+import { SnapshotStore } from '@r05en1cu/dsh-mygo'
 
 describe('SnapshotStore', () => {
   it('writes atomically, returns pointer metadata, and reads the state back', async () => {

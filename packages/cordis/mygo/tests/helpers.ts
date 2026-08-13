@@ -3,7 +3,7 @@
  */
 
 import z from 'schemastery'
-import type { PluginDefinition } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition } from '@r05en1cu/dsh-mygo-api'
 
 /** A valid minimal plugin manifest; overrides replace whole fields. */
 export function fixturePlugin(overrides: Partial<PluginDefinition> = {}): PluginDefinition {

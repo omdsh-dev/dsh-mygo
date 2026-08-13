@@ -2,7 +2,7 @@
  * 相位化挂载编排器（《第二轮增强》10/11 条）：phase0 收集 mixin patch 并做
  * 冲突检测，phase1 在目标模块加载前应用 transform，phase2 按拓扑序挂载普通
  * 插件。目标已加载后注册 patch → 显式报错；全过程输出确定性 trace。
- * @module @deepseek-ai/dsh-mygo/src/package/mount-orchestrator
+ * @module @r05en1cu/dsh-mygo/src/package/mount-orchestrator
  */
 
 import { detectPatchConflicts, deterministicPatchOrder, patchTargetKey, type DeclaredPatch } from './patch-table.ts'

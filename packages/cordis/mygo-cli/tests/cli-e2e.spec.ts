@@ -3,7 +3,7 @@
  * 真实语料 → pack → 空 profile restore（RT1 口径经 CLI 复验）；
  * 篡改包经 CLI restore → 非零退出 + 指认文件 + 报告；自举（吃自己的狗粮）；
  * 被动语义。全程离线（本地 registry 桩 + fetch 拦截由全量回归统一覆盖）。
- * @module @dsh-external/dsh-mygo-cli/tests/cli-e2e
+ * @module @r05en1cu/dsh-mygo-cli/tests/cli-e2e
  */
 
 import { execFile } from 'node:child_process'
@@ -19,7 +19,7 @@ import {
   parsePackManifest,
   resolveMygoPaths,
   type PackManifest,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 import { apply, internals, invokeCli } from '../src/index.ts'
 import { collector, mountCliComposition, seedStore } from './helpers.ts'
 import { packCorpus, startOfflineRegistry } from '../../mygo/tests/e2e/harness.ts'
@@ -89,7 +89,7 @@ function cliCorpus(): CorpusPlugin {
   return {
     category: 'F1',
     id: 'dsh-mygo-cli',
-    name: '@dsh-external/dsh-mygo-cli',
+    name: '@r05en1cu/dsh-mygo-cli',
     dir: CLI_PKG_ROOT,
     entry: 'src/index.ts',
     trust: 'trusted',
@@ -99,7 +99,7 @@ function cliCorpus(): CorpusPlugin {
     // 仓库包清单依赖是 workspace:^（未发布）；打包期归一为 semver 占位，
     // 避免 communityDeps 区间校验把 pack 判无效（F1 同款处理）。
     packageJsonOverlay: {
-      dependencies: { '@deepseek-ai/dsh-mygo': '*' },
+      dependencies: { '@r05en1cu/dsh-mygo': '*' },
     },
     manifestOverlay: {
       id: 'dsh-mygo-cli',

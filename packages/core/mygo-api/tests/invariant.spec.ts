@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import InvariantService from '@deepseek-ai/dsh-invariants'
-import * as PluginApiInvariant from '@deepseek-ai/dsh-mygo-api/invariant'
+import * as PluginApiInvariant from '@r05en1cu/dsh-mygo-api/invariant'
 
 describe('dsh-mygo-api invariant companion', () => {
   it('registers package ownership and disposes cleanly', async () => {

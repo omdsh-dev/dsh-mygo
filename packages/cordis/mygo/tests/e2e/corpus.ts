@@ -2,7 +2,7 @@
  * E2E 夹具语料库注册表（验证轮 §1）：六类真实来源 + 信任分级 + 人工审阅记录。
  * 来源根默认 `$DSH_DEV/dsh-external-src`（可用 DSH_E2E_CORPUS_ROOT 覆盖）。
  * 体系外仓库（F2/F5/F6）已人工审阅入口文件；MUST NOT 执行其 install 脚本。
- * @module @deepseek-ai/dsh-mygo/tests/e2e/corpus
+ * @module @r05en1cu/dsh-mygo/tests/e2e/corpus
  */
 
 import { fileURLToPath } from 'node:url'

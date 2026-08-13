@@ -1,10 +1,10 @@
 /**
  * B7 结构化报告 → 终端/JSON 的确定性渲染（design-r5 §3）。
  * 所有 human 输出为固定字节序列（快照断言基础）；--json 时 stdout 只含唯一 JSON 文档。
- * @module @dsh-external/dsh-mygo-cli/render
+ * @module @r05en1cu/dsh-mygo-cli/render
  */
 
-import type { ResolutionReport, ServiceConflictEntry, ServiceResolutionReport } from '@deepseek-ai/dsh-mygo'
+import type { ResolutionReport, ServiceConflictEntry, ServiceResolutionReport } from '@r05en1cu/dsh-mygo'
 
 const PACK_CODES = new Set(['pack-invalid', 'pack-hash-mismatch'])
 

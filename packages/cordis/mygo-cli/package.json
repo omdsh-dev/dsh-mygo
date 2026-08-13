@@ -1,7 +1,7 @@
 {
-  "name": "@dsh-external/dsh-mygo-cli",
+  "name": "@r05en1cu/dsh-mygo-cli",
   "description": "mygo managed-plugin CLI: pack/restore/init as a dsh app plugin (design-r5)",
-  "version": "0.0.1-rc.1",
+  "version": "0.2.0-rc.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -45,7 +45,7 @@
     "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先在 checkout 构建（tsc -b + tsdown）'); process.exit(1)}\""
   },
   "dependencies": {
-    "@deepseek-ai/dsh-mygo": "workspace:^"
+    "@r05en1cu/dsh-mygo": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1"
@@ -53,8 +53,8 @@
   "devDependencies": {
     "@types/node": "^22.20.0",
     "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-mygo": "workspace:^",
-    "@deepseek-ai/dsh-mygo-api": "workspace:^",
+    "@r05en1cu/dsh-mygo": "workspace:^",
+    "@r05en1cu/dsh-mygo-api": "workspace:^",
     "schemastery": "^3.18.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
@@ -64,7 +64,7 @@
     "mygo": {
       "formatVersion": 1,
       "id": "dsh-mygo-cli",
-      "version": "0.0.1-rc.1",
+      "version": "0.2.0-rc.0",
       "entry": "lib/index.js",
       "requires": {},
       "core": "^0.0.1-rc.1",
@@ -76,5 +76,9 @@
         "platform": "cli"
       }
     }
-  }
+  },
+  "author": "r05En1cU",
+  "maintainers": [
+    "r05En1cU"
+  ]
 }

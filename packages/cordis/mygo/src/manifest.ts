@@ -2,11 +2,11 @@
  * Mount-time manifest validation (§16.2 group 1): a strict zod schema over
  * the `PluginDefinition` shape. Violations throw `manifest-invalid` with the
  * failing field path and the expected contract as details.
- * @module @deepseek-ai/dsh-mygo/src/manifest
+ * @module @r05en1cu/dsh-mygo/src/manifest
  */
 
-import { PluginError, formatPluginError } from '@deepseek-ai/dsh-mygo-api'
-import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
+import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
+import type { PluginCompatibility } from '@r05en1cu/dsh-mygo-api'
 import { z } from 'zod'
 import { normalizeCompatibility } from './compatibility.ts'
 

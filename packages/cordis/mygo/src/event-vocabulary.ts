@@ -11,7 +11,7 @@
  * `reads`/`writes`/`appends` names and intercept `returns` branches against
  * this artifact — no handwritten allowlist.
  *
- * @module @deepseek-ai/dsh-mygo/event-vocabulary
+ * @module @r05en1cu/dsh-mygo/event-vocabulary
  */
 
 /** One harness event's mount-time declaration vocabulary. */

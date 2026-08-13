@@ -2,7 +2,7 @@
  * E2E 真实验证轮（T21+）：S1-S9 场景矩阵。语料为六类真实来源
  * （见 corpus.ts 审阅记录）；离线 registry 桩 + 真实 tarball。
  * 故障分类纪律：impl-bug 直接修 / fixture-issue 修夹具 / design-gap 冲突上报。
- * @module @deepseek-ai/dsh-mygo/tests/e2e/e2e-verification
+ * @module @r05en1cu/dsh-mygo/tests/e2e/e2e-verification
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import z from 'schemastery'
 import { Context } from '@deepseek-ai/cordis'
-import type { PluginDefinition, PluginSource } from '@deepseek-ai/dsh-mygo-api'
-import { fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginSource } from '@r05en1cu/dsh-mygo-api'
+import { fromCordisPlugin } from '@r05en1cu/dsh-mygo-api'
 import { LifecycleEngine, type LifecycleEngineOptions } from '../../src/lifecycle.ts'
 import { DispatchMachine } from '../../src/dispatch.ts'
 import { resolvePluginManagerConfig } from '../../src/config.ts'

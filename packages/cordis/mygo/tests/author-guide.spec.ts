@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as storageSqlite from '@deepseek-ai/dsh-storage-sqlite'
-import PluginManagerService from '@deepseek-ai/dsh-mygo'
+import PluginManagerService from '@r05en1cu/dsh-mygo'
 import { GUARD_PLUGIN_CODE, MINIMAL_PLUGIN_CODE } from './author-examples.ts'
 
 declare module 'cordis' {
@@ -51,7 +51,7 @@ async function boot(managerRows: readonly string[]): Promise<Context> {
     ['@deepseek-ai/dsh-storage', Storage],
     ['@deepseek-ai/dsh-storage-sqlite', storageSqlite],
     ['@deepseek-ai/dsh-storage-domain', storageDomain],
-    ['@deepseek-ai/dsh-mygo', PluginManagerService],
+    ['@r05en1cu/dsh-mygo', PluginManagerService],
   ])
   ctx.loader.internal = {
     version: 'v2',
@@ -84,7 +84,7 @@ async function boot(managerRows: readonly string[]): Promise<Context> {
 
 function managerRow(extra: readonly string[]): readonly string[] {
   return [
-    "- name: '@deepseek-ai/dsh-mygo'",
+    "- name: '@r05en1cu/dsh-mygo'",
     '  config:',
     '    profile: author',
     '    stateRoot: state',

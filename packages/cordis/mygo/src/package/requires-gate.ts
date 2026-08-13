@@ -5,7 +5,7 @@
  * 服务版本 = 提供者插件 manifest 版本；符号投影 = 挂载时缓存快照（B13）；
  * 候选集 = 服务提供者观测记录（B19）。
  * 版本/符号维度为作者愿景级决策，超出最小语义（声明 + INACTIVE + 报告）。
- * @module @deepseek-ai/dsh-mygo/src/package/requires-gate
+ * @module @r05en1cu/dsh-mygo/src/package/requires-gate
  */
 
 import { matchesVersionRange } from '../semver-range.ts'

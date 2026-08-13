@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isValidRange, matchesVersionRange } from '@deepseek-ai/dsh-mygo'
-import { compareCodePoints, compareVersions, parseVersion } from '@deepseek-ai/dsh-mygo'
+import { isValidRange, matchesVersionRange } from '@r05en1cu/dsh-mygo'
+import { compareCodePoints, compareVersions, parseVersion } from '@r05en1cu/dsh-mygo'
 
 describe('semver range matcher', () => {
   it('matches any-range and exact pins', () => {

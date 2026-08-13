@@ -8,13 +8,13 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import z from 'schemastery'
-import type { PluginDefinition, PluginEnv } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginDefinition, PluginEnv } from '@r05en1cu/dsh-mygo-api'
 import {
   DispatchMachine,
   InMemoryRegistryStore,
   LifecycleEngine,
   resolvePluginManagerConfig,
-} from '@deepseek-ai/dsh-mygo'
+} from '@r05en1cu/dsh-mygo'
 
 function hostEffectPlugin(
   id: string,

@@ -6,7 +6,7 @@
  * an undefined key stay inert and inspectable, never adapted. Order is the
  * registration order of the declaring plugins; withdrawal is per-generation
  * and atomic with HMR swaps.
- * @module @deepseek-ai/dsh-mygo/src/entrypoints
+ * @module @r05en1cu/dsh-mygo/src/entrypoints
  */
 
 import type { Context } from '@deepseek-ai/cordis'

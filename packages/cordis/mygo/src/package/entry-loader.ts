@@ -1,7 +1,7 @@
 /**
  * 插件入口动态加载（npm 发版兼容约束 1）：lib 产物 / bundler 处理后仍可用，
  * 不依赖 tsx；ESM 与 CJS 入口统一经 `import(fileURL)` 加载。
- * @module @deepseek-ai/dsh-mygo/src/package/entry-loader
+ * @module @r05en1cu/dsh-mygo/src/package/entry-loader
  */
 
 import { pathToFileURL } from 'node:url'

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AuditLog } from '@deepseek-ai/dsh-mygo'
+import { AuditLog } from '@r05en1cu/dsh-mygo'
 
 async function freshLog(options: { maxBytes?: number; keepFiles?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-audit-'))
