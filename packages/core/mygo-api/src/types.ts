@@ -9,32 +9,9 @@
 
 import type Schema from 'schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { PluginErrorCode } from './error.ts'
 
 /** A schemastery schema, the manifest config DSL every harness plugin shares. */
 export type Schemastery = Schema
-
-/** One action an activation solver proposes. */
-export interface ActivationAction {
-  readonly op: 'enable' | 'disable' | 'install' | 'replace' | 'suggest-update'
-  readonly id: string
-  readonly kind: 'user-requested' | 'required-by' | 'conflict-resolution' | 'advisory'
-  /** Human-readable reason; hard actions carry the constraint chain. */
-  readonly reason: string
-  readonly chain?: readonly CompatibilityEdge[]
-}
-
-/** Full outcome of one activation solve. */
-export interface ActivationPlan {
-  readonly accepted: boolean
-  readonly actions: readonly ActivationAction[]
-  readonly warnings: readonly string[]
-  readonly error?: {
-    readonly code: PluginErrorCode
-    readonly message: string
-    readonly details?: Readonly<Record<string, unknown>>
-  }
-}
 
 /** File-access mode vocabulary: `write` implies `read` on the same path. */
 export type FileAccessMode = 'read' | 'write'
@@ -312,8 +289,8 @@ export interface PluginEnv {
    * Emit one plugin-declared custom event (an exact `events` entry or a
    * name matching a declared `namespace/*` pattern). The emit routes through
    * the dispatch machine so managed listeners and real host listeners fire;
-   * emitting an event outside the plugin's declarations throws
-   * `emit-denied` before any dispatch.
+   * emitting an event outside the plugin's declarations throws before any
+   * dispatch.
    * @param event - custom event name to emit.
    * @param payload - optional event payload.
    */
@@ -375,8 +352,6 @@ export interface PluginEnv {
   plugins(): readonly PluginHandleInfo[]
   /**
    * Install one dynamic plugin (inline/npm source) through the manager.
-   * Requires the deployment `dynamicInstall` grant (declared via
-   * `dynamicInstallAccess`); without it the call throws `install-denied`.
    * @param source - inline or npm plugin source.
    * @param options - initial config (validated against the manifest schema).
    * @returns the installed plugin handle.
@@ -985,8 +960,6 @@ export interface InstallOptions {
   readonly origin?: InstallOrigin
   /** Initial config validated against the manifest config schema. */
   readonly config?: unknown
-  /** Resolve required-by activation actions (e.g. enable disabled deps) before installing. */
-  readonly autoResolve?: boolean
 }
 
 /** Read-only handle for one managed plugin (§15.2). */
@@ -1019,8 +992,4 @@ export interface PluginHandleInfo {
   readonly entrypoints?: readonly string[]
   /** Declared package-level constraints. */
   readonly compatibility?: PluginCompatibility
-  /** BOM 对账：entry 文件 sha512（hex，C5/Rev-2）。 */
-  readonly entrySha512?: string
-  /** BOM 对账：entry 文件字节数（G10）。 */
-  readonly entryFileSize?: number
 }

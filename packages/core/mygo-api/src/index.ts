@@ -21,8 +21,6 @@ export type {
   FakeProvidedRecord,
 } from './fake.ts'
 export type {
-  ActivationAction,
-  ActivationPlan,
   DeactivateReason,
   CompatibilityEdge,
   CompatibilityReport,

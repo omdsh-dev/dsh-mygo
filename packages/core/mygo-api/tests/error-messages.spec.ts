@@ -2,6 +2,11 @@
  * Message-template contract: every §16.2 code's message must name every
  * "naming X" entity the spec attaches to that code. Each case supplies those
  * entities as details and asserts each appears in the generated message.
+ *
+ * CD-1 统一（2026-08-13）：零生产者死码（grant-missing / install-denied /
+ * ceiling-exceeded / source-not-allowed / provenance-rejected / fs-denied /
+ * network-denied / vars-denied / http-denied / emit-denied）已删除；
+ * ResolutionReport 的报告码（组 7）并入本表。
  */
 
 import { describe, expect, it } from 'vitest'
@@ -52,34 +57,9 @@ const CASES: readonly MessageCase[] = [
     named: ['prepend'],
   },
   {
-    code: 'grant-missing',
-    details: { grant: 'intercept' },
-    named: ['intercept'],
-  },
-  {
-    code: 'install-denied',
-    details: { grant: 'dynamicInstall', plugin: 'plugin-a' },
-    named: ['dynamicInstall', 'plugin-a'],
-  },
-  {
-    code: 'ceiling-exceeded',
-    details: { level: 'intercept', channel: 'model', ceiling: 'transform' },
-    named: ['intercept', 'transform', 'model', 'grants cannot exceed the ceiling'],
-  },
-  {
-    code: 'source-not-allowed',
-    details: { channel: 'model', source: 'npm' },
-    named: ['model', 'npm'],
-  },
-  {
     code: 'protected-field',
     details: { field: 'tools/post-execute.result' },
     named: ['tools/post-execute.result'],
-  },
-  {
-    code: 'provenance-rejected',
-    details: { source: '@scope/pkg', missing: 'provenance attestation' },
-    named: ['@scope/pkg', 'provenance attestation'],
   },
   {
     code: 'write-conflict',
@@ -203,21 +183,6 @@ const CASES: readonly MessageCase[] = [
     named: ['tool', '50'],
   },
   {
-    code: 'fs-denied',
-    details: { plugin: 'plugin-a', path: '/etc/passwd', mode: 'write' },
-    named: ['plugin-a', '/etc/passwd', 'write'],
-  },
-  {
-    code: 'network-denied',
-    details: { plugin: 'plugin-a', url: 'https://example.dev/api' },
-    named: ['plugin-a', 'https://example.dev/api'],
-  },
-  {
-    code: 'vars-denied',
-    details: { plugin: 'plugin-a', name: 'GIT_AUTHOR_NAME', mode: 'write' },
-    named: ['plugin-a', 'GIT_AUTHOR_NAME', 'write'],
-  },
-  {
     code: 'llm-denied',
     details: { plugin: 'plugin-a', model: 'probe-model' },
     named: ['plugin-a', 'probe-model'],
@@ -227,15 +192,36 @@ const CASES: readonly MessageCase[] = [
     details: { plugin: 'plugin-a', command: 'gh' },
     named: ['plugin-a', 'gh'],
   },
+  // 组 7：包治理报告码（CD-1 并入）
   {
-    code: 'http-denied',
-    details: { plugin: 'plugin-a', path: '/admin' },
-    named: ['plugin-a', '/admin'],
+    code: 'resolve-failed',
+    details: { package: '@scope/pkg', reasons: ['没有候选版本满足区间 ^2.0.0'] },
+    named: ['@scope/pkg', '没有候选版本满足区间 ^2.0.0'],
   },
   {
-    code: 'emit-denied',
-    details: { plugin: 'plugin-a', event: 'pi-ext/secret' },
-    named: ['plugin-a', 'pi-ext/secret'],
+    code: 'bundle-invalid',
+    details: { plugin: 'plugin-a', problems: ['bundles.x.path 逃逸'] },
+    named: ['plugin-a', 'bundles.x.path 逃逸'],
+  },
+  {
+    code: 'symbol-missing',
+    details: { plugin: 'plugin-a', symbols: ['cordis#Context'] },
+    named: ['plugin-a', 'cordis#Context'],
+  },
+  {
+    code: 'policy-rejected',
+    details: { plugin: 'plugin-a', violations: ['service-missing: voice-chat'] },
+    named: ['plugin-a', 'service-missing: voice-chat'],
+  },
+  {
+    code: 'pack-invalid',
+    details: { problems: ['plugins 数组为空'] },
+    named: ['plugins 数组为空'],
+  },
+  {
+    code: 'pack-hash-mismatch',
+    details: { files: ['files/0.tgz'] },
+    named: ['files/0.tgz'],
   },
 ]
 
@@ -243,7 +229,7 @@ describe('PluginError message templates (§16.2)', () => {
   it('covers every transcribed code exactly once', () => {
     const codes = CASES.map(entry => entry.code)
     expect(new Set(codes).size).toBe(codes.length)
-    expect(codes).toHaveLength(43)
+    expect(codes).toHaveLength(39)
   })
 
   it('names every "naming X" entity for each code', () => {
@@ -259,18 +245,18 @@ describe('PluginError message templates (§16.2)', () => {
 
 describe('PluginError', () => {
   it('carries name, code, details, and pluginId', () => {
-    const error = new PluginError('fs-denied', 'filesystem denied', { path: '/x' }, 'plugin-a')
+    const error = new PluginError('pack-invalid', 'pack invalid', { problems: [] }, 'plugin-a')
     expect(error).toBeInstanceOf(Error)
     expect(error).toBeInstanceOf(PluginError)
     expect(error.name).toBe('PluginError')
-    expect(error.code).toBe('fs-denied')
-    expect(error.message).toBe('filesystem denied')
-    expect(error.details).toEqual({ path: '/x' })
+    expect(error.code).toBe('pack-invalid')
+    expect(error.message).toBe('pack invalid')
+    expect(error.details).toEqual({ problems: [] })
     expect(error.pluginId).toBe('plugin-a')
   })
 
   it('defaults details to an empty record and pluginId to undefined', () => {
-    const error = new PluginError('network-denied', 'network denied')
+    const error = new PluginError('resolve-failed', 'resolve failed')
     expect(error.details).toEqual({})
     expect(error.pluginId).toBeUndefined()
   })

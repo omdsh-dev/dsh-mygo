@@ -1,7 +1,13 @@
 /**
- * The plugin management error vocabulary: one error class, a closed code table
- * of 42 codes in six groups, and message templates that name every machine
- * entity the spec §16.2 attaches to each code.
+ * The plugin management error vocabulary: one error class, a closed code
+ * table, and message templates that name every machine entity the spec
+ * §16.2 attaches to each code.
+ *
+ * CD-1 统一（2026-08-13，next 分支）：ResolutionReport 的有生产者码并入本表
+ * （组 7），两侧的码表从此同源；零生产者的死码已删除（grant-missing /
+ * install-denied / ceiling-exceeded / source-not-allowed / provenance-rejected
+ * / fs-denied / network-denied / vars-denied / http-denied / emit-denied），
+ * 求解体系退役带走 lockfile-mismatch / dependency-cycle / dispose-timeout。
  * @module @deepseek-ai/dsh-mygo-api/src/error
  */
 
@@ -29,18 +35,8 @@ export type PluginErrorCode =
   /** direct EventOptions (e.g. prepend) passed where manifest position is the only entry; details: option */
   | 'unsupported-event-option'
   // 组 2：权限与授权（mount 期）
-  /** declared intercept/claims/fileAccess/networkAccess without a grants entry; details: grant */
-  | 'grant-missing'
-  /** runtime dynamic-install call without the deployment grant; details: grant + plugin */
-  | 'install-denied'
-  /** declared level above the channel ceiling; details: level + channel + ceiling */
-  | 'ceiling-exceeded'
-  /** source type not accepted by the channel; details: channel + source */
-  | 'source-not-allowed'
   /** writes hits a protected field; details: field */
   | 'protected-field'
-  /** scope not trusted and no attestation; details: source + missing */
-  | 'provenance-rejected'
   // 组 3：关系冲突（install/replace 期，对当前 peer 集求值）
   /** two plugins write the same property on intersecting scopes; details: a + b + property + scope */
   | 'write-conflict'
@@ -91,20 +87,23 @@ export type PluginErrorCode =
   /** registration quotas (100 listeners / 50 tools / 20 services) exceeded; details: kind + limit */
   | 'quota-effects-exceeded'
   // 组 6：能力拒绝（env.* 边界，同步 throw，先于任何实际操作）
-  /** path/mode outside fileAccess grants after write⊃read evaluation; details: plugin + path + mode */
-  | 'fs-denied'
-  /** no networkAccess grant or URL outside the allowlist; details: plugin + url */
-  | 'network-denied'
-  /** env var name outside varsAccess grants (read or write); details: plugin + name + mode */
-  | 'vars-denied'
   /** model call outside llmAccess grants or with no host seam; details: plugin + model */
   | 'llm-denied'
   /** subprocess command outside execAccess grants or with no host seam; details: plugin + command */
   | 'exec-denied'
-  /** HTTP route outside httpAccess grants; details: plugin + path */
-  | 'http-denied'
-  /** custom event emit outside the plugin's declared events/namespaces; details: plugin + event */
-  | 'emit-denied'
+  // 组 7：包治理报告（CD-1 并入：ResolutionReport 码，summary 为自由文本报告）
+  /** registry 候选集内没有可安装版本；details: package + reasons */
+  | 'resolve-failed'
+  /** 安装期 bundles 声明校验失败（扫描/未声明内嵌包）；details: plugin + problems */
+  | 'bundle-invalid'
+  /** 引用了提供方不存在的符号；details: plugin + symbols */
+  | 'symbol-missing'
+  /** requires 政策闸拒绝（服务缺失/提供者版本不符）；details: plugin + violations */
+  | 'policy-rejected'
+  /** pack 清单/成员预检失败；details: problems */
+  | 'pack-invalid'
+  /** pack vendored 文件 sha512/fileSize 失配；details: files */
+  | 'pack-hash-mismatch'
 
 /**
  * The single error class of the plugin management surface. `message` is
@@ -159,18 +158,8 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     `name ${render(details.name)} is outside the payload-only boundary (${render(details.boundary)})`,
   'unsupported-event-option': details =>
     `unsupported event option ${render(details.option)}: manifest position is the only listener-option entry`,
-  'grant-missing': details =>
-    `missing grant ${render(details.grant)} for declared access`,
-  'install-denied': details =>
-    `plugin ${render(details.plugin)} is not granted dynamicInstall (grant ${render(details.grant)})`,
-  'ceiling-exceeded': details =>
-    `declared level ${render(details.level)} exceeds channel ceiling ${render(details.ceiling)} for channel ${render(details.channel)}; grants cannot exceed the ceiling`,
-  'source-not-allowed': details =>
-    `source ${render(details.source)} is not allowed for channel ${render(details.channel)}`,
   'protected-field': details =>
     `protected field ${render(details.field)} is not writable`,
-  'provenance-rejected': details =>
-    `provenance rejected for ${render(details.source)}: missing ${render(details.missing)}`,
   'write-conflict': details =>
     `write conflict on property ${render(details.property)} between plugins ${render(details.a)} and ${render(details.b)} (scope ${render(details.scope)})`,
   'intercept-branch-conflict': details =>
@@ -221,20 +210,22 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     'CPU quota exceeded for own-time execution; dispatch skipped',
   'quota-effects-exceeded': details =>
     `registration quota exceeded for ${render(details.kind)}: limit ${render(details.limit)}`,
-  'fs-denied': details =>
-    `filesystem access denied for plugin ${render(details.plugin)}: ${render(details.mode)} on ${render(details.path)} is outside fileAccess`,
-  'network-denied': details =>
-    `network access denied for plugin ${render(details.plugin)}: ${render(details.url)} is outside networkAccess`,
-  'vars-denied': details =>
-    `environment variable access denied for plugin ${render(details.plugin)}: ${render(details.mode)} on ${render(details.name)} is outside varsAccess`,
   'llm-denied': details =>
     `model call denied for plugin ${render(details.plugin)}: model ${render(details.model)} is outside llmAccess`,
   'exec-denied': details =>
     `subprocess execution denied for plugin ${render(details.plugin)}: command ${render(details.command)} is outside execAccess`,
-  'http-denied': details =>
-    `http route denied for plugin ${render(details.plugin)}: path ${render(details.path)} is outside httpAccess`,
-  'emit-denied': details =>
-    `event emit denied for plugin ${render(details.plugin)}: ${render(details.event)} is outside the declared events`,
+  'resolve-failed': details =>
+    `resolve failed for ${render(details.package)}: ${render(details.reasons)}`,
+  'bundle-invalid': details =>
+    `bundle declarations invalid for ${render(details.plugin)}: ${render(details.problems)}`,
+  'symbol-missing': details =>
+    `missing symbols for ${render(details.plugin)}: ${render(details.symbols)}`,
+  'policy-rejected': details =>
+    `requires policy rejected for ${render(details.plugin)}: ${render(details.violations)}`,
+  'pack-invalid': details =>
+    `pack invalid: ${render(details.problems)}`,
+  'pack-hash-mismatch': details =>
+    `pack file hash mismatch: ${render(details.files)}`,
 }
 
 /**
