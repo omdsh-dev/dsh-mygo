@@ -11,6 +11,16 @@
 - 禁止修改 DSH 源码：vendor 零补丁；安装形态写入只走 install.sh
   （dsh_dev/AGENTS.md 例外 #1），不直接改 checkout。
 
+## next 分支重做约定（2026-08-13 登记）
+
+- `next` 分支为 v0.2 重做线：包名统一 `@r05en1cu/dsh-*`，`author` /
+  `maintainers` 声明 `r05En1cU`；发布留作 handoff（dsh_dev/AGENTS.md 发布
+  禁令条款），publish-mygo.mjs 只改造不执行。
+- 强耦合依赖分析体系（resolver / dsh.lock / 冲突求解）退役，存档提交
+  `43bb296`（main）；pnpm 安装状态为唯一真相源，mygo 账本降级为治理视图。
+- 安装/分发走 dsh 0812 原生 profile bundle 机制，install.sh 随 P1 退役后
+  dsh_dev/AGENTS.md 例外 #1 同步删除。
+
 ## 包级规范（对齐官方 plugin-template，npm SDK 形态）
 
 - 每包 package.json 提供 build / typecheck / test / verify:self-contained /
