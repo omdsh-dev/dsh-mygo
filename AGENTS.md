@@ -8,8 +8,9 @@
 
 - 依赖只来自官方 NPM SDK（@deepseek-ai/* 私有 scope 或公开 npm 包）；
   workspace:^ 为发布前过渡态（收口条件见 dsh_dev/AGENTS.md 例外 #2）。
-- 禁止修改 DSH 源码：vendor 零补丁；安装形态写入只走 install.sh
-  （dsh_dev/AGENTS.md 例外 #1），不直接改 checkout。
+- 禁止修改 DSH 源码：vendor 零补丁；install.sh 已随 P1 退役（2026-08-13），
+  开发态同步 = 手动复制三个包目录到 checkout（只允许写
+  `packages/{core,cordis}/` 下 mygo 相关目录），新安装形态随 P3 落地。
 
 ## next 分支重做约定（2026-08-13 登记）
 
@@ -20,10 +21,12 @@
   GitHub repo + pnpm git spec 安装形态（`dsh plugin add github:<owner>/
   <repo>#<commit>&path:/packages/<pkg>`），依赖 push 禁令解除后生效
   （2026-08-13 用户裁决）。
-- 强耦合依赖分析体系（resolver / dsh.lock / 冲突求解）退役，存档提交
-  `43bb296`（main）；pnpm 安装状态为唯一真相源，mygo 账本降级为治理视图。
-- 安装/分发走 dsh 0812 原生 profile bundle 机制，install.sh 随 P1 退役后
-  dsh_dev/AGENTS.md 例外 #1 同步删除。
+- 强耦合依赖分析体系（resolver / dsh.lock / 冲突求解 / 激活求解器）已退役
+  （P1，2026-08-13）：存档提交 `43bb296`（main）；pnpm 安装状态为唯一真相源，
+  mygo 账本降级为治理视图（P3）。
+- 安装/分发走 dsh 0812 原生 profile bundle 机制；install.sh、
+  vendor/cordis-alias、vendor/PATCHES.md 已随 P1 删除，dsh_dev/AGENTS.md
+  例外 #1 同步失效。
 
 ## 包级规范（对齐官方 plugin-template，npm SDK 形态）
 

@@ -7,30 +7,35 @@
 **版本：0.0.1-rc.1（2026-08-12）** · 与 `@deepseek-ai/dsh` rc.1 同版本线。
 上一线：0.2.x（HMR 受管插件 + 外部应用 + 远程更新，面板中心）。
 
+> **next 分支重做中（v0.2 线）**：强耦合依赖分析体系（resolver / dsh.lock/v1
+> lockfile / 不可变 package-store / 激活求解器）已退役——pnpm 安装状态是唯一
+> 真相源，mygo 账本降级为治理视图（P3 落地）。安装形态重做中（install.sh 已
+> 退役，新形态随 P3 提供）。
+
 ## 这是什么
 
-mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安装/求解/锁定/启停/
-替换/恢复语义、依赖图与符号级校验、打包分发、结构化失败报告，以及运行期政策
-闸（requires）与细粒度 epoch 反应式重载。**核心不做产品功能**——CLI、web 面板、
-外部存储、未来的 loader 都是插件/扩展。
+mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安装/启停/替换/恢复
+语义、符号级校验、确定性打包分发、结构化失败报告，以及运行期政策闸（requires）
+与挂载时符号快照反应式重载。**核心不做产品功能**——CLI、web 面板、外部存储、
+未来的 loader 都是插件/扩展。
 
 ### 核心功能定位（本次变更）
 
-| 维度 | 0.2.x（旧） | 0.0.1-rc.1（当前） |
+| 维度 | 0.2.x（旧） | 0.0.1-rc.1（当前，next 重做后） |
 |---|---|---|
-| 核心 | 面板中心的 HMR 生命周期 + 外部应用 + 远程更新 | 包治理核心：求解器 / lockfile / 不可变 store / 政策闸 / 细 epoch / 报告 |
+| 核心 | 面板中心的 HMR 生命周期 + 外部应用 + 远程更新 | 包治理核心：单插件版本选择 / 普通落盘还原 / 政策闸 / 符号快照 / 报告（求解器与 lockfile 已退役） |
 | 分发 | GitHub/文件夹/压缩包/官方 bundle tgz（面板装） | `mygo-pack/v1` 确定性打包 + CLI `pack/restore`（离线、原子、可审计） |
-| 依赖管理 | 兼容性告警为主 | manifest v3 插件图 + 确定性全序求解 + 符号前置门 + 双存在告警 |
+| 依赖管理 | 兼容性告警为主 | manifest v3 兼容词汇直通（告警/预检面）+ 符号前置门 + 双存在告警；跨插件约束求解已删除 |
 | 运行期 | HMR 替换 | 七步替换协议 + swapPolicy + dispose 超时放弃等待（dispose-abandoned，不阻塞回滚） + requires 政策闸（INACTIVE/自动激活） |
 | 用户面 | 设置页「My 插件」面板 | 面板（扩展）+ `dsh --profile <p> mygo pack|restore|init`（扩展插件） |
 | 生态接口 | 直触 manager | `@deepseek-ai/dsh-mygo-api` 契约层（Cordis-free），外部工具 SHOULD 只依赖它 |
 
 ## 设计：轻量核心 + 一切皆扩展
 
-- **核心**（`packages/cordis/mygo`）：manifest/求解/锁定/存储/校验/政策闸/报告/
+- **核心**（`packages/cordis/mygo`）：manifest/版本选择/还原/校验/政策闸/报告/
   生命周期引擎。零产品 UI，零宿主耦合（通过 `mygo-api` 契约与 Cordis 桥接）。
 - **契约层**（`packages/core/mygo-api`）：Cordis-free 的插件作者面
-  （`definePlugin`、manifest/environment 类型、`PluginError` 43 码、fake-env）。
+  （`definePlugin`、manifest/environment 类型、`PluginError` 39 码、fake-env）。
 - **扩展**：
   - `packages/cordis/mygo-cli` —— 用户命令面（pack/restore/init），本身是 mygo 受管插件；
   - `vendor/dsh-mygo-panel` —— web 设置页「My 插件」面板（`settings.section` 槽 + `/api/mygo/*`）；
@@ -41,30 +46,21 @@ mygo 把 DSH 的插件从「裸 Cordis 行」升级为「受管对象」：安�
 
 - **改版本号**：`VERSION` 与各包 `package.json` 从 0.2.x 迁到 **0.0.1-rc.1**
   （panel 0.1.0-rc.1），与 `@deepseek-ai/dsh@0.0.1-rc.1`、`@deepseek-ai/cordis@4.0.1-rc.1`
-  同线；`install.sh` 写入 `~/.dsh/mygo-self.json`。
+  同线；安装器写入 `~/.dsh/mygo-self.json`（install.sh 退役后由 P3 新安装形态承担）。
 - **转 npm**：
   - 依赖与 peer 全部改用 `@deepseek-ai/cordis`（rc.1）+ rc peer 区间；
   - `publishConfig.access: restricted`；发布流水线 `scripts/publish-mygo.mjs`
     （mygo-api / mygo / panel；CLI 待纳入）；
   - 未发布的内部依赖在源码态用 `workspace:^`，发布后切换为 registry 区间；
-  - 安装形态：源码 checkout 用 `install.sh`（复制 + 构建 + 回退链接 +
-    `DSH_SKIP_PNPM=1` 可选）；npm rc.1 profile 用 `file:/link:` 或 profile patch
-    预置（design-r5 §1.3 口径）。
+  - 安装形态：next 分支重做中（install.sh 已退役；新形态走 dsh 0812 原生
+    profile bundle / pnpm 机制，随 P3 落地，见 docs/next/）。
 
 ## 快速开始
 
-### 源码 checkout（0811+）
-
-```sh
-cd <dsh-checkout>                 # 0811 快照（如 test-r05En1cU-0811）
-cd dsh-mygo
-DSH_CHECKOUT=<dsh-checkout> ./install.sh          # 复制/接线/构建 mygo 四包
-cd <dsh-checkout> && npm run build                # host + client + web 全量构建
-dsh web --port 3080                               # lib 生产模式启动
-```
-
-> 0811 源码经 tsx 直跑不兼容（`FiberState` const enum），请使用构建产物
-> （`apps/cli/lib/bin.js` 或仓库 `bin/dsh`）。
+> 安装形态重做中：next 分支已退役 install.sh，新安装形态随 P3 落地。
+> 开发态验证：把三个包目录（packages/core/mygo-api、packages/cordis/mygo、
+> packages/cordis/mygo-cli）同步进 dsh 0811+ checkout 对应路径后，在各包目录
+> 执行 `pnpm run verify:self-contained && pnpm run typecheck && pnpm test && pnpm run build`。
 
 ### 命令面（CLI 扩展插件）
 
@@ -75,7 +71,7 @@ dsh --profile web mygo init <name> [--id <id>] [--dir <dir>] [--json]
 ```
 
 CLI 本身是 mygo 受管插件：可经面板 folder 安装激活，也可出现在打包产物中
-（自举：还原后 store 入口与源码逐字节一致）。
+（自举：还原后落盘入口与源码逐字节一致）。
 
 ### Web 面板
 
@@ -83,21 +79,20 @@ CLI 本身是 mygo 受管插件：可经面板 folder 安装激活，也可出�
 BOM 导出、远程更新（外部应用面为旧扩展，按需保留）。
 
 > 治理差异提示：面板 folder 安装走静态装载（adoptRaw），账目 = 桥接行 + 安装
-> 目录 + 静态记录，不写 pack 期 `dsh.lock/v1`；npm/pack 安装路径才写 lockfile。
-> 该账本分叉已登记为候选决策 CD-2（docs/next/2026-08-12-cd-2-panel-adoptraw-ledger.md）。
+> 目录 + 静态记录；dsh.lock/v1 已随求解体系退役，账本分叉收口为「pnpm 安装
+> 状态唯一真相 + mygo 治理视图」（CD-2，P3 落地，
+> docs/next/2026-08-12-cd-2-panel-adoptraw-ledger.md）。
 
 ## 仓库布局
 
 ```text
 packages/core/mygo-api/      契约层（Cordis-free；definePlugin/类型/PluginError/fake-env）
-packages/cordis/mygo/        核心实现（求解/lockfile/store/生命周期/政策闸/epoch/pack/报告）
+packages/cordis/mygo/        核心实现（版本选择/还原/生命周期/政策闸/快照/pack/报告）
 packages/cordis/mygo-cli/    CLI 扩展插件（pack/restore/init + 报告渲染）
 vendor/dsh-mygo-panel/       Web 面板扩展（/api/mygo/* + settings.section）
-vendor/cordis-alias/         开发态 @deepseek-ai/cordis 别名（0810 checkout 用）
 extension/mygo-rdb/          外部注册表存储扩展（RegistryStore 契约）
 patches/                     DSH host 补丁提案 / 依赖补丁契约（官方语义，不 apply）
 scripts/publish-mygo.mjs     发布流水线（dry-run 门禁）
-install.sh                   源码 checkout 安装器
 docs/                        设计/验证/备忘录（见下）
 AGENTS.md                    仓库级规则补充（npm SDK / 包级规范 / 提交纪律）
 ```
@@ -125,11 +120,11 @@ AGENTS.md                    仓库级规则补充（npm SDK / 包级规范 / �
 
 ## 测试与纪律
 
-- 全量回归 64 文件 / 625 用例（无网 fetch 拦截；CLI 19 项含 T50/T51 spike；
-  其中 3 个 mygo-rdb 用例依赖本地未提交修正，提交态为 621——见备忘录）；
+- 全量回归 62 文件 / 623 用例（无网 fetch 拦截；含 CLI 19 项 T44-T51；
+  mygo-rdb 关联用例依赖本地未提交修正——见备忘录）；
   EB 假设套件 13/13；typecheck 三包通过。
 - 确定性断言字节级；故障按 impl-bug / design-gap / fixture-issue 三分类；
-  vendor 修改登记 `vendor/PATCHES.md`（当前 vendor 零补丁；#1 已按守则移除）。
+  vendor 零补丁（PATCHES.md 登记制度随 install.sh 一并退役，2026-08-13）。
 
 ## License
 

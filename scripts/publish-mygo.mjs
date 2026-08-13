@@ -25,12 +25,11 @@ const required = [
   'packages/core/mygo-api/package.json',
   'packages/cordis/mygo/package.json',
   'vendor/dsh-mygo-panel/package.json',
-  'vendor/cordis-alias/package.json',
   'node_modules/typescript/bin/tsc',
 ]
 for (const file of required) {
   if (!existsSync(join(checkout, file))) {
-    console.error(`缺少 ${file}（请先 install.sh 或确认 checkout）`)
+    console.error(`缺少 ${file}（请确认 checkout 已装入 mygo 包；next 分支安装形态重做中，见 P3）`)
     process.exit(1)
   }
 }

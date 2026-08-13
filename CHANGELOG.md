@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased · next 分支 P1（2026-08-13）— 核心瘦身：求解/lockfile 体系退役
+
+> 重做线第一阶段：pnpm 安装状态为唯一真相源，mygo 账本降级为治理视图
+> （P3 落地）。旧体系存档见 main `43bb296`。
+
+### 删除
+
+- `dsh.lock/v1` lockfile 全族：`package/lockfile.ts`（readLockfile /
+  writeLockfile / verifyLockfile / 形状校验链）及 package-manager / pack /
+  service / 测试的全部引用；`paths.lockfileDir` / `lockfilePath` 同步移除。
+- 跨插件约束求解残余：`src/activation.ts`（solveActivation：depends 闭包
+  连带启用 + breaks 最小停用消解）；`plan.ts` 改为纯求值预览（兼容预检 +
+  关系冲突 + requires 级 dependent-exists + displaced 推导），不再产出
+  级联动作；`InstallOptions.autoResolve` / `ActivationPlan` /
+  `ActivationAction` / `PluginOperationPlan.actions` 一并删除。
+- 报告死码与字段：`dispose-timeout`（零生产者）、`lockfile-mismatch`、
+  `dependency-cycle`（生产者随 lockfile/求解器删除）、`ResolutionReport.generation`
+  （零调用方）；report 侧 `manifest-invalid` 改名 `bundle-invalid` 消歧。
+- 加载期校验环节：`verifyAtBoot` / `readLock` / `mountOrder` / `loadEntry`
+  （lockfile 依赖）；BOM 的 entry sha512/fileSize 对账字段（lockfile 供给）。
+- install.sh、vendor/cordis-alias、vendor/PATCHES.md（安装形态 P3 重做，
+  走 dsh 0812 原生 profile bundle / pnpm 机制）。
+
+### 变更
+
+- CD-1 错误词汇统一：`ResolutionReport.code` 直接取自 PluginError 闭表；
+  报告侧有用码并入（组 7：`resolve-failed / bundle-invalid / symbol-missing /
+  policy-rejected / pack-invalid / pack-hash-mismatch`）；PluginError 删除
+  10 个零生产者死码（grant-missing / install-denied / ceiling-exceeded /
+  source-not-allowed / provenance-rejected / fs-denied / network-denied /
+  vars-denied / http-denied / emit-denied），闭表 43 → 39 码七组。
+- `package-store.ts` → `package-restore.ts`：restorePackage 还原到调用方
+  指定目录（普通落盘，无「store 唯一真相」语义），事实文件保留供幂等复用。
+- `mygo-pack/v1` 保留 GNU tar 确定性打包；清单不再内嵌 lockfile，版本钉死
+  在 plugins[]/files[]（id+version）；sha512+fileSize 成员级校验保留
+  （pack 自身完整性）；安装无求解、原子可回滚。
+- `fine-epoch.ts`：独立细 epoch 指纹函数删除（零生产消费者）；
+  FineEpochRegistry/preGate/captureExports 保留（requires 政策闸消费，
+  见模块 TODO）。
+- 测试计数：全量 62 文件 / 623 用例（-4 文件 / -36 用例：lockfile×2 +
+  resolver + activation 套件删除，pack/pins/paths/manifest/兼容性等套件
+  按新语义改写）；EB 套件 13/13 不变。
+
 ## 0.2.1 · 2026-08-10 — 0810 分支适配 + 客户端兼容 + 测试类型债清理
 
 ### 0810 分支支持
