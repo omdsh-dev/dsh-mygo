@@ -1,5 +1,8 @@
 /**
- * mygo 插件包管理体系（《收敛任务》）公共面。
+ * mygo 插件包管理体系公共面（2026-08-13 范围重塑）：dsh.lock/v1 lockfile、
+ * 跨插件约束求解（resolver）、不可变 package-store 语义已退役；pnpm 安装
+ * 状态为唯一真相源。保留面：manifest 解析、确定性 mygo-pack 打包/还原
+ * （普通落盘）、单插件版本选择、符号/bundle 校验、requires 政策闸。
  * @module @deepseek-ai/dsh-mygo/src/package
  */
 
@@ -16,12 +19,12 @@ export {
   collectNamedImports,
   probePackageExports,
   scanPluginImports,
+  verifyPluginSymbols,
   verifySymbols,
 } from './symbol-verify.ts'
 export type { ImportRef, SymbolCheck } from './symbol-verify.ts'
-export { writeLockfile, readLockfile, verifyLockfile, sha256File, sha256Text } from './lockfile.ts'
-export type { Lockfile, LockedPlugin, VerifyIssue } from './lockfile.ts'
-export { parsePackageManifest, constraintsOf } from './manifest-v2.ts'
+export { integritySha512Hex, sha256File, sha256Text, sha512File } from './hash.ts'
+export { parsePackageManifest } from './manifest-v2.ts'
 export type { ManifestProblem, PluginManifestV2, PluginManifestV3 } from './manifest-v2.ts'
 export { computeMountOrder } from './mount-order.ts'
 export type { MountEdge, MountOrderResult } from './mount-order.ts'
@@ -50,15 +53,12 @@ export type {
   PackPluginDecl,
   TarMember,
 } from './pack.ts'
-export { installPackageToStore, readInstalledPackage } from './package-store.ts'
-export type { InstalledPackage, InstallPackageOptions } from './package-store.ts'
-export { resolveDshHome, resolveMygoPaths, lockfilePath, packageDir, pluginConfigPath, resolveCoreVersion } from './paths.ts'
+export { restorePackage, readRestoredPackage } from './package-restore.ts'
+export type { RestoredPackage, RestorePackageOptions } from './package-restore.ts'
+export { resolveDshHome, resolveMygoPaths, packageDir, pluginConfigPath, resolveCoreVersion } from './paths.ts'
 export type { MygoPaths } from './paths.ts'
 export { fetchRegistryMetadata, downloadTarball, encodeRegistryName } from './registry-client.ts'
 export type { RegistryClientOptions, RegistryMetadata, RegistryVersionInfo } from './registry-client.ts'
-export { findDependsCycle, resolve, sortCandidates, topologicalOrder } from './resolver.ts'
-export type { PluginCandidate, ResolvedPlugin, ResolverInput, VersionConstraints, ResolveOutcome } from './resolver.ts'
-export { sortConstraints, suggestActions } from './report.ts'
 export type {
   CandidateRejection,
   ConflictEntry,
@@ -68,8 +68,7 @@ export type {
   ServiceConflictEntry,
   ServiceResolutionReport,
 } from './report.ts'
-export { integritySha512Hex, sha512File } from './lockfile.ts'
-export { FineEpochRegistry, captureExports, fineEpoch, preGate } from './fine-epoch.ts'
+export { FineEpochRegistry, captureExports, preGate } from './fine-epoch.ts'
 export type { PreGateResult, ProviderSymbolSnapshot } from './fine-epoch.ts'
 export { ProviderObservationRegistry } from './provider-observations.ts'
 export type { ProviderLifecycleState, ProviderObservation } from './provider-observations.ts'
@@ -85,3 +84,5 @@ export { mapLegacyPluginFile } from './legacy-mapping.ts'
 export type { LegacyMappingResult, LegacyPluginFile } from './legacy-mapping.ts'
 export { checkTemplateAlignment, TEMPLATE_REFERENCE } from './template-align.ts'
 export type { TemplateAlignResult } from './template-align.ts'
+export { selectVersion } from './version-select.ts'
+export type { VersionCandidate, VersionSelectInput, VersionSelectOutcome } from './version-select.ts'

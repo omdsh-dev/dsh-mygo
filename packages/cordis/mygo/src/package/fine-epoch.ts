@@ -1,9 +1,13 @@
 /**
- * 细 epoch + 前置门（design-r3 §1.1/§4.1，B13）：挂载时缓存的导出快照、
- * 纯内存比较、禁磁盘 I/O（EB-D20）；细 epoch = (provider-uid 元组, 版本元组,
- * 符号投影元组, 政策事实元组)，原生粗 epoch 是其投影（EB-D10）。
- * 每次 notify 双源（provide/unprovide 即时 + ACTIVE 翻转，EB-N6/N13）触发的
- * 重算为一个批次；同实例换绑定值不改变细 epoch（EB-N7）。
+ * 挂载时导出快照注册表 + 前置门（design-r3 §1.1/§4.1，B13）：挂载时缓存的
+ * 导出快照、纯内存比较、禁磁盘 I/O（EB-D20）。
+ *
+ * TODO(P1 保留决策，2026-08-13)：本模块原定随求解体系一并删除（0812 原生
+ * entry.update 事务化重放已覆盖「粗 epoch 失效重放」场景），但 requires
+ * 政策闸（requires-gate.ts）的服务级符号校验消费这里的快照与 preGate——
+ * 该闸是运行期治理面（保留资产），删除本模块会拆掉 policy-gate 链路。
+ * 结论：保留注册表与前置门；独立的细 epoch 指纹函数（fineEpoch）无生产
+ * 消费者，已删除。P3 治理视图落地时重新评估是否并入 requires-gate。
  * @module @deepseek-ai/dsh-mygo/src/package/fine-epoch
  */
 
@@ -80,31 +84,13 @@ export function preGate(
 }
 
 /**
- * 细 epoch 元组（确定性序列化，EB-D10）：provider uid（插件 id + 实例代号）、
- * 版本、符号投影、政策事实。细变粗必变：任何分量的变化都会改变指纹。
- */
-export function fineEpoch(
-  providerUids: readonly string[],
-  versions: Readonly<Record<string, string>>,
-  symbols: Readonly<Record<string, readonly string[]>>,
-  policy: Readonly<Record<string, string>>,
-): string {
-  const parts: string[] = []
-  for (const uid of [...providerUids].sort()) parts.push(`u:${uid}`)
-  for (const id of Object.keys(versions).sort()) parts.push(`v:${id}@${versions[id]}`)
-  for (const id of Object.keys(symbols).sort()) parts.push(`s:${id}(${(symbols[id] ?? []).join(',')})`)
-  for (const key of Object.keys(policy).sort()) parts.push(`p:${key}=${policy[key]}`)
-  return parts.join('|')
-}
-
-/**
  * 挂载时快照注册表：能力 → 提供者快照；随 fiber 生命周期清理（B19 同生命周期）。
- * 只读、不阻断；前置门与报告候选集消费。
+ * 只读、不阻断；requires 政策闸的前置门与报告候选集消费。
  */
 export class FineEpochRegistry {
   private readonly snapshots = new Map<string, ProviderSymbolSnapshot>()
 
-  /** 注册/更新一次挂载时快照（同实例换值不改变 uid/版本/投影 → 细 epoch 不变）。 */
+  /** 注册/更新一次挂载时快照（同实例换值不改变 uid/版本/投影）。 */
   set(service: string, snapshot: ProviderSymbolSnapshot): void {
     this.snapshots.set(service, snapshot)
   }

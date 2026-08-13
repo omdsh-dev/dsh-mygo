@@ -20,9 +20,7 @@ import { DispatchMachine } from '../../src/dispatch.ts'
 import { resolvePluginManagerConfig } from '../../src/config.ts'
 import { InMemoryRegistryStore } from '../../src/store.ts'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
-import { constraintsOf } from '../../src/package/manifest-v2.ts'
-import { resolve, type PluginCandidate } from '../../src/package/resolver.ts'
-import { fetchRegistryMetadata } from '../../src/package/registry-client.ts'
+import { readRestoredPackage } from '../../src/package/package-restore.ts'
 import { preGate, captureExports } from '../../src/package/fine-epoch.ts'
 import { detectDualPresence } from '../../src/package/dual-presence.ts'
 import { harvestPackageMetadata } from '../../src/package/harvester.ts'
@@ -122,12 +120,12 @@ async function loadableModules(): Promise<Map<string, unknown>> {
   return modules
 }
 
-describe('T21 S1 快乐路径：六类夹具混装安装→求解→挂载全通', () => {
-  it('桥接安装 F1/F3/F4（真实 tarball + 真实完整性），lockfile 覆盖桥接 id，报告无 ERROR', async () => {
+describe('T21 S1 快乐路径：六类夹具混装安装→落盘→挂载全通', () => {
+  it('桥接安装 F1/F3/F4（真实 tarball + 真实完整性），还原集覆盖桥接 id，报告无 ERROR', async () => {
     const bridge = packed.filter(item => ['F1', 'F3', 'F4'].includes(item.plugin.category))
-    const { lockfile } = await installCorpusToStore(bridge, registry.url)
-    const parsed = JSON.parse(lockfile) as { plugins: Record<string, unknown> }
-    const installedIds = Object.keys(parsed.plugins)
+    const { paths } = await installCorpusToStore(bridge, registry.url)
+    const { readdir } = await import('node:fs/promises')
+    const installedIds = (await readdir(paths.packagesRoot)).sort()
     for (const category of ['F1', 'F3', 'F4'] as const) {
       for (const plugin of corpusOf(category)) {
         // versionOverride 条目是同一包的 registry 历史版本（非独立安装目标）。
@@ -135,13 +133,17 @@ describe('T21 S1 快乐路径：六类夹具混装安装→求解→挂载全通
         expect(installedIds).toContain(plugin.id)
       }
     }
-    // 路径安全 + BOM 字段在安装产物中成立（entry 相对 + sha512/fileSize 记录）。
-    for (const [id, lock] of Object.entries(parsed.plugins)) {
-      const record = lock as { entry: string; entrySha512?: string; entryFileSize?: number }
-      expect(record.entry.startsWith('/')).toBe(false)
-      expect(record.entry.includes('/../')).toBe(false)
-      expect(typeof record.entrySha512).toBe('string')
-      expect(typeof record.entryFileSize).toBe('number')
+    // 路径安全 + 事实文件字段在还原产物中成立（entry 相对 + sha512/fileSize 记录）。
+    for (const id of installedIds) {
+      for (const version of await readdir(join(paths.packagesRoot, id))) {
+        const restored = await readRestoredPackage(join(paths.packagesRoot, id, version), id, version)
+        expect(restored).toBeDefined()
+        if (restored === undefined) continue
+        expect(restored.entry.startsWith('/')).toBe(false)
+        expect(restored.entry.includes('/../')).toBe(false)
+        expect(typeof restored.entrySha512).toBe('string')
+        expect(typeof restored.entryFileSize).toBe('number')
+      }
     }
   }, 60_000)
 
@@ -153,8 +155,7 @@ describe('T21 S1 快乐路径：六类夹具混装安装→求解→挂载全通
     const voiceModule = await loadEntry(voice) as { apply(ctx: unknown): void }
     const vibeModule = await loadEntry(vibe) as { apply(ctx: unknown): void }
     const templateModule = await loadEntry(template) as { name: string; apply(ctx: unknown): void }
-    const vibeManifest = parsePackageManifest(JSON.parse(await readFile(join(vibe.dir, 'package.json'), 'utf8')))
-    if (vibeManifest.value === undefined) throw new Error('vibe manifest 解析失败')
+    const vibeManifestRequires = (vibe.manifestOverlay?.requires ?? {}) as Record<string, string>
 
     h.definitions.set('dsh-voice-chat', fromCordisPlugin(voiceModule as never, {
       id: 'dsh-voice-chat', version: '0.2.0', kinds: [], events: [],
@@ -163,7 +164,7 @@ describe('T21 S1 快乐路径：六类夹具混装安装→求解→挂载全通
     }))
     h.definitions.set('dsh-vibe-mode', fromCordisPlugin(vibeModule as never, {
       id: 'dsh-vibe-mode', version: '0.1.0', kinds: [], events: [],
-      requires: [], serviceRequires: vibeManifest.value.requires, provides: [],
+      requires: [], serviceRequires: vibeManifestRequires, provides: [],
       permissions: { observe: [], transform: [], intercept: [], position: 'derived', claims: [] },
       stateful: false, swapPolicy: 'immediate', config: z.object({}),
     }))
@@ -208,49 +209,34 @@ describe('T21 S1 快乐路径：六类夹具混装安装→求解→挂载全通
   }, 90_000)
 })
 
-describe('T22 S2 确定性复验：真实依赖图求解两次逐字节相等', () => {
-  it('同输入两次安装产物 lockfile 字节级一致，并记录求解耗时', async () => {
+describe('T22 S2 确定性复验：同一输入两次安装落盘集合一致', () => {
+  it('同输入两次安装产物 (id, version) 集合与内容哈希一致，并记录安装耗时', async () => {
     const bridge = packed.filter(item => ['F1', 'F3', 'F4'].includes(item.plugin.category))
     const t0 = performance.now()
-    // 同一 profile、不同隔离 store 根（resolveMygoPaths 每次用新 DSH_HOME）。
+    // 同一 profile、不同隔离还原根（resolveMygoPaths 每次用新 DSH_HOME）。
     const first = await installCorpusToStore(bridge, registry.url, 'e2e-det')
     const second = await installCorpusToStore(bridge, registry.url, 'e2e-det')
-    // generated.at 为安装时间戳（非求解产物），归一后逐字节比较求解输出。
-    const normalize = (text: string): string => JSON.stringify({
-      ...JSON.parse(text),
-      generated: { ...JSON.parse(text).generated, at: '<t>' },
-    }, null, 2)
-    expect(normalize(second.lockfile)).toBe(normalize(first.lockfile))
-
-    // 真实依赖图整体求解两次（含 voice-chat 双版本多候选裁决）：字节级一致。
-    const metadata = await Promise.all(bridge.map(item => fetchRegistryMetadata(item.plugin.name, { registry: registry.url })))
-    const candidates = new Map<string, readonly PluginCandidate[]>()
-    for (const meta of metadata) {
-      const id = meta.versions.find(entry => entry.manifest !== undefined)?.manifest?.id
-      if (id === undefined) continue
-      candidates.set(id, meta.versions
-        .filter(entry => entry.manifest !== undefined)
-        .map(entry => ({
-          version: entry.version,
-          ...(entry.manifest === undefined ? {} : { constraints: constraintsOf(entry.manifest) }),
-          source: 'registry' as const,
-        })))
+    PERF.s2SolveMs = (performance.now() - t0) / 2
+    // 确定性口径（2026-08-13 范围重塑）：无 lockfile/求解器，比较两次还原的
+    // (id, version, entrySha256) 事实集合。
+    const snapshotOf = async (paths: typeof first.paths): Promise<readonly string[]> => {
+      const { readdir } = await import('node:fs/promises')
+      const out: string[] = []
+      for (const id of (await readdir(paths.packagesRoot)).sort()) {
+        for (const version of (await readdir(join(paths.packagesRoot, id))).sort()) {
+          const restored = await readRestoredPackage(join(paths.packagesRoot, id, version), id, version)
+          out.push(`${id}@${version}#${restored?.entrySha256 ?? 'missing'}`)
+        }
+      }
+      return out
     }
-    const solve = () => resolve({
-      requests: new Map([['dsh-vibe-mode', {}]]),
-      candidates,
-      installed: new Map(),
-      coreVersion: '0.0.1-rc.1',
-    })
-    const tSolve = performance.now()
-    const graphA = solve()
-    const graphB = solve()
-    PERF.s2SolveMs = (performance.now() - tSolve) / 2
-    expect(JSON.stringify(graphA)).toBe(JSON.stringify(graphB))
-    expect(graphA.ok).toBe(true)
-    if (graphA.ok) {
-      expect(graphA.resolved.find(plugin => plugin.id === 'dsh-voice-chat')?.version).toBe('0.2.0')
-    }
+    const snapshotA = await snapshotOf(first.paths)
+    const snapshotB = await snapshotOf(second.paths)
+    expect(snapshotA.length).toBeGreaterThan(0)
+    expect(snapshotB).toEqual(snapshotA)
+    // 多候选确定性：voice-chat 双版本（0.2.0/0.1.0）取最高版本。
+    expect(snapshotA.some(entry => entry.startsWith('dsh-voice-chat@0.2.0#'))).toBe(true)
+    expect(snapshotA.some(entry => entry.startsWith('dsh-voice-chat@0.1.0#'))).toBe(false)
   }, 90_000)
 })
 
@@ -296,13 +282,10 @@ describe('T23 S3 符号缺失：pre-gate 同步拦截 + symbol-missing 报告 + 
 
 describe('T24 S4 requires 门三态（F4 载体 + 提供者存在/缺失/版本不符）', () => {
   it('服务缺失 → service-missing + 候选集来自 B19；提供者出现 → 自动激活；版本不符 → mismatch', async () => {
-    // F4 真实载体：vibe-mode 的 dsh.mygo.requires（voice-chat >=0.1.0）。
-    const vibePkg = JSON.parse(await readFile(
-      join(corpusOf('F4')[0]?.dir ?? '', 'package.json'), 'utf8',
-    ))
-    const vibeManifest = parsePackageManifest(vibePkg)
-    if (vibeManifest.value === undefined) throw new Error('vibe-mode manifest 解析失败')
-    const requires = vibeManifest.value.requires
+    // F4 载体：vibe-mode 的服务级 requires（voice-chat >=0.1.0；2026-08-13
+    // 范围重塑后真实仓库的顶层 depends 已非法，语料契约改由 corpus overlay 携带）。
+    const vibeCorpus = corpusOf('F4')[0] as CorpusPlugin
+    const requires = (vibeCorpus.manifestOverlay?.requires ?? {}) as Record<string, string>
     expect(Object.keys(requires)).toEqual(['voice-chat'])
 
     const h = engineHarness()

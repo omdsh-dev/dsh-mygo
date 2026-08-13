@@ -1,22 +1,21 @@
 /**
- * 插件包管理器（《收敛任务》总编排，2026-08-13 范围重塑）：单插件版本选择
- * （无跨插件约束求解）→ 下载入 store → 写 lockfile；加载时只校验（不重新
- * 求解、不查 registry）；失败输出全量结构化报告。
+ * 插件包管理器（2026-08-13 范围重塑）：单插件版本选择（无跨插件约束求解）
+ * → 下载并普通落盘还原；dsh.lock/v1 lockfile 已删除（pnpm 安装状态为唯一
+ * 真相源），加载期不再有「对照 lockfile 校验磁盘」环节。mygo-pack 构建/安装
+ * 委派给 pack.ts（确定性 tar 能力保留）。
  * @module @deepseek-ai/dsh-mygo/src/package/package-manager
  */
 
-import { readLockfile, verifyLockfile, writeLockfile, type Lockfile, type LockedPlugin } from './lockfile.ts'
-import { detectUndeclaredBundles, scanBundles, type ScannedBundle } from './bundle-scan.ts'
-import { probePackageExports, scanPluginImports, verifyPluginSymbols, type SymbolCheck } from './symbol-verify.ts'
+import { detectUndeclaredBundles, scanBundles } from './bundle-scan.ts'
+import { probePackageExports, verifyPluginSymbols } from './symbol-verify.ts'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { PluginManifestV2 } from './manifest-v2.ts'
-import { installPackageToStore, type InstalledPackage } from './package-store.ts'
-import { lockfilePath, packageDir, type MygoPaths } from './paths.ts'
+import { restorePackage, type RestoredPackage } from './package-restore.ts'
+import { packageDir, type MygoPaths } from './paths.ts'
 import { fetchRegistryMetadata } from './registry-client.ts'
-import { selectVersion, type VersionCandidate, type VersionSelectOutcome } from './version-select.ts'
-import { extractPlugin, loadPluginEntry } from './entry-loader.ts'
+import { selectVersion } from './version-select.ts'
 import type { ResolutionReport } from './report.ts'
 import {
   buildPluginPack,
@@ -34,7 +33,7 @@ export interface PackageManagerOptions {
   readonly token?: string
   readonly tarCmd?: string
   readonly coreVersion?: string
-  /** profile 钉定（包名 → 精确版本），作为求解器输入约束。 */
+  /** profile 钉定（包名/插件 id → 精确版本），作为版本选择输入。 */
   readonly pins?: ReadonlyMap<string, { readonly version: string; readonly source?: string }>
   /** 符号校验的 exports 提供者；缺省从 profile node_modules 解析。 */
   readonly exportsProvider?: (specifier: string) => Promise<ReadonlySet<string> | undefined>
@@ -44,8 +43,7 @@ export interface PackageManagerOptions {
 export type PackageInstallOutcome =
   | {
     readonly ok: true
-    readonly installed: InstalledPackage
-    readonly lockfile: Lockfile
+    readonly installed: RestoredPackage
     readonly warnings: readonly string[]
   }
   | { readonly ok: false; readonly report: ResolutionReport }
@@ -80,27 +78,34 @@ function defaultExportsProvider(
 export class PluginPackageManager {
   constructor(private readonly options: PackageManagerOptions) {}
 
-  private lockPath(): string {
-    return lockfilePath(this.options.paths, this.options.profile)
+  /** Registry metadata with auth options applied. */
+  private async fetchMetadata(name: string): Promise<ReturnType<typeof fetchRegistryMetadata>> {
+    return fetchRegistryMetadata(name, {
+      ...(this.options.registry === undefined ? {} : { registry: this.options.registry }),
+      ...(this.options.token === undefined ? {} : { token: this.options.token }),
+    })
   }
 
-  /**
-   * Read the current lockfile; `undefined` when missing（legacy profile）。
-   * 形状非法（旧 schema / 损坏）→ 抛出带字段指针的 Error（修复批次 3 / A12，
-   * 显式演进，不静默补默认值）；调用方自行决定转报告或上抛。
-   */
-  async readLock(): Promise<Lockfile | undefined> {
-    const result = await readLockfile(this.lockPath())
-    if (result === undefined) return undefined
-    if (!result.ok) {
-      throw new Error(`lockfile 形状无效：${result.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`)
-    }
-    return result.lockfile
+  /** 单插件版本选择：候选集 + 请求区间 + profile 钉定（无跨插件求解）。 */
+  private selectFor(
+    packageName: string,
+    candidates: readonly { readonly version: string; readonly manifest?: PluginManifestV2 | undefined }[],
+    range: string | undefined,
+    canonicalId: string,
+  ): ReturnType<typeof selectVersion> {
+    const pin = this.options.pins?.get(packageName)?.version ?? this.options.pins?.get(canonicalId)?.version
+    return selectVersion({
+      candidates,
+      ...(range === undefined ? {} : { range }),
+      ...(pin === undefined ? {} : { pin }),
+      ...(this.options.coreVersion === undefined ? {} : { coreVersion: this.options.coreVersion }),
+    })
   }
 
   /**
    * Install one npm plugin package: registry metadata → deterministic
-   * version selection → store install → lockfile write.
+   * version selection → plain restore into `<packagesRoot>/<id>/<version>/`
+   * → bundle/symbol checks. No lockfile write（pnpm 安装状态为唯一真相源）。
    */
   async resolveInstall(
     source: { readonly package: string; readonly range?: string },
@@ -132,7 +137,7 @@ export class PluginPackageManager {
     if (canonicalId === undefined) {
       return { ok: false, report: { code: 'resolve-failed', summary: `${source.package} 无 manifest id`, cycles: [], conflicts: [] } }
     }
-    const selected = this.selectVersion(idCandidates, source.range, canonicalId)
+    const selected = this.selectFor(source.package, idCandidates, source.range, canonicalId)
     if (!selected.ok) {
       return {
         ok: false,
@@ -151,7 +156,7 @@ export class PluginPackageManager {
       }
     }
     const versionInfo = idCandidates.find(entry => entry.version === selected.version)
-    // 选择结果必来自候选集；防御性保留（旧 A5 修复语义：MUST NOT 以 undefined 继续）。
+    // 选择结果必来自候选集；防御性保留（MUST NOT 以 undefined 继续）。
     if (versionInfo === undefined) {
       return {
         ok: false,
@@ -169,10 +174,15 @@ export class PluginPackageManager {
         },
       }
     }
-    const installedPackage = await installPackageToStore(this.options.paths, versionInfo, {
-      ...(this.options.token === undefined ? {} : { token: this.options.token }),
-      ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),
-    })
+    const installedPackage = await restorePackage(
+      packageDir(this.options.paths, canonicalId, versionInfo.version),
+      versionInfo,
+      {
+        tmpDir: this.options.paths.tmpDir,
+        ...(this.options.token === undefined ? {} : { token: this.options.token }),
+        ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),
+      },
+    )
     const scanned = await scanBundles(installedPackage.manifest.id, installedPackage.dir, installedPackage.manifest.bundles)
     const pkgJson = JSON.parse(await readFile(join(installedPackage.dir, 'package.json'), 'utf8')) as {
       readonly name?: unknown
@@ -197,7 +207,7 @@ export class PluginPackageManager {
       return {
         ok: false,
         report: {
-          code: 'manifest-invalid',
+          code: 'bundle-invalid',
           summary: [...scanned.problems, ...undeclared].join('；'),
           cycles: [],
           conflicts: [{
@@ -235,34 +245,18 @@ export class PluginPackageManager {
         },
       }
     }
-    const warnings: string[] = symbolChecks
-      .filter(check => check.unverified === true)
-      .map(check => `${check.file}: ${check.specifier}#${check.symbol} 无法验证（目标包不可解析），按警告放行`)
-    // 版本区间说谎但符号存在 → 警告放行（符号是事实源）。
-    for (const [target, range] of Object.entries(installedPackage.manifest.depends)) {
-      if (symbolChecks.some(check => check.specifier === target)) {
-        const actual = this.options.pins?.get(target)?.version
-        if (actual !== undefined && !matchesVersionRange(actual, range)) {
-          warnings.push(`版本区间 ${target} ${range} 未满足（实际 ${actual}），但符号存在，按警告放行`)
-        }
-      }
-    }
-    const next = await this.withLocked(lockfile, installedPackage, source.package, scanned.bundles, symbolChecks)
-    await writeLockfile(this.lockPath(), next)
-    return { ok: true, installed: installedPackage, lockfile: next, warnings }
-  }
-
-  /** Registry metadata with auth options applied. */
-  private async fetchMetadata(name: string): Promise<ReturnType<typeof fetchRegistryMetadata>> {
-    return fetchRegistryMetadata(name, {
-      ...(this.options.registry === undefined ? {} : { registry: this.options.registry }),
-      ...(this.options.token === undefined ? {} : { token: this.options.token }),
-    })
+    const warnings: string[] = [
+      ...selected.warnings,
+      ...symbolChecks
+        .filter(check => check.unverified === true)
+        .map(check => `${check.file}: ${check.specifier}#${check.symbol} 无法验证（目标包不可解析），按警告放行`),
+    ]
+    return { ok: true, installed: installedPackage, warnings }
   }
 
   /**
-   * Pure resolution preview (no download, no lockfile write): returns the
-   * chosen version's manifest so `plan()` can preview without side effects.
+   * Pure resolution preview (no download, no disk write): returns the chosen
+   * version's manifest so `plan()` can preview without side effects.
    */
   async preview(
     source: { readonly package: string; readonly range?: string },
@@ -284,7 +278,7 @@ export class PluginPackageManager {
               version: version.version,
               rejected: version.manifestProblems ?? ['无有效 manifest'],
             })),
-            actions: ['由插件作者补充 dsh.mygo（id/version/entry/depends/breaks/core）'],
+            actions: ['由插件作者补充 dsh.mygo（id/version/entry/core）'],
           }],
         },
       }
@@ -293,291 +287,52 @@ export class PluginPackageManager {
     if (canonicalId === undefined) {
       return { ok: false, report: { code: 'resolve-failed', summary: `${source.package} 无 manifest id`, cycles: [], conflicts: [] } }
     }
-    const candidates = new Map<string, readonly PluginCandidate[]>()
-    candidates.set(canonicalId, idCandidates.map(entry => ({
-      version: entry.version,
-      ...(entry.manifest === undefined ? {} : { constraints: constraintsOf(entry.manifest) }),
-      ...(entry.manifest === undefined || entry.manifest.provides.length === 0
-        ? {}
-        : { provides: entry.manifest.provides }),
-      source: 'registry',
-    })))
-    const lockfile = await this.readLock()
-    const installed = new Map<string, PluginCandidate>()
-    if (lockfile !== undefined) {
-      for (const [id, lock] of Object.entries(lockfile.plugins)) {
-        installed.set(id, {
-          version: lock.version,
-          constraints: { depends: lock.depends, breaks: lock.breaks, core: lock.core, entry: lock.entry },
-          ...(lock.provides === undefined || lock.provides.length === 0 ? {} : { provides: lock.provides }),
-          source: 'locked',
-        })
+    const selected = this.selectFor(source.package, idCandidates, source.range, canonicalId)
+    if (!selected.ok) {
+      return {
+        ok: false,
+        report: {
+          code: 'resolve-failed',
+          summary: `${canonicalId} 版本选择失败：${selected.reasons.join('；')}`,
+          cycles: [],
+          conflicts: [],
+        },
       }
     }
-    if (lockfile !== undefined) {
-      for (const [owner, lock] of Object.entries(lockfile.plugins)) {
-        for (const bundle of lock.bundles ?? []) {
-          const existing = candidates.get(bundle.id) ?? []
-          candidates.set(bundle.id, [...existing, {
-            version: bundle.version,
-            constraints: { depends: bundle.depends, breaks: bundle.breaks, core: bundle.core },
-            ...(bundle.provides === undefined || bundle.provides.length === 0 ? {} : { provides: bundle.provides }),
-            source: `bundle:${owner}`,
-          }])
-        }
-      }
-    }
-    const requests = new Map([[canonicalId, { ...(source.range === undefined ? {} : { range: source.range }) }]])
-    const outcome = resolve({
-      requests,
-      candidates,
-      installed,
-      coreVersion: this.options.coreVersion,
-      ...(this.options.pins === undefined ? {} : { pins: this.options.pins }),
-    })
-    if (!outcome.ok) return outcome
-    const chosen = (outcome as Extract<ResolveOutcome, { ok: true }>).resolved.find(plugin => plugin.id === canonicalId)
-    const versionInfo = idCandidates.find(entry => entry.version === chosen?.version)
+    const versionInfo = idCandidates.find(entry => entry.version === selected.version)
     if (versionInfo?.manifest === undefined) {
       return { ok: false, report: { code: 'resolve-failed', summary: 'preview 无选定 manifest', cycles: [], conflicts: [] } }
     }
     return { ok: true, manifest: versionInfo.manifest }
   }
 
-  /** Merge one installed package into the lockfile. */
-  private async withLocked(
-    lockfile: Lockfile | undefined,
-    installed: InstalledPackage,
-    packageName: string,
-    bundles: readonly ScannedBundle[],
-    symbols: readonly SymbolCheck[],
-  ): Promise<Lockfile> {
-    const plugins: Record<string, LockedPlugin> = {}
-    if (lockfile !== undefined) {
-      for (const [id, lock] of Object.entries(lockfile.plugins)) plugins[id] = { ...lock }
-    }
-    plugins[installed.id] = {
-      version: installed.version,
-      entry: installed.entry,
-      core: installed.manifest.core,
-      depends: installed.manifest.depends,
-      breaks: installed.manifest.breaks,
-      // A3（修复批次 3）：requires / symbolAliases 落盘，loadEntry 据此还原。
-      requires: installed.manifest.requires,
-      symbolAliases: installed.manifest.symbolAliases ?? {},
-      entrySha256: installed.entrySha256,
-      manifestSha256: installed.manifestSha256,
-      // DG-2（修复批次 3）：真 entrySha512（入口文件哈希）必填落盘；
-      // tarballSha512（vendored tarball 哈希）有则落盘。
-      entrySha512: installed.entrySha512,
-      ...(installed.tarballSha512 === undefined ? {} : { tarballSha512: installed.tarballSha512 }),
-      ...(installed.entryFileSize === undefined ? {} : { entryFileSize: installed.entryFileSize }),
-      packageName,
-      ...(installed.manifest.provides.length === 0 ? {} : { provides: installed.manifest.provides }),
-      ...(bundles.length === 0
-        ? {}
-        : {
-            bundles: bundles.map(bundle => ({
-              id: bundle.manifest.id,
-              version: bundle.manifest.version,
-              path: bundle.declared.path,
-              depends: bundle.manifest.depends,
-              breaks: bundle.manifest.breaks,
-              core: bundle.manifest.core,
-              ...(bundle.manifest.provides.length === 0 ? {} : { provides: bundle.manifest.provides }),
-            })),
-          }),
-      symbols,
-      ...(installed.integrity === undefined ? {} : { integrity: installed.integrity }),
-      source: 'npm',
-    }
-    return {
-      format: 'dsh.lock/v1',
-      generated: {
-        by: 'dsh-mygo',
-        version: this.options.managerVersion,
-        profile: this.options.profile,
-        ...(this.options.coreVersion === undefined ? {} : { core: this.options.coreVersion }),
-        at: new Date().toISOString(),
-      },
-      plugins,
-    }
-  }
-
   /**
-   * Load-time verification (MUST NOT re-solve): pure disk check against the
-   * lockfile. Missing lockfile = legacy profile (ok)；形状非法（旧 schema /
-   * 损坏）→ 显式 lockfile-mismatch（修复批次 3 / A12，不静默迁移）。
-   */
-  async verifyAtBoot(): Promise<{ readonly ok: true } | { readonly ok: false; readonly report: ResolutionReport }> {
-    const read = await readLockfile(this.lockPath())
-    if (read === undefined) return { ok: true }
-    if (!read.ok) {
-      return {
-        ok: false,
-        report: {
-          code: 'lockfile-mismatch',
-          summary: `lockfile 形状无效：${read.problem}（旧 schema 或损坏；请重新 restore/重装后重试）`,
-          cycles: [],
-          conflicts: [{
-            plugin: 'lockfile',
-            constraint: { kind: 'entry', target: 'lockfile', range: 'schema' },
-            chain: ['lockfile'],
-            candidates: [{ version: '<lockfile>', rejected: [read.problem] }],
-            actions: ['重新 restore/重装以生成新 schema lockfile'],
-          }],
-        },
-      }
-    }
-    const lockfile = read.lockfile
-    const verified = await verifyLockfile(this.options.paths, lockfile)
-    if (verified.ok) {
-      const importIssues = await this.verifySymbolImportsAgainstLock(lockfile)
-      if (importIssues.length === 0) return { ok: true }
-      return {
-        ok: false,
-        report: {
-          code: 'lockfile-mismatch',
-          summary: `符号 import 集校验失败：${importIssues.length} 项`,
-          cycles: [],
-          conflicts: importIssues.map(issue => ({
-            plugin: issue.split(' ')[0] as string,
-            constraint: { kind: 'entry', target: 'symbols', range: 'lockfile' },
-            chain: [issue.split(' ')[0] as string],
-            candidates: [{ version: 'locked', rejected: [issue] }],
-            actions: ['执行 mygo reinstall 重新校验并更新 lockfile'],
-          })),
-        },
-      }
-    }
-    const conflicts = verified.issues.map(issue => ({
-      plugin: issue.id,
-      constraint: { kind: 'entry' as const, target: issue.id, range: issue.version },
-      chain: [issue.id],
-      candidates: [{ version: issue.version, rejected: [issue.reason] }],
-      actions: ['执行 mygo update / reinstall 重新求解并修复安装'],
-    }))
-    return {
-      ok: false,
-      report: {
-        code: 'lockfile-mismatch',
-        summary: `lockfile 校验失败：${verified.issues.length} 项不匹配`,
-        cycles: [],
-        conflicts,
-      },
-    }
-  }
-
-  /** 加载期符号校验：对照 lockfile 记录的 import 集（不重新解析目标包）。 */
-  private async verifySymbolImportsAgainstLock(lockfile: Lockfile): Promise<readonly string[]> {
-    const issues: string[] = []
-    for (const [id, lock] of Object.entries(lockfile.plugins)) {
-      if (lock.symbols === undefined) continue
-      const dir = packageDir(this.options.paths, id, lock.version)
-      const current = await scanPluginImports(dir)
-      const lockedKeys = new Set(lock.symbols.map(symbol => `${symbol.specifier}#${symbol.file}#${symbol.symbol}`))
-      const currentKeys = new Set(
-        current.flatMap(ref => ref.named.map(symbol => `${ref.specifier}#${ref.file}#${symbol}`)),
-      )
-      if (lockedKeys.size !== currentKeys.size
-        || [...lockedKeys].some(key => !currentKeys.has(key))
-        || [...currentKeys].some(key => !lockedKeys.has(key))) {
-        issues.push(`${id}@${lock.version} 符号 import 集与 lockfile 不一致（请执行重装）`)
-      }
-    }
-    return issues
-  }
-
-  /** Topological mount order from the lockfile (dependencies first). */
-  async mountOrder(): Promise<{ readonly ok: true; readonly order: readonly string[] } | { readonly ok: false; readonly report: ResolutionReport }> {
-    const lockfile = await this.readLock()
-    if (lockfile === undefined) return { ok: true, order: [] }
-    const ids = Object.keys(lockfile.plugins).sort()
-    const edges: MountEdge[] = []
-    for (const id of ids) {
-      const lock = lockfile.plugins[id]
-      if (lock === undefined) continue
-      for (const target of Object.keys(lock.depends)) {
-        if (ids.includes(target)) edges.push({ from: id, to: target })
-      }
-    }
-    const result = computeMountOrder(ids, edges)
-    if (result.ok) return { ok: true, order: result.order }
-    return {
-      ok: false,
-      report: {
-        code: 'dependency-cycle',
-        summary: `lockfile 依赖环：${result.cycle.join(' → ')}`,
-        cycles: [{ cycle: result.cycle }],
-        conflicts: [],
-      },
-    }
-  }
-
-  /** Load one locked plugin's entry from the store (no registry). */
-  async loadEntry(packageNameOrId: string): Promise<{ readonly plugin: unknown; readonly installed: InstalledPackage } | undefined> {
-    const lockfile = await this.readLock()
-    if (lockfile === undefined) return undefined
-    // 先按 manifest id 精确匹配，再按 npm packageName 匹配（兼容旧 lockfile）。
-    const direct = lockfile.plugins[packageNameOrId]
-    const byPackageName = direct === undefined
-      ? Object.entries(lockfile.plugins).find(([, lock]) => lock.packageName === packageNameOrId)
-      : undefined
-    if (direct === undefined && byPackageName === undefined) return undefined
-    const id = direct === undefined ? (byPackageName as [string, LockedPlugin])[0] : packageNameOrId
-    const lock = direct ?? (byPackageName as [string, LockedPlugin])[1]
-    const dir = packageDir(this.options.paths, id, lock.version)
-    const module = await loadPluginEntry(dir, lock.entry)
-    const plugin = extractPlugin(module)
-    if (plugin === undefined) throw new Error(`插件 ${id} 入口未导出可挂载插件（${lock.entry}）`)
-    const manifest: PluginManifestV2 = {
-      formatVersion: 1,
-      id,
-      version: lock.version,
-      entry: lock.entry,
-      depends: lock.depends,
-      breaks: lock.breaks,
-      // A3（修复批次 3）：requires/symbolAliases 从 lockfile 还原，不再硬编码 {}。
-      requires: lock.requires,
-      ...(Object.keys(lock.symbolAliases).length === 0 ? {} : { symbolAliases: lock.symbolAliases }),
-      core: lock.core,
-      recommends: {},
-      provides: lock.provides ?? [],
-      entrypoints: {},
-      bundles: [],
-    }
-    return {
-      plugin,
-      installed: {
-        id,
-        version: lock.version,
-        dir,
-        entry: lock.entry,
-        manifest,
-        entrySha256: lock.entrySha256,
-        manifestSha256: lock.manifestSha256,
-        // DG-2（修复批次 3）：新 schema 的 entrySha512 必填（形状校验保证）。
-        entrySha512: lock.entrySha512,
-        ...(lock.tarballSha512 === undefined ? {} : { tarballSha512: lock.tarballSha512 }),
-        ...(lock.entryFileSize === undefined ? {} : { entryFileSize: lock.entryFileSize }),
-        ...(lock.integrity === undefined ? {} : { integrity: lock.integrity }),
-      },
-    }
-  }
-
-  /**
-   * 从当前 lockfile + store 构建确定性 mygo-pack（design-r4 B21/B25）。
-   * 离线；同一 store 两次构建产物字节级一致（T32）。
+   * 从 installRoot 的已还原插件集构建确定性 mygo-pack（design-r4 B21/B25）。
+   * 离线；同一输入两次构建产物字节级一致（T32）。
    */
   async buildPack(options: PackBuildOptions): Promise<PackBuildOutcome> {
-    return buildPluginPack(this.options, options)
+    return buildPluginPack({
+      installRoot: this.options.paths.packagesRoot,
+      tmpDir: this.options.paths.tmpDir,
+      profile: this.options.profile,
+      managerVersion: this.options.managerVersion,
+      ...(this.options.coreVersion === undefined ? {} : { coreVersion: this.options.coreVersion }),
+      ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),
+    }, options)
   }
 
   /**
-   * 安装 mygo-pack：清单/成员/哈希预检 → 既有求解器 → store 安装 →
-   * lockfile 写入（design-r4 B23）。全部校验先于任何 store 写入；离线。
+   * 安装 mygo-pack：清单/成员/哈希预检 → 普通落盘还原（design-r4 B23）。
+   * 全部校验先于任何落盘写入；离线；无 lockfile 读写。
    */
   async installPack(packPath: string, options: PackInstallOptions = {}): Promise<PackInstallOutcome> {
-    return installPluginPack(this.options, packPath, options)
+    return installPluginPack({
+      installRoot: this.options.paths.packagesRoot,
+      tmpDir: this.options.paths.tmpDir,
+      profile: this.options.profile,
+      managerVersion: this.options.managerVersion,
+      ...(this.options.coreVersion === undefined ? {} : { coreVersion: this.options.coreVersion }),
+      ...(this.options.tarCmd === undefined ? {} : { tarCmd: this.options.tarCmd }),
+    }, packPath, options)
   }
 }

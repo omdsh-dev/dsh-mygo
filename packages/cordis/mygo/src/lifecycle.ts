@@ -10,7 +10,6 @@
 
 import { PluginError, formatPluginError, fromCordisPlugin } from '@deepseek-ai/dsh-mygo-api'
 import type {
-  ActivationPlan,
   CompositionFactProvider,
   CompatibilityReport,
   InstallOptions,
@@ -118,7 +117,6 @@ import {
 } from './compatibility.ts'
 import { EntrypointsTable } from './entrypoints.ts'
 import type { BundleInstallResult, BundleMember, BundleRail } from './bundle-rail.ts'
-import { solveActivation, type ActivationPlugin } from './activation.ts'
 import type { RegistryPersistence } from './persistence.ts'
 import type { SnapshotMeta } from './snapshots.ts'
 import type {
@@ -584,9 +582,6 @@ interface ManagedRecord {
   status: 'enabled' | 'disabled' | 'quarantined' | 'shadowed'
   /** 政策/反应式状态（EB-D16 三态：disabled > 政策拒绝 > INACTIVE）。 */
   policyStatus?: 'active' | 'inactive' | 'policy-rejected'
-  /** BOM 对账事实（entry sha512/fileSize；B9）。 */
-  entrySha512?: string
-  entryFileSize?: number
   reason?: string
   /** Host side effects were revoked by disable; enable must remount. */
   hostSideEffectsDropped?: boolean
@@ -996,24 +991,9 @@ export class LifecycleEngine {
     const definition = await this.resolveSource(source)
     return this.withLock(definition.id, 'install', async () => {
       this.validate(definition, origin, source)
-      if (options.autoResolve === true) {
-        const activationPlan = planOperation(
-          { op: 'install', plugin: this.declarationFromDefinition(definition) },
-          this.planState(),
-        )
-        if (!activationPlan.accepted) {
-          // The detailed P1 report is the canonical rejection; the solver
-          // plan preview above exists to discover required-by actions.
-          this.assertCompatibility(definition)
-        }
-        for (const action of activationPlan.actions ?? []) {
-          if (action.op === 'enable' && action.kind === 'required-by') {
-            await this.enable(action.id)
-          }
-        }
-      } else {
-        this.assertCompatibility(definition)
-      }
+      // 范围重塑（2026-08-13）：激活求解器已删除，安装只做兼容预检
+      // （assertCompatibility）；depends 闭包连带启用不再发生。
+      this.assertCompatibility(definition)
       await this.assertRegistryQuota(source, definition.id)
       const existing = this.records.get(definition.id)
       if (existing !== undefined) {
@@ -1329,14 +1309,9 @@ export class LifecycleEngine {
    */
   async enable(id: string): Promise<void> {
     if (this.isBundleMember(id)) {
-      const activationPlan = planOperation({ op: 'enable', id }, this.planState())
-      if (!activationPlan.accepted || activationPlan.error !== undefined) {
-        throw fail(activationPlan.error?.code ?? 'compatibility-conflict', { plugin: id }, id)
-      }
-      for (const action of activationPlan.actions ?? []) {
-        if (action.op !== 'enable' || action.kind !== 'required-by' || action.id === id) continue
-        if (this.isBundleMember(action.id)) this.bundleRail?.enable(action.id)
-        else await this.enable(action.id)
+      const plan = planOperation({ op: 'enable', id }, this.planState())
+      if (!plan.accepted || plan.error !== undefined) {
+        throw fail(plan.error?.code ?? 'compatibility-conflict', { plugin: id }, id)
       }
       this.bundleRail?.enable(id)
       return
@@ -1448,15 +1423,10 @@ export class LifecycleEngine {
    */
   async disable(id: string, reason?: string, force = false): Promise<void> {
     if (this.isBundleMember(id)) {
-      const activationPlan = planOperation({ op: 'disable', id, force }, this.planState())
-      if (!activationPlan.accepted || activationPlan.error !== undefined) {
-        const dependents = (activationPlan.error?.details?.dependents as readonly string[] | undefined) ?? []
+      const plan = planOperation({ op: 'disable', id, force }, this.planState())
+      if (!plan.accepted || plan.error !== undefined) {
+        const dependents = (plan.error?.details?.dependents as readonly string[] | undefined) ?? []
         throw fail('dependent-exists', { dependents }, id)
-      }
-      for (const action of activationPlan.actions ?? []) {
-        if (action.op !== 'disable' || action.id === id) continue
-        if (this.isBundleMember(action.id)) this.bundleRail?.disable(action.id)
-        else await this.disable(action.id, reason, false)
       }
       this.bundleRail?.disable(id)
       return
@@ -1465,15 +1435,12 @@ export class LifecycleEngine {
       const record = this.requireRecord(id, 'disable')
       if (record.status === 'disabled') return
       if (record.status === 'shadowed') return
-      const activationPlan = planOperation({ op: 'disable', id, force }, this.planState())
-      if (!activationPlan.accepted) {
-        const dependents = (activationPlan.error?.details?.dependents as readonly string[] | undefined) ?? []
+      // 求解器级联停用已删除（2026-08-13 范围重塑）：有 requires 级下游时
+      // 只能显式 force 或先停用下游。
+      const plan = planOperation({ op: 'disable', id, force }, this.planState())
+      if (!plan.accepted) {
+        const dependents = (plan.error?.details?.dependents as readonly string[] | undefined) ?? []
         throw fail('dependent-exists', { dependents }, id)
-      }
-      for (const action of activationPlan.actions ?? []) {
-        if (action.op === 'disable' && action.id !== id && action.kind === 'conflict-resolution') {
-          await this.disable(action.id, reason, false)
-        }
       }
       // Delete-class persist first for dynamic rows; static records never
       // write a phantom status row into the registry.
@@ -1870,19 +1837,6 @@ export class LifecycleEngine {
   }
 
   /**
-   * DG-2（修复批次 3）：把 lockfile 的 BOM 对账事实（真 entrySha512 /
-   * entryFileSize）灌入运行时 record——恢复路径的唯一写入点，BOM 输出消费。
-   */
-  attachBomFacts(facts: ReadonlyMap<string, { readonly entrySha512: string; readonly entryFileSize?: number }>): void {
-    for (const [id, fact] of facts) {
-      const record = this.records.get(id)
-      if (record === undefined) continue
-      record.entrySha512 = fact.entrySha512
-      if (fact.entryFileSize !== undefined) record.entryFileSize = fact.entryFileSize
-    }
-  }
-
-  /**
    * Current resolved config of one managed plugin's live generation.
    * @param id - plugin id.
    * @returns the resolved config, or `undefined` when unknown.
@@ -1974,28 +1928,29 @@ export class LifecycleEngine {
     return { member, plan }
   }
 
-  /** Solve one newly installed bundle as an incoming activation (pre-apply verify). */
-  private verifyBundleInstall(member: BundleMember): ActivationPlan {
-    const plugins: ActivationPlugin[] = this.planState()
-      .plugins
-      .filter(plugin => plugin.id !== member.id)
-      .map(plugin => ({
-        id: plugin.id,
-        ...(plugin.version === undefined ? {} : { version: plugin.version }),
-        ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
-        ...(plugin.provides === undefined ? {} : { provides: plugin.provides }),
-        enabled: plugin.enabled !== false,
-        ...(plugin.rail === undefined ? {} : { rail: plugin.rail }),
-      }))
-    const incoming: ActivationPlugin = {
+  /**
+   * Pre-apply verify of one newly installed bundle member (2026-08-13 范围
+   * 重塑：激活求解器已删除，改用纯求值的 plan 预览——兼容预检 + 关系冲突，
+   * 无级联动作）。
+   */
+  private verifyBundleInstall(member: BundleMember): PluginOperationPlan {
+    const state = this.planState()
+    const filtered: PlanState = {
+      ...state,
+      plugins: state.plugins.filter(plugin => plugin.id !== member.id),
+    }
+    const incoming: PluginDeclarationInput = {
       id: member.id,
       ...(member.version === undefined ? {} : { version: member.version }),
-      ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
-      ...(member.provides === undefined ? {} : { provides: member.provides }),
+      permissions: emptyPermissions(),
+      requires: [],
+      provides: member.provides ?? [],
       enabled: true,
+      origin: 'static',
       rail: 'bundle',
+      ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
     }
-    return solveActivation(plugins, { op: 'install', plugin: incoming })
+    return planOperation({ op: 'install', plugin: incoming }, filtered)
   }
 
   /** Uninstall one profile bundle (dependents block first, no force). */
@@ -4153,8 +4108,6 @@ export class LifecycleEngine {
         ? {}
         : { compatibility: generation.manifest.compatibility }),
       policyStatus: this.policyStatusOf(record),
-      ...(record.entrySha512 === undefined ? {} : { entrySha512: record.entrySha512 }),
-      ...(record.entryFileSize === undefined ? {} : { entryFileSize: record.entryFileSize }),
     }
   }
 

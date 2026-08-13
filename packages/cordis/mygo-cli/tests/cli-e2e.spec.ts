@@ -106,7 +106,6 @@ function cliCorpus(): CorpusPlugin {
       version: '0.0.1-rc.1',
       entry: 'src/index.ts',
       core: '*',
-      depends: {},
       requires: {},
     },
   }
@@ -156,13 +155,18 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       expect(restoreJson.warnings.some(warning => warning.includes('社区依赖'))).toBe(true)
 
       const packManifest = await readPackManifest(packPath)
-      const rLock = await readFile(join(home, 'mygo', 'lockfiles', 'cli-r.dsh.lock.json'), 'utf8')
-      // RT1 口径：语义载荷（plugins 段）逐字节一致；generated 是安装侧事实
-      // （profile/managerVersion/时间，D-A5），不属于语义载荷。
-      const rLockObj = JSON.parse(rLock) as { generated: { profile: string }; plugins: unknown }
-      const packLockObj = packManifest.lockfile as { generated: { profile: string }; plugins: unknown }
-      expect(JSON.stringify(rLockObj.plugins)).toBe(JSON.stringify(packLockObj.plugins))
-      expect(rLockObj.generated.profile).toBe('cli-r')
+      // RT1 口径（2026-08-13 重塑）：无 lockfile——还原侧 (id, version) 集合
+      // 与 pack 清单声明逐条一致。
+      const pathsR = resolveMygoPaths('cli-r', process.env)
+      const restored: string[] = []
+      const { readdir } = await import('node:fs/promises')
+      for (const id of await readdir(pathsR.packagesRoot)) {
+        for (const version of await readdir(join(pathsR.packagesRoot, id))) {
+          restored.push(`${id}@${version}`)
+        }
+      }
+      const declared = packManifest.plugins.map(plugin => `${plugin.id}@${plugin.version}`).sort()
+      expect(restored.sort()).toEqual(declared)
     } finally {
       await registry.close()
     }
@@ -220,14 +224,12 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       out = capture()
       expect(await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-r', '--json'])).toBe(0)
 
-      // 还原后：CLI 插件在 R 的 store 中，入口文件与仓库源码逐字节一致。
+      // 还原后：CLI 插件在 R 的还原根中，入口文件与仓库源码逐字节一致。
       const pathsR = resolveMygoPaths('cli-r', process.env)
       const storeEntry = join(pathsR.packagesRoot, 'dsh-mygo-cli', '0.0.1-rc.1', 'src', 'index.ts')
       expect(await sha256File(storeEntry)).toBe(await sha256File(join(CLI_PKG_ROOT, 'src', 'index.ts')))
-      const rLock = JSON.parse(await readFile(join(home, 'mygo', 'lockfiles', 'cli-r.dsh.lock.json'), 'utf8')) as {
-        plugins: Record<string, unknown>
-      }
-      expect(Object.keys(rLock.plugins)).toEqual(['dsh-mygo-cli'])
+      const { readdir } = await import('node:fs/promises')
+      expect(await readdir(pathsR.packagesRoot)).toEqual(['dsh-mygo-cli'])
 
       // R 启动（无 mygo 参数不阻塞）后，CLI 可再次 pack。
       const r = await mountCliComposition([], { profile: 'cli-r', home, registry: registry.url })

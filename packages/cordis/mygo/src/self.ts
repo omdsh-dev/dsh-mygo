@@ -1,8 +1,9 @@
 /**
  * mygo 自身安装事实（版本 / 远端 / commit）。
  *
- * 版本事实来源按优先级：`$DSH_HOME/mygo-self.json#version`（install.sh
- * 写入，与仓库 `VERSION` 文件同源）→ 内置回退 `0.1.0`（开发/harness 环境）。
+ * 版本事实来源按优先级：`$DSH_HOME/mygo-self.json#version`（安装器写入，
+ * 与仓库 `VERSION` 文件同源；install.sh 退役后由 P3 新安装形态承担）→
+ * 内置回退：包自身 package.json 版本（开发/harness 环境）。
  * 统一依赖图（`dsh-mygo` 成员）与 BOM 导出都用这一份事实，避免
  * `MYGO_MANAGER_VERSION` 硬编码漂移（历史坑：常量 0.1.0 与仓库 0.1.1 不一致）。
  * @module @deepseek-ai/dsh-mygo/src/self

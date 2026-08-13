@@ -281,7 +281,7 @@ describe('bundle rail unified graph', () => {
     return { type: 'inline', code: id }
   }
 
-  it('solves required-by enable across rails and routes bundle enable', async () => {
+  it('enable plan rejects a bridge plugin whose compat-depends bundle is disabled (no cascade)', async () => {
     const f = fixture()
     writeBundle(f, '@dsh-external/test-bundle')
     declareInstalled(f, '@dsh-external/test-bundle', true)
@@ -306,10 +306,12 @@ describe('bundle rail unified graph', () => {
     })
     await engine.install(source('alpha'))
     await engine.bundleSetEnabled('test-bundle', false, true)
+    // 求解器级联已删除（2026-08-13 范围重塑）：bundle 停用不连带停用 alpha，
+    // 显式停用后 enable 预览按兼容预检拒绝（depends 目标已停用）。
+    await engine.disable('alpha')
     const plan = await engine.plan({ op: 'enable', id: 'alpha' })
-    expect(plan.accepted).toBe(true)
-    expect(plan.actions?.some(action => action.op === 'enable' && action.id === 'test-bundle' && action.kind === 'required-by'))
-      .toBe(true)
+    expect(plan.accepted).toBe(false)
+    expect(plan.error?.code).toBe('compatibility-conflict')
     await engine.bundleSetEnabled('test-bundle', true)
     expect(f.rail.members()[0]?.enabled).toBe(true)
     await engine.enable('alpha')
@@ -318,15 +320,15 @@ describe('bundle rail unified graph', () => {
     rmSync(f.checkout, { recursive: true, force: true })
   })
 
-  it('blocks disabling a bundle with an enabled bridge dependent and force cascades', async () => {
+  it('blocks disabling a bundle whose provided service has an enabled requires-dependent; force overrides', async () => {
     const f = fixture()
-    writeBundle(f, '@dsh-external/test-bundle')
+    writeBundle(f, '@dsh-external/test-bundle', { provides: ['bundle-svc'] })
     declareInstalled(f, '@dsh-external/test-bundle', true)
 
     const ctx = new Context()
     const store = new InMemoryRegistryStore()
     const definitions = new Map<string, PluginDefinition>()
-    definitions.set('alpha', plugin('alpha', { depends: { 'test-bundle': '>=1.0.0' } }))
+    definitions.set('alpha', { ...plugin('alpha'), requires: ['bundle-svc'] })
     const machine = new DispatchMachine(ctx, { vocabulary: new Map() })
     machine.start()
     const engine = new LifecycleEngine({
@@ -347,7 +349,8 @@ describe('bundle rail unified graph', () => {
     })
     await engine.bundleSetEnabled('test-bundle', false, true)
     expect(f.rail.members()[0]?.enabled).toBe(false)
-    expect(engine.plugins().find(handle => handle.id === 'alpha')?.status).toBe('disabled')
+    // 级联停用已删除：下游保持 enabled，由调用方显式处理。
+    expect(engine.plugins().find(handle => handle.id === 'alpha')?.status).toBe('enabled')
     rmSync(f.dshHome, { recursive: true, force: true })
     rmSync(f.checkout, { recursive: true, force: true })
   })

@@ -164,12 +164,12 @@ export async function startOfflineRegistry(packed: readonly PackedPackage[]): Pr
   }
 }
 
-/** 安装语料到全新隔离 store（真实 tarball → 真实 lockfile）。 */
+/** 安装语料到全新隔离还原根（真实 tarball → 普通落盘；2026-08-13 起无 lockfile）。 */
 export async function installCorpusToStore(
   packed: readonly PackedPackage[],
   registryUrl: string,
   profile = 'e2e',
-): Promise<{ readonly manager: PluginPackageManager; readonly paths: ReturnType<typeof resolveMygoPaths>; readonly lockfile: string }> {
+): Promise<{ readonly manager: PluginPackageManager; readonly paths: ReturnType<typeof resolveMygoPaths> }> {
   const root = await mkdtemp(join(tmpdir(), 'mygo-e2e-store-'))
   const paths = resolveMygoPaths(profile, { DSH_HOME: join(root, 'home') })
   const manager = new PluginPackageManager({
@@ -188,8 +188,7 @@ export async function installCorpusToStore(
       throw new Error(`install ${item.plugin.name} 失败：${outcome.report.summary}`)
     }
   }
-  const lockfile = await manager.readLock()
-  return { manager, paths, lockfile: JSON.stringify(lockfile, null, 2) }
+  return { manager, paths }
 }
 
 /** 按 manifest depends 拓扑排序（真实依赖先装；确定性 DFS）。 */

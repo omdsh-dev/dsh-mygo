@@ -177,7 +177,7 @@ async function runRestore(
   const core = coreVersion()
   const outcome = await managerFor(target).installPack(packPath, core === undefined ? {} : { coreVersion: core })
   if (outcome.ok) {
-    const pluginCount = Object.keys(outcome.lockfile.plugins).length
+    const pluginCount = outcome.restored.length
     if (command.json) {
       internals.stdout.write(jsonOutput('restore', {
         ok: true,

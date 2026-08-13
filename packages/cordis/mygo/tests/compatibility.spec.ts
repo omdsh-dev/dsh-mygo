@@ -274,18 +274,17 @@ describe('transitive closure and soft vocabulary', () => {
     definitions.set('alpha', plugin('alpha', { compatibility: { depends: { beta: '>=1.0.0' } } }))
     await engine.install(source('beta'))
     await engine.disable('beta')
-    // P2: the plan now proposes the required-by enable instead of refusing.
+    // 求解器已删除（2026-08-13 范围重塑）：plan 只求值——depends 目标 disabled
+    // 即 compatibility-conflict，不再提级联启用动作。
     const plan = await engine.plan({ op: 'install', source: source('alpha') })
-    expect(plan.accepted).toBe(true)
-    expect(plan.actions?.some(action => action.op === 'enable' && action.id === 'beta' && action.kind === 'required-by'))
-      .toBe(true)
-    // Without autoResolve the engine still refuses with the state reason.
+    expect(plan.accepted).toBe(false)
+    expect(plan.error?.code).toBe('compatibility-conflict')
     await expect(engine.install(source('alpha'))).rejects.toMatchObject({
       code: 'compatibility-conflict',
     })
   })
 
-  it('proposes required-by enables for a plugin whose depends closure is disabled', async () => {
+  it('rejects enabling a plugin whose depends closure is disabled until the target is enabled', async () => {
     const { engine, definitions } = harness()
     definitions.set('beta', plugin('beta', { version: '1.0.0' }))
     definitions.set('alpha', plugin('alpha', { version: '1.0.0', compatibility: { depends: { beta: '>=1.0.0' } } }))
@@ -294,9 +293,8 @@ describe('transitive closure and soft vocabulary', () => {
     await engine.disable('alpha')
     await engine.disable('beta')
     const plan = await engine.plan({ op: 'enable', id: 'alpha' })
-    expect(plan.accepted).toBe(true)
-    expect(plan.actions?.some(action => action.op === 'enable' && action.id === 'beta' && action.kind === 'required-by'))
-      .toBe(true)
+    expect(plan.accepted).toBe(false)
+    expect(plan.error?.code).toBe('compatibility-conflict')
     await engine.enable('beta')
     await engine.enable('alpha')
     expect(engine.plugins().find(handle => handle.id === 'alpha')?.status).toBe('enabled')

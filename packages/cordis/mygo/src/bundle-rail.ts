@@ -25,7 +25,8 @@ import {
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import * as yaml from 'js-yaml'
-import type { ActivationPlan, PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginCompatibility } from '@deepseek-ai/dsh-mygo-api'
+import type { PluginOperationPlan } from './types.ts'
 
 /** One row-level fact extracted from a bundle's `cordis.patch.yml`. */
 export interface BundlePatchFact {
@@ -56,8 +57,8 @@ export interface BundleMember {
 /** Outcome of one verified bundle install. */
 export interface BundleInstallResult {
   readonly member: BundleMember
-  /** Pre-apply activation plan; rejected means the install was rolled back. */
-  readonly plan: ActivationPlan
+  /** Pre-apply plan preview; rejected means the install was rolled back. */
+  readonly plan: PluginOperationPlan
 }
 
 export interface BundleRailOptions {

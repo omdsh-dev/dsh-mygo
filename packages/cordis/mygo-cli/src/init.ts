@@ -45,15 +45,13 @@ const IDENTITY_FILES = [
   'AGENTS.md',
 ]
 
-/** 模板 package.json 的 mygo 词汇增量（design-r5 §5.3）。 */
+/** 模板 package.json 的 mygo 词汇增量（design-r5 §5.3；2026-08-13 起无 depends/breaks）。 */
 function mygoBlock(id: string, version: string): Record<string, unknown> {
   return {
     formatVersion: 1,
     id,
     version,
     entry: 'lib/index.js',
-    depends: {},
-    breaks: {},
     requires: {},
     core: '^0.0.1-rc.1',
     loader: { id: 'standard', range: '^1.0.0' },

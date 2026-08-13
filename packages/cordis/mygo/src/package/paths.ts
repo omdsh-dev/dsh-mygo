@@ -1,6 +1,8 @@
 /**
- * mygo 基础路径（《收敛任务》不变量 6/7）：一切相对 `$DSH_HOME/mygo` 分配，
+ * mygo 基础路径：一切相对 `$DSH_HOME/mygo` 分配，
  * 禁止依赖 process.cwd / __dirname / dsh 安装位置 / npx 缓存。
+ * 2026-08-13 范围重塑：dsh.lock/v1 lockfile 已删除（pnpm 安装状态为唯一
+ * 真相源），路径表同步去掉 lockfile 目录。
  * @module @deepseek-ai/dsh-mygo/src/package/paths
  */
 
@@ -11,10 +13,8 @@ import { join } from 'node:path'
 export interface MygoPaths {
   /** `$DSH_HOME/mygo` */
   readonly base: string
-  /** Immutable plugin store: `<base>/packages/<id>/<version>/` */
+  /** 已还原插件根目录：`<base>/packages/<id>/<version>/`（普通落盘，无 store 语义） */
   readonly packagesRoot: string
-  /** Lockfiles: `<base>/lockfiles/` */
-  readonly lockfileDir: string
   /** Plugin config: `<base>/config/` */
   readonly configDir: string
   /** Install staging: `<base>/tmp/` */
@@ -41,19 +41,13 @@ export function resolveMygoPaths(
   return {
     base,
     packagesRoot: join(base, 'packages'),
-    lockfileDir: join(base, 'lockfiles'),
     configDir: join(base, 'config'),
     tmpDir: join(base, 'tmp'),
     bridgesDir: join(base, 'bridges'),
   }
 }
 
-/** Lockfile path for one profile. */
-export function lockfilePath(paths: MygoPaths, profile: string): string {
-  return join(paths.lockfileDir, `${profile}.dsh.lock.json`)
-}
-
-/** Installed package dir for one plugin id+version. */
+/** Restored package dir for one plugin id+version. */
 export function packageDir(paths: MygoPaths, id: string, version: string): string {
   return join(paths.packagesRoot, id, version)
 }

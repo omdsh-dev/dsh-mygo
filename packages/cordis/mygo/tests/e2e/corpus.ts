@@ -78,7 +78,6 @@ export const CORPUS: readonly CorpusPlugin[] = [
       version: '0.0.2',
       entry: 'lib/index.js',
       core: '*',
-      depends: {},
       requires: {},
     },
     trust: 'trusted',
@@ -102,7 +101,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
     entry: 'src/index.ts',
     trust: 'reviewed',
     reviewNote: '已审阅 src/index.ts：tools 注册 + module imports；engines.dsh >=0.0.1（harvester 信号样本）；无 install 脚本',
-    manifestOverlay: { entry: 'src/index.ts', core: '*', depends: {}, requires: {} },
+    manifestOverlay: { entry: 'src/index.ts', core: '*', requires: {} },
   },
   {
     category: 'F2',
@@ -112,7 +111,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
     entry: 'src/index.ts',
     trust: 'reviewed',
     reviewNote: '已审阅 src/index.ts：tools/systemPrompt 注入 + module imports；仅调用工具时触网；无 install 脚本',
-    manifestOverlay: { entry: 'src/index.ts', core: '*', depends: {}, requires: {} },
+    manifestOverlay: { entry: 'src/index.ts', core: '*', requires: {} },
   },
   {
     category: 'F2',
@@ -122,7 +121,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
     entry: 'src/index.ts',
     trust: 'reviewed',
     reviewNote: '已审阅 src/index.ts：sessionProjections 注入 + module imports；无 install 脚本',
-    manifestOverlay: { entry: 'src/index.ts', core: '*', depends: {}, requires: {} },
+    manifestOverlay: { entry: 'src/index.ts', core: '*', requires: {} },
   },
   {
     category: 'F2',
@@ -132,7 +131,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
     entry: 'src/index.ts',
     trust: 'reviewed',
     reviewNote: '已审阅 src/index.ts：tools 注入 + module imports（yaml 依赖已由语料 node_modules 提供）；无 install 脚本',
-    manifestOverlay: { entry: 'src/index.ts', core: '*', depends: {}, requires: {} },
+    manifestOverlay: { entry: 'src/index.ts', core: '*', requires: {} },
   },
   {
     category: 'F2',
@@ -162,6 +161,14 @@ export const CORPUS: readonly CorpusPlugin[] = [
     packParts: ['package.json', 'lib'],
     trust: 'trusted',
     reviewNote: '参考实现：dsh.mygo 规范写法（depends dsh-voice-chat + requires voice-chat）',
+    // fixture 修正（2026-08-13 范围重塑）：真实仓库的顶层 depends 已从 manifest
+    // v3 移除；按语料机制注入 compatibility 等价声明（不改仓库，语义载荷保持）。
+    manifestOverlay: {
+      entry: 'lib/index.js',
+      core: '*',
+      requires: { 'voice-chat': '>=0.1.0' },
+      compatibility: { depends: { 'dsh-voice-chat': '>=0.1.0' } },
+    },
   },
   {
     category: 'F4',

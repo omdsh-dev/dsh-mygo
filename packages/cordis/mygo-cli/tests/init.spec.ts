@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkTemplateAlignment, parsePackageManifest } from '@deepseek-ai/dsh-mygo'
+import { checkTemplateAlignment, parsePackageManifest, resolveMygoPaths } from '@deepseek-ai/dsh-mygo'
 import { internals, invokeCli } from '../src/index.ts'
 import { collector, mountCliComposition, seedStore } from './helpers.ts'
 import { packCorpus, startOfflineRegistry, type PackedPackage } from '../../mygo/tests/e2e/harness.ts'
@@ -58,7 +58,6 @@ function skeletonCorpus(dir: string, name: string, id: string): CorpusPlugin {
       version: '0.0.1',
       entry: 'src/index.ts',
       core: '*',
-      depends: {},
       requires: {},
     },
   }
@@ -121,7 +120,7 @@ describe('init（T46）', () => {
         await expect(readFile(join(outDir, required), 'utf8')).resolves.toBeTruthy()
       }
 
-      // 可被 pack/restore：init 产物进 Q lockfile → pack → 还原到 R。
+      // 可被 pack/restore：init 产物落盘进 Q 还原根 → pack → 还原到 R。
       const packed: PackedPackage[] = [await packCorpus(skeletonCorpus(outDir, '@scope/my-plugin', 'my-plugin'))]
     const registry = await startOfflineRegistry(packed)
     try {
@@ -131,10 +130,8 @@ describe('init（T46）', () => {
       expect(await invokeCli(q.ctx, ['pack', '-o', packPath, '--json'])).toBe(0)
       out = capture()
       expect(await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-init-r', '--json'])).toBe(0)
-      const rLock = JSON.parse(await readFile(join(home, 'mygo', 'lockfiles', 'cli-init-r.dsh.lock.json'), 'utf8')) as {
-        plugins: Record<string, unknown>
-      }
-      expect(Object.keys(rLock.plugins)).toEqual(['my-plugin'])
+      const pathsR = resolveMygoPaths('cli-init-r', process.env)
+      expect(await readdir(pathsR.packagesRoot)).toEqual(['my-plugin'])
     } finally {
       await registry.close()
     }

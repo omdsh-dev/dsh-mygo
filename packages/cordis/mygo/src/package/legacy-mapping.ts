@@ -67,8 +67,6 @@ export function mapLegacyPluginFile(legacy: unknown): LegacyMappingResult {
       id,
       version: version ?? '0.0.0-legacy',
       entry: main,
-      depends: {},
-      breaks: {},
       requires: {},
       core: core ?? '*',
       recommends: {},

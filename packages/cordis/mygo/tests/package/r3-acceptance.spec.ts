@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { installPackageToStore } from '../../src/package/package-store.ts'
+import { restorePackage } from '../../src/package/package-restore.ts'
 import { resolveMygoPaths } from '../../src/package/paths.ts'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
 import { LifecycleEngine, type LifecycleEngineOptions } from '../../src/lifecycle.ts'
@@ -125,7 +125,7 @@ describe('T5: install-time hash mismatch never writes disk', () => {
     await rm(root, { recursive: true, force: true })
   })
 
-  it('rejects a corrupted integrity before writing the store (Modrinth HashError 对齐)', async () => {
+  it('rejects a corrupted integrity before writing the target dir (Modrinth HashError 对齐)', async () => {
     const paths = resolveMygoPaths('web', { DSH_HOME: join(root, 'home') })
     const manifest = parsePackageManifest({
       name: '@test/bad',
@@ -135,12 +135,12 @@ describe('T5: install-time hash mismatch never writes disk', () => {
     }).value
     if (manifest === undefined) throw new Error('manifest missing')
     const wrongIntegrity = `sha512-${createHash('sha512').update('wrong').digest('base64')}`
-    await expect(installPackageToStore(paths, {
+    await expect(restorePackage(join(paths.packagesRoot, 'bad', '1.0.0'), {
       version: '1.0.0',
       tarball: `http://127.0.0.1:${port}/bad.tgz`,
       integrity: wrongIntegrity,
       manifest,
-    })).rejects.toThrow(/完整性校验失败/)
+    }, { tmpDir: paths.tmpDir })).rejects.toThrow(/完整性校验失败/)
     const storeRoot = join(paths.packagesRoot)
     await expect(readdir(storeRoot)).rejects.toBeTruthy()
   })

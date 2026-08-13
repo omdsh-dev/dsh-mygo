@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { performance } from 'node:perf_hooks'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -36,7 +36,6 @@ let packed: PackedPackage[] = []
 let registry: Awaited<ReturnType<typeof startOfflineRegistry>>
 let packer: PluginPackageManager
 let packerPaths: ReturnType<typeof resolveMygoPaths>
-let packerLockfile: string
 let packPath: string
 let packPath2: string
 
@@ -57,10 +56,21 @@ function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-/** 语义载荷归一（generated.at → '<t>'；T22/S2 口径）。 */
-function normalizeLock(text: string): string {
-  const parsed = JSON.parse(text) as { generated: { at: string } }
-  return JSON.stringify({ ...parsed, generated: { ...parsed.generated, at: '<t>' } })
+/** 枚举 installRoot 下已还原的 (id, version) 对（确定性序）。 */
+async function restoredSet(home: string): Promise<readonly string[]> {
+  const packagesRoot = join(home, 'mygo', 'packages')
+  const out: string[] = []
+  let ids: string[] = []
+  try {
+    ids = (await readdir(packagesRoot)).sort()
+  } catch {
+    return []
+  }
+  for (const id of ids) {
+    const versions = (await readdir(join(packagesRoot, id))).sort()
+    for (const version of versions) out.push(`${id}@${version}`)
+  }
+  return out
 }
 
 /** 从 pack 文件解析清单（测试辅助）。 */
@@ -138,11 +148,6 @@ function minimalManifest(): PackManifest {
     generated: { by: 'dsh-mygo', version: '0.3.0-e2e', profile: 'e2e', at: '<t>' },
     manifestSha256: '',
     plugins: [],
-    lockfile: {
-      format: 'dsh.lock/v1',
-      generated: { by: 'dsh-mygo', version: '0.3.0-e2e', profile: 'e2e', at: '<t>' },
-      plugins: {},
-    },
     files: [],
     communityDeps: [],
   }
@@ -176,7 +181,6 @@ beforeAll(async () => {
   const installed = await installCorpusToStore(packed, registry.url, 'e2e')
   packer = installed.manager
   packerPaths = installed.paths
-  packerLockfile = installed.lockfile
   packPath = join(root, 'first.mygo-pack')
   packPath2 = join(root, 'second.mygo-pack')
   const firstStart = performance.now()
@@ -208,7 +212,7 @@ describe('T32 打包确定性', () => {
 })
 
 describe('T33 RT1 打包→还原往返', () => {
-  it('全新空 profile 安装后 lockfile 语义载荷与包方逐字节一致', async () => {
+  it('全新空 installRoot 还原后 (id, version) 集合与打包方一致', async () => {
     const home = join(root, 'rt1-home')
     const receiver = freshManager(home)
     const start = performance.now()
@@ -216,10 +220,11 @@ describe('T33 RT1 打包→还原往返', () => {
     PACK_PERF['installPack-fresh'] = performance.now() - start
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
-    expect(normalizeLock(JSON.stringify(outcome.lockfile, null, 2))).toBe(normalizeLock(packerLockfile))
-    expect(normalizeLock(JSON.stringify(await receiver.readLock(), null, 2))).toBe(normalizeLock(packerLockfile))
-    // 加载期校验不重解：entry/manifest 哈希与 lockfile 一致。
-    expect((await receiver.verifyAtBoot()).ok).toBe(true)
+    const packerHome = dirname(packerPaths.base)
+    const expected = await restoredSet(packerHome)
+    expect(expected.length).toBeGreaterThan(0)
+    expect(outcome.restored.map(entry => `${entry.id}@${entry.version}`)).toEqual(expected)
+    expect(await restoredSet(home)).toEqual(expected)
   }, 60_000)
 })
 
@@ -387,38 +392,20 @@ describe('T38/T39/T41/T42 失败语义', () => {
     expect(outcome.report.summary).toContain('formatVersion')
   })
 
-  it('T39 声明区间与锁定 pin 冲突 → resolve-failed（scope pack）', async () => {
-    const conflicted = join(root, 'range-conflict.mygo-pack')
-    await repackWithManifestMutation(packPath, conflicted, manifest => {
-      const target = manifest.plugins[0]
-      if (target === undefined) throw new Error('无插件')
-      target.range = '^999.0.0'
-    })
-    const outcome = await freshManager(join(root, 'range-home')).installPack(conflicted)
-    expect(outcome.ok).toBe(false)
-    if (outcome.ok) return
-    expect(outcome.report.code).toBe('resolve-failed')
-    expect(outcome.report.scope).toBe('pack')
-    // 修复批次 4（review#2 A8 / 任务 4.5）：kind 口径按验证报告 item 8 修正为 'pin'。
-    expect(outcome.report.conflicts[0]?.constraint.kind).toBe('pin')
-  }, 60_000)
-
   it('T41 files[].path 逃逸 → pack-invalid', async () => {
     const bad = join(root, 'bad-path.mygo-pack')
     await writePackFromStaging(bad, async staging => {
       await mkdir(join(staging, 'files'), { recursive: true })
       const manifest = minimalManifest()
-      manifest.plugins = [{ id: 'calc', packageName: '@test/calc' }]
-      manifest.lockfile.plugins = {
-        calc: {
-          version: '1.0.0', entry: 'lib/index.js', core: '*', depends: {}, breaks: {},
-          // 修复批次 3（A3/DG-2）：新 schema 必填字段（T41 的拒绝点仍在 files[].path）。
-          requires: {}, symbolAliases: {},
-          entrySha256: 'a'.repeat(64), manifestSha256: 'b'.repeat(64),
-          entrySha512: 'd'.repeat(128),
-        },
-      }
-      manifest.files = [{ path: '../evil.tgz', pluginId: 'calc', packageName: '@test/calc', sha512: 'c'.repeat(128), fileSize: 0 }]
+      manifest.plugins = [{ id: 'calc', version: '1.0.0', packageName: '@test/calc' }]
+      manifest.files = [{
+        path: '../evil.tgz',
+        pluginId: 'calc',
+        version: '1.0.0',
+        packageName: '@test/calc',
+        sha512: 'c'.repeat(128),
+        fileSize: 0,
+      }]
       manifest.manifestSha256 = computePackManifestSha256(manifest)
       await writeFile(join(staging, 'mygo-pack.json'), JSON.stringify(manifest, null, 2) + '\n')
     })

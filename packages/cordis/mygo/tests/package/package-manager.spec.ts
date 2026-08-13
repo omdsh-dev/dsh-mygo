@@ -1,7 +1,8 @@
 /**
- * 端到端包管理测试（《收敛任务》验收场景）：
- * 干净目录 + 本地假 registry，覆盖 安装→加载→运行、lockfile 免疫新版本、
- * 持久化数据在 dsh 本体目录被删除后存活、失败报告格式。
+ * 端到端包管理测试（2026-08-13 范围重塑口径）：
+ * 干净目录 + 本地假 registry，覆盖 安装→落盘→加载运行、确定性版本选择
+ * （区间过滤，registry 有更新版本也不漂移）、还原产物独立于 dsh 本体目录、
+ * 失败报告格式。dsh.lock/v1 环节已删除（pnpm 安装状态为唯一真相源）。
  */
 
 import { createHash } from 'node:crypto'
@@ -13,14 +14,16 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PluginPackageManager } from '../../src/package/package-manager.ts'
+import { extractPlugin, loadPluginEntry } from '../../src/package/entry-loader.ts'
+import { readRestoredPackage } from '../../src/package/package-restore.ts'
 import { resolveMygoPaths } from '../../src/package/paths.ts'
 
 const execFileAsync = promisify(execFile)
 
 interface FakeVersion {
   readonly version: string
-  readonly depends?: Record<string, string>
-  readonly breaks?: Record<string, string>
+  /** 额外写入 dsh.mygo 的原始键（用于构造非法 manifest 候选）。 */
+  readonly extraManifestKeys?: Record<string, unknown>
   readonly entrySource?: string
 }
 
@@ -44,8 +47,7 @@ describe('plugin package manager (fake registry e2e)', () => {
         mygo: {
           entry: 'lib/index.js',
           core: '>=0.0.1-rc.1',
-          ...(entry.depends === undefined ? {} : { depends: entry.depends }),
-          ...(entry.breaks === undefined ? {} : { breaks: entry.breaks }),
+          ...(entry.extraManifestKeys ?? {}),
         },
       },
     }))
@@ -66,8 +68,8 @@ describe('plugin package manager (fake registry e2e)', () => {
     await mkdir(registryRoot, { recursive: true })
     paths = resolveMygoPaths('web', { DSH_HOME: join(root, 'home') })
     versions.length = 0
-    versions.push({ version: '1.0.0', depends: {} })
-    versions.push({ version: '2.0.0', depends: {} })
+    versions.push({ version: '1.0.0' })
+    versions.push({ version: '2.0.0' })
     tarballs = await Promise.all(versions.map(makeTarball))
     server = createServer(async (request, response) => {
       const url = request.url ?? ''
@@ -97,8 +99,7 @@ describe('plugin package manager (fake registry e2e)', () => {
               mygo: {
                 entry: 'lib/index.js',
                 core: '>=0.0.1-rc.1',
-                ...(entry.depends === undefined ? {} : { depends: entry.depends }),
-                ...(entry.breaks === undefined ? {} : { breaks: entry.breaks }),
+                ...(entry.extraManifestKeys ?? {}),
               },
             },
             dist: {
@@ -145,60 +146,60 @@ describe('plugin package manager (fake registry e2e)', () => {
     tarballs = await Promise.all(versions.map(makeTarball))
   }
 
-  it('full flow: install -> verify -> mount order -> load and run', async () => {
+  it('full flow: install -> restore on disk -> load and run', async () => {
     const manager = createManager()
     const outcome = await manager.resolveInstall({ package: '@test/calc', range: '^1.0.0' })
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
     expect(outcome.installed.version).toBe('1.0.0')
-    expect((await manager.verifyAtBoot()).ok).toBe(true)
-    const mount = await manager.mountOrder()
-    expect(mount.ok).toBe(true)
-    if (mount.ok) expect(mount.order).toEqual(['calc'])
-    const loaded = await manager.loadEntry('calc')
-    expect(loaded?.installed.version).toBe('1.0.0')
-    const plugin = loaded?.plugin as { apply(): unknown }
+    expect(outcome.installed.dir).toBe(join(paths.packagesRoot, 'calc', '1.0.0'))
+    const module = await loadPluginEntry(outcome.installed.dir, outcome.installed.entry)
+    const plugin = extractPlugin(module) as { apply(): unknown }
     expect(plugin.apply()).toEqual({ version: '1.0.0' })
   })
 
-  it('lockfile immunity: registry 2.0.0 never changes the locked startup', async () => {
+  it('deterministic selection: registry 2.0.0 never drifts a ^1.0.0 install; re-install is idempotent', async () => {
     const manager = createManager()
-    const outcome = await manager.resolveInstall({ package: '@test/calc', range: '~1.0.0' })
-    expect(outcome.ok).toBe(true)
-    if (!outcome.ok) return
-    // registry 已经包含 2.0.0；重新启动只校验 lockfile，不重新求解。
-    const verified = await manager.verifyAtBoot()
-    expect(verified.ok).toBe(true)
-    const loaded = await manager.loadEntry('calc')
-    expect(loaded?.installed.version).toBe('1.0.0')
-    const lock = await manager.readLock()
-    expect(lock?.plugins.calc?.version).toBe('1.0.0')
+    const first = await manager.resolveInstall({ package: '@test/calc', range: '~1.0.0' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.installed.version).toBe('1.0.0')
+    // 重复安装命中同一还原目录（事实文件复用），版本不漂移。
+    const second = await manager.resolveInstall({ package: '@test/calc', range: '~1.0.0' })
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.installed.version).toBe('1.0.0')
+    expect(second.installed.dir).toBe(first.installed.dir)
+    const restored = await readRestoredPackage(first.installed.dir, 'calc', '1.0.0')
+    expect(restored?.version).toBe('1.0.0')
   })
 
-  it('persistence survives deletion of the dsh install dir', async () => {
+  it('restored payload survives deletion of the dsh install dir', async () => {
     const manager = createManager()
-    await manager.resolveInstall({ package: '@test/calc', range: '^1.0.0' })
+    const outcome = await manager.resolveInstall({ package: '@test/calc', range: '^1.0.0' })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
     const dshInstall = join(root, 'home', 'dsh-install')
     await mkdir(dshInstall, { recursive: true })
     await rm(dshInstall, { recursive: true, force: true })
-    const verified = await manager.verifyAtBoot()
-    expect(verified.ok).toBe(true)
-    expect((await manager.loadEntry('calc'))?.installed.version).toBe('1.0.0')
+    const restored = await readRestoredPackage(outcome.installed.dir, 'calc', '1.0.0')
+    expect(restored?.entry).toBe('lib/index.js')
   })
 
-  it('reports missing depends with structured fields', async () => {
+  it('reports candidates without a valid manifest with structured fields', async () => {
     versions.length = 0
-    versions.push({ version: '1.0.0', depends: { 'missing-base': '>=2.0.0' } })
+    // 顶层 depends 已按 2026-08-13 裁决从 manifest v3 移除：存量声明 = 非法 manifest。
+    versions.push({ version: '1.0.0', extraManifestKeys: { depends: { 'missing-base': '>=2.0.0' } } })
     await refreshTarballs()
     const manager = createManager()
     const outcome = await manager.resolveInstall({ package: '@test/calc', range: '^1.0.0' })
     expect(outcome.ok).toBe(false)
     if (outcome.ok) return
     expect(outcome.report.code).toBe('resolve-failed')
-    expect(outcome.report.conflicts[0]?.constraint).toMatchObject({ kind: 'depends', target: 'missing-base' })
-    expect(outcome.report.conflicts[0]?.chain).toContain('calc')
-    expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join()).toContain('缺失')
-    expect(outcome.report.conflicts[0]?.actions.join()).toContain('missing-base')
+    expect(outcome.report.conflicts[0]?.constraint).toMatchObject({ kind: 'entry', target: 'self' })
+    expect(outcome.report.conflicts[0]?.chain).toContain('@test/calc')
+    expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join()).toContain('dsh.mygo.depends')
+    expect(outcome.report.conflicts[0]?.actions.join()).toContain('dsh.mygo')
   })
 
   it('hard-blocks on a symbol the loaded package version does not export', async () => {
@@ -214,18 +215,5 @@ describe('plugin package manager (fake registry e2e)', () => {
     if (outcome.ok) return
     expect(outcome.report.code).toBe('symbol-missing')
     expect(outcome.report.conflicts[0]?.candidates[0]?.rejected.join()).toContain('ghost')
-  })
-
-  it('detects a drifted symbol import set at boot (lockfile comparison)', async () => {
-    const manager = createManager()
-    const outcome = await manager.resolveInstall({ package: '@test/calc', range: '^1.0.0' })
-    expect(outcome.ok).toBe(true)
-    if (!outcome.ok) return
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(join(outcome.installed.dir, 'extra.mjs'), "import { x } from 'pkg'\nexport {}\n")
-    const verified = await manager.verifyAtBoot()
-    expect(verified.ok).toBe(false)
-    if (verified.ok) return
-    expect(JSON.stringify(verified.report)).toContain('符号 import 集')
   })
 })

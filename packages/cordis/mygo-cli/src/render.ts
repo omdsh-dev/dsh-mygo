@@ -23,12 +23,8 @@ type AnyConflict = ServiceConflictEntry | {
 export function renderReportHuman(report: ResolutionReport | ServiceResolutionReport): string {
   const lines: string[] = []
   lines.push(`✗ ${report.code}：${report.summary}`)
-  if (report.scope !== undefined || report.generation !== undefined) {
-    const scope = report.scope === undefined ? '' : `作用域 ${report.scope}`
-    const generation = report.generation === undefined
-      ? ''
-      : `${scope === '' ? '' : '    '}世代 ${report.generation.from} → ${report.generation.to}`
-    lines.push(`  ${scope}${generation}`)
+  if (report.scope !== undefined) {
+    lines.push(`  作用域 ${report.scope}`)
   }
   if (report.cycles.length > 0) {
     lines.push(`  依赖循环 ${report.cycles.length} 条：`)

@@ -1,13 +1,19 @@
 /**
- * Structured resolution/verification failure reports (《收敛任务》不变量 5):
- * every conflict is reported at once — breakpoint node, full chain, candidate
- * set with per-candidate rejection reasons, and suggested actions.
+ * Structured verification/governance failure reports（CD-1 统一后）：
+ * `code` 直接取自 `@deepseek-ai/dsh-mygo-api` 的 PluginErrorCode 闭表
+ * （组 7 报告码 + 组 1 manifest-invalid 等），不再有独立的报告码表。
+ * 求解体系退役（2026-08-13）：lockfile-mismatch / dependency-cycle /
+ * dispose-timeout 随 dsh.lock/v1 与求解器删除；`generation` 字段零调用方
+ * 一并删除；报告侧原 `manifest-invalid`（安装期 bundles 声明问题）改名
+ * `bundle-invalid`，与 mount 期 `manifest-invalid` 消歧。
  * @module @deepseek-ai/dsh-mygo/src/package/report
  */
 
+import type { PluginErrorCode } from '@deepseek-ai/dsh-mygo-api'
+
 /** One unsatisfied constraint edge. */
 export interface ConstraintRef {
-  readonly kind: 'depends' | 'breaks' | 'core' | 'entry' | 'pin' | 'requires' | 'symbol' | 'alias' | 'pack'
+  readonly kind: 'entry' | 'pin' | 'requires' | 'symbol' | 'pack'
   readonly target: string
   readonly range: string
 }
@@ -37,20 +43,16 @@ export interface CycleEntry {
   readonly cycle: readonly string[]
 }
 
-/** Full structured failure report. */
+/**
+ * Full structured failure report. `code` 取自 PluginErrorCode（当前生产者：
+ * resolve-failed / bundle-invalid / symbol-missing / policy-rejected /
+ * pack-invalid / pack-hash-mismatch）。
+ */
 export interface ResolutionReport {
-  readonly code:
-    | 'resolve-failed' | 'dependency-cycle' | 'lockfile-mismatch'
-    | 'manifest-invalid' | 'symbol-missing' | 'policy-rejected' | 'dispose-timeout'
-    | 'pack-invalid' | 'pack-hash-mismatch'
+  readonly code: PluginErrorCode
   readonly summary: string
-  /** 报告作用域：包级求解（默认 package）或服务级政策闸（requires，B6）。 */
+  /** 报告作用域：包级（默认 package）或服务级政策闸（requires，B6）。 */
   readonly scope?: 'package' | 'service' | 'pack'
-  /** 失败过渡的世代目标（EB-D4：回到哪一代；P1-global 回滚报告 MUST 携带）。 */
-  readonly generation?: {
-    readonly from: string
-    readonly to: string
-  }
   readonly cycles: readonly CycleEntry[]
   readonly conflicts: readonly ConflictEntry[]
 }
@@ -73,59 +75,4 @@ export interface ServiceConflictEntry {
     readonly state?: string
   }[]
   readonly actions: readonly string[]
-}
-
-/** Deterministic order for constraints of one plugin: depends, breaks, core. */
-export function sortConstraints(
-  depends: Readonly<Record<string, string>>,
-  breaks: Readonly<Record<string, string>>,
-  core: string | undefined,
-  entry: string | undefined,
-): readonly ConstraintRef[] {
-  const out: ConstraintRef[] = []
-  for (const target of Object.keys(depends).sort()) {
-    out.push({ kind: 'depends', target, range: depends[target] as string })
-  }
-  for (const target of Object.keys(breaks).sort()) {
-    out.push({ kind: 'breaks', target, range: breaks[target] as string })
-  }
-  if (core !== undefined) out.push({ kind: 'core', target: 'dsh', range: core })
-  if (entry !== undefined) out.push({ kind: 'entry', target: 'self', range: entry })
-  return out
-}
-
-/** Heuristic upgrade/downgrade suggestions from one failed plugin. */
-export function suggestActions(
-  plugin: string,
-  constraint: ConstraintRef,
-  installedTarget: string | undefined,
-): readonly string[] {
-  if (constraint.kind === 'depends') {
-    if (installedTarget === undefined) {
-      return [`安装 ${constraint.target} 到满足 ${constraint.range} 的版本`]
-    }
-    return [
-      `升级 ${constraint.target} 到满足 ${constraint.range} 的版本（当前 ${installedTarget}）`,
-      `降级 ${plugin} 到不依赖 ${constraint.target} ${constraint.range} 的版本`,
-    ]
-  }
-  if (constraint.kind === 'breaks') {
-    return [
-      `升级/降级 ${constraint.target} 避开 ${constraint.range}（当前 ${installedTarget ?? '未知'}）`,
-      `降级 ${plugin} 到不再 breaks ${constraint.target} 的版本`,
-    ]
-  }
-  if (constraint.kind === 'core') {
-    return [
-      `升级 dsh 核心到满足 ${constraint.range} 的版本（当前 ${installedTarget ?? '未知'}）`,
-      `降级 ${plugin} 到 core 区间包含当前核心版本的版本`,
-    ]
-  }
-  if (constraint.kind === 'pin') {
-    return [
-      `提升 profile/core 钉定版本到满足 ${plugin} 的约束`,
-      `改用兼容当前钉定版本 ${constraint.range} 的插件版本`,
-    ]
-  }
-  return [`修复 ${plugin} 的入口声明 ${constraint.range}`]
 }

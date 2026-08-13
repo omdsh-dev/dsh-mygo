@@ -12,7 +12,7 @@ import type { PluginManifestV2 } from './manifest-v2.ts'
 /** One candidate version of one plugin (registry 元数据中带有效 manifest 的版本）。 */
 export interface VersionCandidate {
   readonly version: string
-  readonly manifest?: PluginManifestV2
+  readonly manifest?: PluginManifestV2 | undefined
 }
 
 /** Version selection input (single plugin; no cross-plugin graph). */

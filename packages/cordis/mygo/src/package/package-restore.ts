@@ -1,8 +1,9 @@
 /**
- * 插件包 store（《收敛任务》不变量 6）：不可变目录
- * `$DSH_HOME/mygo/packages/<id>/<version>/`，内容哈希写入
- * `.mygo-package.json`；与 dsh 安装目录、npx 缓存无耦合。
- * @module @deepseek-ai/dsh-mygo/src/package/package-store
+ * 插件包还原（普通落盘语义，2026-08-13 范围重塑）：把一个 npm 插件版本
+ * 下载/校验/解包到**调用方指定目录**，并写入 `.mygo-package.json` 事实文件
+ * （manifest + 内容哈希）。不再承诺「不可变 store / 唯一真相」：目标目录的
+ * 布局与生命周期由调用方（package-manager / pack 还原）决定。
+ * @module @deepseek-ai/dsh-mygo/src/package/package-restore
  */
 
 import { execFile } from 'node:child_process'
@@ -11,14 +12,13 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { dirname, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { downloadTarball, type RegistryVersionInfo } from './registry-client.ts'
-import { integritySha512Hex, sha256File, sha256Text, sha512File } from './lockfile.ts'
+import { integritySha512Hex, sha256File, sha256Text, sha512File } from './hash.ts'
 import { parsePackageManifest, pathProblemsOf, type PluginManifestV2 } from './manifest-v2.ts'
-import { packageDir, type MygoPaths } from './paths.ts'
 
 const execFileAsync = promisify(execFile)
 
-/** One installed package fact. */
-export interface InstalledPackage {
+/** One restored package fact. */
+export interface RestoredPackage {
   readonly id: string
   readonly version: string
   readonly dir: string
@@ -26,7 +26,7 @@ export interface InstalledPackage {
   readonly manifest: PluginManifestV2
   readonly entrySha256: string
   readonly manifestSha256: string
-  /** 入口文件内容 sha512（hex；DG-2 拆字段后的真 entrySha512，安装时现场计算）。 */
+  /** 入口文件内容 sha512（hex；还原时现场计算）。 */
   readonly entrySha512: string
   /** vendored tarball 整体 sha512（hex；npm integrity 解析转 hex，缺省缺省）。 */
   readonly tarballSha512?: string
@@ -35,7 +35,7 @@ export interface InstalledPackage {
   readonly integrity?: string
 }
 
-export interface InstallPackageOptions {
+export interface RestorePackageOptions {
   readonly token?: string
   /** tar executable; defaults to `tar` (POSIX/Windows 10+ ship it). */
   readonly tarCmd?: string
@@ -43,6 +43,8 @@ export interface InstallPackageOptions {
   readonly localTarballBytes?: Uint8Array
   /** 本地 tarball 期望 sha512（hex；pack files[].sha512，先校验后落盘）。 */
   readonly expectedSha512Hex?: string
+  /** 临时工作目录（解包中转；默认目标目录旁的系统临时目录）。 */
+  readonly tmpDir?: string
 }
 
 /** Path traversal guard: resolved path must stay under the package root. */
@@ -64,28 +66,28 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 /**
- * Download, verify, extract, and atomically install one plugin version into
- * the immutable store. Reuses an existing identical installation.
+ * Download, verify, extract, and atomically restore one plugin version into
+ * the caller-specified `target` dir. Reuses an existing identical restore
+ * (fact file match), replacing a corrupt one.
  */
-export async function installPackageToStore(
-  paths: MygoPaths,
+export async function restorePackage(
+  target: string,
   versionInfo: RegistryVersionInfo,
-  options: InstallPackageOptions = {},
-): Promise<InstalledPackage> {
+  options: RestorePackageOptions = {},
+): Promise<RestoredPackage> {
   const manifest = versionInfo.manifest
   if (manifest === undefined) {
     throw new Error(
       `候选 ${versionInfo.version} 没有有效 dsh.mygo manifest：${(versionInfo.manifestProblems ?? []).join('；')}`,
     )
   }
-  const target = packageDir(paths, manifest.id, versionInfo.version)
   if (await pathExists(target)) {
-    const existing = await readInstalledPackage(target, manifest.id, versionInfo.version)
+    const existing = await readRestoredPackage(target, manifest.id, versionInfo.version)
     if (existing !== undefined && existing.entrySha256 !== '') return existing
     await rm(target, { recursive: true, force: true })
   }
 
-  const work = join(paths.tmpDir, randomUUID())
+  const work = join(options.tmpDir ?? dirname(target), `.mygo-restore-${randomUUID()}`)
   const tarball = join(work, 'package.tgz')
   const extracted = join(work, 'extracted')
   const pkgRoot = join(extracted, 'package')
@@ -124,15 +126,12 @@ export async function installPackageToStore(
       throw new Error(`包内 manifest 路径逃逸：${pathProblems.map(problem => `${problem.path}: ${problem.message}`).join('；')}`)
     }
     assertInside(pkgRoot, parsed.value.entry)
-    // DG-2 拆字段（修复批次 3）：entrySha512 = 入口文件内容哈希（现场计算，
-    // 真实写入点）；tarballSha512 = vendored tarball 整体哈希（npm integrity
-    // 解析转 hex；integrity 不可解析或缺省时缺省）。两者都在落盘前计算，
-    // 保证事实文件与 lockfile 载荷同源。
+    // entrySha512 = 入口文件内容哈希（落盘前现场计算）；tarballSha512 =
+    // vendored tarball 整体哈希（npm integrity 解析转 hex；不可解析时缺省）。
     const entrySha512 = await sha512File(assertInside(pkgRoot, parsed.value.entry))
     const tarballSha512 = integritySha512Hex(versionInfo.integrity)
-    // 确定性（S2/T19 真实图扩展）：manifestSha256 只对稳定载荷计算；
-    // installedAt / entrySha512 仅作尾部记账字段保留在事实文件里，不进哈希
-    // （否则同输入两次安装产物不等）。
+    // 确定性：manifestSha256 只对稳定载荷计算；installedAt / entrySha512 仅作
+    // 尾部记账字段保留在事实文件里，不进哈希（否则同输入两次还原产物不等）。
     const factBase = {
       format: 'dsh.mygo-package/v1',
       id: parsed.value.id,
@@ -170,12 +169,12 @@ export async function installPackageToStore(
   }
 }
 
-/** Read one installed package's fact file. */
-export async function readInstalledPackage(
+/** Read one restored package's fact file. */
+export async function readRestoredPackage(
   dir: string,
   id: string,
   version: string,
-): Promise<InstalledPackage | undefined> {
+): Promise<RestoredPackage | undefined> {
   try {
     const raw = await readFile(join(dir, '.mygo-package.json'), 'utf8')
     const fact = JSON.parse(raw) as {
@@ -212,7 +211,6 @@ export async function readInstalledPackage(
       manifest,
       entrySha256,
       manifestSha256,
-      // DG-2（修复批次 3）：entrySha512 有事实文件写入点；旧事实文件回退现场计算。
       entrySha512: typeof fact.entrySha512 === 'string'
         ? fact.entrySha512
         : await sha512File(assertInside(dir, fact.entry)),

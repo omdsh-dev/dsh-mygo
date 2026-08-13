@@ -66,8 +66,6 @@
       "id": "dsh-mygo-cli",
       "version": "0.0.1-rc.1",
       "entry": "lib/index.js",
-      "depends": {},
-      "breaks": {},
       "requires": {},
       "core": "^0.0.1-rc.1",
       "loader": {

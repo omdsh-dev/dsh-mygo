@@ -64,8 +64,6 @@ export interface PluginOperationPlan {
   }
   /** Rendered soft / derived compatibility notes discovered while planning. */
   readonly warnings?: readonly string[]
-  /** Activation actions the solver proposes (required-by / conflict-resolution / advisory). */
-  readonly actions?: readonly import('@deepseek-ai/dsh-mygo-api').ActivationAction[]
   /** Bystanders whose observable position changes, with the displacing edge. */
   readonly displaced: readonly {
     readonly id: string

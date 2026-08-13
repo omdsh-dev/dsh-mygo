@@ -8,7 +8,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { detectUndeclaredBundles, scanBundles, sourceCallsDshCore } from '../../src/package/bundle-scan.ts'
-import { resolve } from '../../src/package/resolver.ts'
 
 describe('bundle scan', () => {
   let root: string
@@ -71,27 +70,5 @@ describe('bundle scan', () => {
   it('detects dsh-core calls in source text', () => {
     expect(sourceCallsDshCore("import { x } from '@deepseek-ai/dsh-tools'")).toBe(true)
     expect(sourceCallsDshCore("const y = require('lodash')")).toBe(false)
-  })
-
-  it('dedupes a library bundled by two plugins: highest version wins deterministically', () => {
-    const build = () => resolve({
-      requests: new Map([['a', {}], ['b', {}]]),
-      candidates: new Map([
-        ['a', [{ version: '1.0.0', constraints: { depends: {}, breaks: {}, core: '*' }, source: 'registry' }]],
-        ['b', [{ version: '1.0.0', constraints: { depends: {}, breaks: {}, core: '*' }, source: 'registry' }]],
-        ['shared-lib', [
-          { version: '1.0.0', constraints: { depends: {}, breaks: {}, core: '*' }, source: 'bundle:a' },
-          { version: '1.2.0', constraints: { depends: {}, breaks: {}, core: '*' }, source: 'bundle:b' },
-        ]],
-      ]),
-      installed: new Map(),
-      coreVersion: '0.0.1-rc.1',
-    })
-    const first = build()
-    const second = build()
-    expect(first.ok).toBe(true)
-    expect(JSON.stringify(first)).toBe(JSON.stringify(second))
-    if (!first.ok) return
-    expect(first.resolved.find(plugin => plugin.id === 'shared-lib')?.version).toBe('1.2.0')
   })
 })

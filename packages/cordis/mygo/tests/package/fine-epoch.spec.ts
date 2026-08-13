@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   captureExports,
-  fineEpoch,
   preGate,
   type ProviderSymbolSnapshot,
 } from '../../src/package/fine-epoch.ts'
@@ -37,16 +36,6 @@ describe('fine epoch pre-gate', () => {
     expect(preGate(['a', 'b'], snapshot)).toEqual({ ok: true, missing: [], aliased: ['b'] })
     expect(preGate(['a', 'x'], snapshot)).toEqual({ ok: false, missing: ['x'], aliased: [] })
     expect(preGate(['a'], undefined)).toEqual({ ok: false, missing: ['a'], aliased: [] })
-  })
-
-  it('fine epoch fingerprint changes on any tuple dimension (EB-D10)', () => {
-    const base = fineEpoch(['u1'], { p: '1.0.0' }, { p: ['a'] }, { policy: 'ok' })
-    expect(fineEpoch(['u2'], { p: '1.0.0' }, { p: ['a'] }, { policy: 'ok' })).not.toBe(base)
-    expect(fineEpoch(['u1'], { p: '1.0.1' }, { p: ['a'] }, { policy: 'ok' })).not.toBe(base)
-    expect(fineEpoch(['u1'], { p: '1.0.0' }, { p: ['a', 'b'] }, { policy: 'ok' })).not.toBe(base)
-    expect(fineEpoch(['u1'], { p: '1.0.0' }, { p: ['a'] }, { policy: 'rejected' })).not.toBe(base)
-    // 同输入必同输出（确定性）。
-    expect(fineEpoch(['u1'], { p: '1.0.0' }, { p: ['a'] }, { policy: 'ok' })).toBe(base)
   })
 })
 

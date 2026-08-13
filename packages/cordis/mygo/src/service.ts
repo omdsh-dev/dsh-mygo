@@ -130,28 +130,8 @@ export class PluginManagerService extends Service implements PluginManager {
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
     }, externalStore)
-    // 加载时校验（不重新求解）：lockfile 与磁盘（版本+哈希）不一致 MUST 硬阻断。
-    const bootVerify = await this.packageManager.verifyAtBoot()
-    if (!bootVerify.ok) {
-      throw new PluginError(
-        'package-not-resolvable',
-        formatPluginError('package-not-resolvable', {
-          package: 'lockfile',
-          anchors: bootVerify.report.summary,
-        }),
-        { package: 'lockfile', report: bootVerify.report },
-      )
-    }
-    const mountOrderResult = await this.packageManager.mountOrder()
-    if (!mountOrderResult.ok) {
-      throw new PluginError(
-        'ordering-cycle',
-        formatPluginError('ordering-cycle', {
-          cycle: mountOrderResult.report.cycles[0]?.cycle.join(' → ') ?? 'unknown',
-        }),
-        { cycle: mountOrderResult.report.cycles[0]?.cycle, report: mountOrderResult.report },
-      )
-    }
+    // 范围重塑（2026-08-13）：dsh.lock/v1 lockfile 已删除，加载期不再有
+    // lockfile↔磁盘校验/拓扑挂载序；pnpm 安装状态为唯一真相源。
     const holder: { engine?: LifecycleEngine } = {}
     const hostLlm = ctx.get('llm') as
       | { stream(options: unknown): AsyncIterable<unknown> }
@@ -319,35 +299,9 @@ export class PluginManagerService extends Service implements PluginManager {
         }
         return Promise.resolve(evaluateInlineDefinition(source.code))
       },
-      ...(mountOrderResult.ok ? { recoverOrder: mountOrderResult.order } : {}),
     })
     holder.engine = engine
     await engine.recover()
-    // DG-2（修复批次 3）：把 lockfile 的 entry 级哈希/字节数灌入运行时 record
-    // （恢复路径写入点；BOM 对账输出消费）。readLock 形状校验失败在此前
-    // verifyAtBoot 已硬阻断，这里只可能 undefined（无 lockfile）或合法载荷。
-    try {
-      const lockfile = await this.packageManager.readLock()
-      if (lockfile !== undefined) {
-        const facts = new Map<string, { readonly entrySha512: string; readonly entryFileSize?: number }>()
-        for (const [id, lock] of Object.entries(lockfile.plugins)) {
-          facts.set(id, {
-            entrySha512: lock.entrySha512,
-            ...(lock.entryFileSize === undefined ? {} : { entryFileSize: lock.entryFileSize }),
-          })
-        }
-        engine.attachBomFacts(facts)
-      }
-    } catch (error) {
-      throw new PluginError(
-        'package-not-resolvable',
-        formatPluginError('package-not-resolvable', {
-          package: 'lockfile',
-          anchors: error instanceof Error ? error.message : String(error),
-        }),
-        { package: 'lockfile' },
-      )
-    }
     this.engine = engine
     this.persistence = persistence
     // Publish the aggregation service so host-shaped raw plugins can own
@@ -375,13 +329,9 @@ export class PluginManagerService extends Service implements PluginManager {
     }, 'pluginManager.teardown')
   }
 
-  /** Resolve an npm plugin source: locked store first, registry install second. */
+  /** Resolve an npm plugin source: registry install, then load the restored entry. */
   private async resolveNpmSource(packageName: string): Promise<PluginDefinition> {
     try {
-      const loaded = await this.packageManager.loadEntry(packageName)
-      if (loaded !== undefined) {
-        return this.definitionFromManifest(loaded.plugin, loaded.installed.manifest)
-      }
       const outcome = await this.packageManager.resolveInstall({ package: packageName })
       if (!outcome.ok) {
         throw new PluginError(
@@ -478,14 +428,7 @@ export class PluginManagerService extends Service implements PluginManager {
       ...(Object.keys(manifest.entrypoints).length === 0
         ? {}
         : { entrypoints: manifest.entrypoints as unknown as PluginEntrypointsDeclaration }),
-      ...(Object.keys(manifest.depends).length === 0 && Object.keys(manifest.breaks).length === 0
-        ? {}
-        : {
-            compatibility: {
-              ...(Object.keys(manifest.depends).length === 0 ? {} : { requires: manifest.depends }),
-              ...(Object.keys(manifest.breaks).length === 0 ? {} : { breaks: manifest.breaks }),
-            },
-          }),
+      ...(manifest.compatibility === undefined ? {} : { compatibility: manifest.compatibility }),
     }
   }
 
@@ -515,14 +458,7 @@ export class PluginManagerService extends Service implements PluginManager {
       ...(Object.keys(manifest.entrypoints).length === 0
         ? {}
         : { entrypoints: manifest.entrypoints as unknown as PluginEntrypointsDeclaration }),
-      ...(Object.keys(manifest.depends).length === 0 && Object.keys(manifest.breaks).length === 0
-        ? {}
-        : {
-            compatibility: {
-              ...(Object.keys(manifest.depends).length === 0 ? {} : { requires: manifest.depends }),
-              ...(Object.keys(manifest.breaks).length === 0 ? {} : { breaks: manifest.breaks }),
-            },
-          }),
+      ...(manifest.compatibility === undefined ? {} : { compatibility: manifest.compatibility }),
     })
   }
 

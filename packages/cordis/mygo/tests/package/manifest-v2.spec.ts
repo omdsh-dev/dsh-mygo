@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
 
 describe('manifest v2', () => {
-  it('parses the five required fields from dsh.mygo', () => {
+  it('parses the required fields from dsh.mygo', () => {
     const result = parsePackageManifest({
       name: '@dsh-external/tool',
       version: '0.0.1-rc.1',
@@ -17,8 +17,6 @@ describe('manifest v2', () => {
           id: 'tool',
           version: '0.0.1-rc.2',
           entry: 'lib/index.js',
-          depends: { base: '>=1.0.0' },
-          breaks: { legacy: '<2.0.0' },
           core: '>=0.0.1-rc.1',
         },
       },
@@ -28,8 +26,6 @@ describe('manifest v2', () => {
       id: 'tool',
       version: '0.0.1-rc.2',
       entry: 'lib/index.js',
-      depends: { base: '>=1.0.0' },
-      breaks: { legacy: '<2.0.0' },
       core: '>=0.0.1-rc.1',
     })
   })
@@ -45,16 +41,20 @@ describe('manifest v2', () => {
     expect(result.value).toMatchObject({ id: 'x', version: '1.2.3', entry: 'main.js', core: '>=1.0.0' })
   })
 
-  it('rejects bare package names as depends values', () => {
+  it('rejects legacy top-level depends/breaks with rewrite guidance (2026-08-13 字段移除)', () => {
     const result = parsePackageManifest({
       name: 'x',
       version: '1.0.0',
-      dsh: { mygo: { depends: { B: 'just-a-name' } } },
+      dsh: { mygo: { depends: { B: '>=1.0.0' }, breaks: { old: '<2.0.0' } } },
     })
-    expect(result.problems.some(problem => problem.path === 'dsh.mygo.depends.B')).toBe(true)
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.depends'
+      && problem.message.includes('compatibility'))).toBe(true)
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.breaks'
+      && problem.message.includes('compatibility'))).toBe(true)
   })
 
-  it('normalizes legacy compatibility requires/breaks', () => {
+  it('passes the compatibility block through read-only (no solving)', () => {
     const result = parsePackageManifest({
       name: 'x',
       version: '1.0.0',
@@ -69,8 +69,7 @@ describe('manifest v2', () => {
       },
     })
     expect(result.problems).toEqual([])
-    expect(result.value?.depends).toEqual({ base: '>=2.0.0' })
-    expect(result.value?.breaks).toEqual({ old: '<2.0.0' })
+    expect(result.value?.compatibility).toEqual({ requires: { base: '>=2.0.0' }, breaks: { old: '<2.0.0' } })
   })
 
   it('warns (not blocks) when core is undeclared', () => {
@@ -162,7 +161,7 @@ describe('manifest v2', () => {
     expect(result.problems.some(problem => problem.path === 'dsh.mygo.formatVersion')).toBe(true)
   })
 
-  it('maps legacy compatibility.requires bare keys to depends and service: keys to requires', () => {
+  it('strips service: keys of compatibility.requires into service-level requires; bare keys pass through', () => {
     const result = parsePackageManifest({
       name: 'x',
       version: '1.0.0',
@@ -179,7 +178,7 @@ describe('manifest v2', () => {
       },
     })
     expect(result.problems).toEqual([])
-    expect(result.value?.depends).toEqual({ 'dsh-voice-chat': '>=0.1.0' })
+    expect(result.value?.compatibility).toEqual({ requires: { 'dsh-voice-chat': '>=0.1.0' } })
     expect(result.value?.requires).toEqual({ 'voice-chat': '>=0.1.0' })
   })
 
@@ -226,20 +225,14 @@ describe('manifest v2', () => {
     expect(result.problems.some(problem => problem.path === 'dsh.mygo.patches.p1.file')).toBe(true)
   })
 
-  it('accepts the rewritten dsh-vibe-mode reference implementation (T18/B2)', async () => {
+  it('rejects the legacy top-level depends in the dsh-vibe-mode reference implementation (T18/B2)', async () => {
     const raw = await readFile(
       '/home/rosen/workspace/dsh_dev/dsh-external-src/dsh-vibe-mode/package.json',
       'utf8',
     )
     const result = parsePackageManifest(JSON.parse(raw))
-    expect(result.problems).toEqual([])
-    expect(result.value).toMatchObject({
-      formatVersion: 1,
-      id: 'dsh-vibe-mode',
-      version: '0.1.0',
-      depends: { 'dsh-voice-chat': '>=0.1.0' },
-      requires: { 'voice-chat': '>=0.1.0' },
-    })
-    expect(result.value?.requires).not.toHaveProperty('service:voice-chat')
+    // 存量语料的顶层 depends 按 2026-08-13 字段移除裁决显式拒绝（不改语料）。
+    expect(result.value).toBeUndefined()
+    expect(result.problems.some(problem => problem.path === 'dsh.mygo.depends')).toBe(true)
   })
 })

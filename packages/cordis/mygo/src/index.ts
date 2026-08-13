@@ -13,8 +13,6 @@ export { evaluateConflicts } from './conflicts.ts'
 export { buildScopeGraph, deriveOrders, deriveScopeOrder, scopeMembers } from './order.ts'
 export type { ScopeEdge, ScopeGraph } from './order.ts'
 export { planOperation } from './plan.ts'
-export { solveActivation } from './activation.ts'
-export type { ActivationOperation, ActivationPlugin } from './activation.ts'
 export { BundleRail } from './bundle-rail.ts'
 export type { BundleInstallResult, BundleMember, BundlePatchFact, BundleRailOptions } from './bundle-rail.ts'
 export {
