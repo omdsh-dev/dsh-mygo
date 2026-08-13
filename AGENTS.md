@@ -16,6 +16,10 @@
 - `next` 分支为 v0.2 重做线：包名统一 `@r05en1cu/dsh-*`，`author` /
   `maintainers` 声明 `r05En1cU`；发布留作 handoff（dsh_dev/AGENTS.md 发布
   禁令条款），publish-mygo.mjs 只改造不执行。
+- 现阶段分发渠道：不发任何公开 registry（含自有 scope）；一律走
+  GitHub repo + pnpm git spec 安装形态（`dsh plugin add github:<owner>/
+  <repo>#<commit>&path:/packages/<pkg>`），依赖 push 禁令解除后生效
+  （2026-08-13 用户裁决）。
 - 强耦合依赖分析体系（resolver / dsh.lock / 冲突求解）退役，存档提交
   `43bb296`（main）；pnpm 安装状态为唯一真相源，mygo 账本降级为治理视图。
 - 安装/分发走 dsh 0812 原生 profile bundle 机制，install.sh 随 P1 退役后
