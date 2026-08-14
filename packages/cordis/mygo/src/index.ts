@@ -76,6 +76,14 @@ export { ExtensionRegistry, extensionViews } from './extensions.ts'
 export type { ExtensionRegistration, ExtensionView } from './extensions.ts'
 export { preserveStateAcrossUpdate } from './update-state.ts'
 export type { UpdateStateHooks, UpdateStateHost } from './update-state.ts'
+export {
+  listPatchRowIds,
+  readProfilePatchText,
+  readRowConfig,
+  upsertRowConfig,
+  writeRowConfig,
+} from './row-config.ts'
+export type { ConfigRowResult } from './row-config.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'
