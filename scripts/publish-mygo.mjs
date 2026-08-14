@@ -30,6 +30,7 @@ const packages = [
   'packages/extensions/mygo-panel',
   'packages/loaders/mygo-loader-profile',
   'packages/loaders/mygo-loader-hub',
+  'packages/extensions/mygo-fabric',
 ]
 for (const pkg of packages) {
   if (!existsSync(join(root, pkg, 'package.json'))) {
@@ -54,6 +55,7 @@ const names = [
   '@r05en1cu/dsh-mygo-ext-panel',
   '@r05en1cu/dsh-mygo-loader-profile',
   '@r05en1cu/dsh-mygo-loader-hub',
+  '@r05en1cu/dsh-mygo-ext-fabric',
 ]
 if (dryRun) {
   console.log('dry-run：构建与自检通过，未执行发布。')

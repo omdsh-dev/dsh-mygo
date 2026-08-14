@@ -75,6 +75,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `instances.ts` | 用户级实例登记处（P4：实例 = $DSH_HOME，§13.1） | `registerInstance`、`listInstances`、`unregisterInstance` |
 | `pack-cache.ts` | 跨实例只读共享缓存（P4：内容寻址，§13.3） | `cachePack`、`importCachedPack` |
 | `loader-adapters.ts` | LoaderAdapter 注册表（P5，§14.1） | `LoaderAdapterRegistry`、`BUILTIN_LOADER_ADAPTERS` |
+| `extensions.ts` | extension 登记表（P6，§15.1） | `ExtensionRegistry`、`extensionViews` |
 | `capabilities.ts` | 能力面与配额（fs/vars/llm/exec/http/fetch） | `createPluginFs` 等 |
 | `session-reader.ts` | jsonl/rdb/sqlite 会话读取 | `JsonlSessionReader` 等 |
 | `sqlite-store.ts` / `persistence.ts` / `store.ts` | 注册表持久化与 `RegistryStore` 契约 | `SqliteRegistryStore`、`RegistryStore` |
@@ -341,10 +342,10 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 - 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
   `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-14 P5 后）：全量 73 文件 / 688 用例（mygo-api 6/39 +
-  mygo 55/582 + mygo-cli 8/36 + mygo-loader-profile 1/6 +
-  mygo-loader-hub 3/25；含 mygo-rdb 本地未提交修正，见 docs/next
-  备忘录）；EB 套件 11 文件 / 13 用例。
+- 计数口径（2026-08-14 P6 后）：全量 75 文件 / 701 用例（mygo-api 6/39 +
+  mygo 56/586 + mygo-cli 8/36 + mygo-loader-profile 1/6 +
+  mygo-loader-hub 3/25 + mygo-ext-fabric 1/9；含 mygo-rdb 本地未提交
+  修正，见 docs/next 备忘录）；EB 套件 11 文件 / 13 用例。
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
   间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
   负载稳定全绿。串行分包纪律不变，包内可加 `--pool=threads`。
@@ -519,7 +520,45 @@ InstanceRegistry 登记闸与 HOME 隔离闸——适配器契约的 sync
 形态（mygo-cli install.ts 自有实现），复用 pack/共享缓存原语已足够。
 若 P6/P7 出现第三个跨实例搬运面，再评估抽象。
 
-## 15. 常见任务速查
+## 15. fabric 安装层 extension 化与 host 补丁提案（P6）
+
+### 15.1 extension 登记表
+
+mygo 核心 `src/extensions.ts`：`ExtensionRegistry`（登记
+`{id, kind:'extension', source, blockMarker, packages}`；重复 id 拒绝，
+注销器幂等随 fiber 清理）+ `extensionViews()` 纯函数——启用态从
+profile patch 层受管块标记推导，版本取 profile dependencies 子集
+（pnpm/patch 文件为唯一真相源，表内不存状态）。服务面：
+`pluginManager.registerExtension()` / `pluginManager.extensions()`。
+首条登记 = fabric（@r05en1cu/dsh-mygo-ext-fabric）。
+
+### 15.2 mygo-fabric 治理壳（packages/extensions/mygo-fabric）
+
+- fabric 组合缝（cordis-fabric + cordis-fabric-dsh 两行）由 mygo 治理层
+  接管：`enableFabric(target, {specs?})` = 经 profile loader 执行面安装
+  两包 + 向目标 profile 的 cordis.patch.yml 写受管块（幂等标记块
+  `# --- mygo managed extension (id:fabric) ---`，P3 启停块同机制）；
+  `disableFabric(target)` = 移除受管块（包保留在 dependencies，卸载经
+  profile loader 另行执行）。patch 路径前做 profile 名硬校验 +
+  assertInsideHome 隔离闸。
+- 依赖形态：默认 git 子目录 spec 白名单过渡（守则例外 #6 登记）；push
+  禁令未解除，验证一律用本地路径 spec（pnpm link 安装，零网络）。
+- 包根是 mygo 受管插件形态（bundle 行）：挂载即登记，fiber 清理注销。
+
+### 15.3 host 补丁提案（patches/fabric-host.patch）
+
+从 fabric 仓 patch（17 文件，baseline 0812 快照）收编，剔除两条组合缝
+（web-app 插行 + app-boot profile init 模板预声明），只留三条硬缝 +
+必需接线（15 文件）；基线重钉公开版 deepseek-harness-public @ 47f9438，
+`git apply --check` 干净通过。逐文件漂移表与再生成步骤见
+patches/README.md。fabric 仓的 patch 不动（独立演进），差异在
+patches/README.md 说明。
+
+> runtime 激活依赖 host 合入提案（profile-boot 挂钩安装必须早于目标
+> 模块 import）；P6 验收口径 = 受管块写入正确 + 提案 apply --check
+> 干净 + fabric 包自身测试在 fabric 仓内绿。
+
+## 16. 常见任务速查
 
 ```sh
 # 仓内全量 gates（无网拦截）

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased · next 分支 P6（2026-08-14）— fabric 安装层 extension 化 + host 补丁提案收编
+
+### extension 登记表（mygo 核心）
+
+- `src/extensions.ts`：`ExtensionRegistry`（登记 `{id, kind:'extension',
+  source, blockMarker, packages}`；重复 id 拒绝，注销器幂等随 fiber
+  清理）+ `extensionViews()` 纯函数——启用态从 profile patch 层受管块
+  标记推导，版本取 profile dependencies 子集（pnpm/patch 文件为唯一
+  真相源，表内不存状态）；`PluginManager` 接口新增
+  `registerExtension()` / `extensions()`。
+
+### mygo-fabric 治理壳（新包 @r05en1cu/dsh-mygo-ext-fabric）
+
+- fabric 组合缝（cordis-fabric + cordis-fabric-dsh 两行）由 mygo 治理层
+  接管：enableFabric = profile loader 执行面安装两包 + 写受管块（幂等
+  标记块，P3 启停块同机制；profile 名硬校验 + assertInsideHome 闸）；
+  disableFabric = 移除受管块（包保留 dependencies）。默认 git 子目录
+  spec 白名单过渡（守则例外 #6 登记）；验证一律本地路径 spec。
+- 包根为 mygo 受管插件形态（bundle 行，挂载即登记进治理面）。
+- publish-mygo.mjs 发布面纳入（只改造不执行）。
+
+### host 补丁提案（patches/fabric-host.patch）
+
+- 从 fabric 仓 patch（17 文件，0812 baseline）收编，剔除两条组合缝
+  （web-app 插行 + app-boot profile init 模板预声明——已由治理层
+  接管），只留三条硬缝（profile-boot 挂钩 / clientBundle transform /
+  api-catalog）+ 必需接线，共 15 文件。
+- 基线重钉公开版 deepseek-harness-public @ 47f9438；逐文件漂移核对与
+  `git apply --check` 干净通过实录见 patches/README.md（只 check 不
+  apply；fabric 仓 patch 不动，差异已说明）。
+- runtime 激活依赖 host 合入提案；P6 验收口径 = 受管块写入正确 +
+  提案 apply --check 干净 + fabric 包自身测试在 fabric 仓内绿。
+
 ## Unreleased · next 分支 P5（2026-08-14）— loader 扩展体系 + dsh-hub 市场适配器
 
 ### LoaderAdapter 注册机制
