@@ -145,9 +145,9 @@ export function renderCloneSuccess(
 }
 
 /** 用法文本（mygo 总览 + 可选子命令详情）。 */
-export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone'): string {
+export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub'): string {
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
-  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone', string> = {
+  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub', string> = {
     pack: [
       '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--no-community-deps] [--json]',
       '',
@@ -216,6 +216,19 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
       '  <plugin>             插件 id（A 侧 pack 导出 → 共享缓存 → B 侧还原安装）',
       common,
     ].join('\n'),
+    hub: [
+      '用法：dsh --profile <profile> mygo hub <verb> [arg] [--snapshot <path>] [--insecure-no-verify] [--json]',
+      '',
+      '  search <query>       检索 hub 条目（本地筛选）',
+      '  info <id>[@release]  条目详情 + 可安装判定与治理提示',
+      '  install <id>[@release]  安装条目（profile-bundle 经 profile 执行面；',
+      '                          guided 只展示；repository-plugin 默认拒绝）',
+      '                          <id> 命中 collection 时整组原子安装',
+      '  collections          列出 collections',
+      '  --snapshot <path>    用本地快照（file:// 或路径），不拉远程',
+      '  --insecure-no-verify 跳过摘要/验签（仅本地快照生效）',
+      common,
+    ].join('\n'),
   }
   if (topic !== undefined) return topics[topic]
   return [
@@ -232,6 +245,7 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
     '  instances  列出已登记实例（用户级实例登记处）',
     '  adopt      登记另一个实例 HOME 并首次对账（不写对端插件状态）',
     '  clone      跨实例克隆插件（pack → 共享缓存 → 目标实例还原安装）',
+    '  hub        dsh-hub 市场（search / info / install / collections）',
     '',
     '全局：--json 机器可读；-h/--help 查看子命令用法。',
     '',

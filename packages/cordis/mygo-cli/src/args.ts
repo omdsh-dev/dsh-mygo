@@ -56,14 +56,25 @@ export type CliCommand =
     readonly plugin: string
     readonly json: boolean
   }
+  | {
+    readonly kind: 'hub'
+    readonly verb: 'search' | 'info' | 'install' | 'collections'
+    /** search 的 query / info+install 的 id[@release]。 */
+    readonly arg?: string
+    /** 本地快照路径（file:// 或文件路径）；给出时不拉远程。 */
+    readonly snapshot?: string
+    /** 跳过摘要/验签（仅本地快照生效）。 */
+    readonly insecureNoVerify: boolean
+    readonly json: boolean
+  }
 
 /** 解析结果：一条命令 / 帮助请求 / 用法错误。 */
 export type CliParse =
   | { readonly kind: 'command'; readonly command: CliCommand }
-  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' }
+  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' }
   | { readonly kind: 'usage-error'; readonly message: string }
 
-const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone'])
+const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone', 'hub'])
 
 /** npm 包名最小校验（手写；task 允许）：小写、URL 安全、非空段。 */
 export function isValidNpmName(name: string): boolean {
@@ -106,9 +117,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (head === undefined) return { kind: 'help' }
   if (head === '-h' || head === '--help') return { kind: 'help' }
   if (!COMMANDS.has(head)) {
-    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone）` }
+    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone / hub）` }
   }
-  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone'
+  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub'
   const positional: string[] = []
   let json = false
   let output = ''
@@ -119,6 +130,8 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   let home: string | undefined
   let from: string | undefined
   let to: string | undefined
+  let snapshot: string | undefined
+  let insecureNoVerify = false
   let index = 0
   let flagsEnded = false
   while (index < rest.length) {
@@ -145,6 +158,14 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         return { kind: 'usage-error', message: `--no-community-deps 仅 pack 支持` }
       }
       includeCommunityDeps = false
+      index += 1
+      continue
+    }
+    if (token === '--insecure-no-verify') {
+      if (command !== 'hub') {
+        return { kind: 'usage-error', message: `--insecure-no-verify 仅 hub 支持` }
+      }
+      insecureNoVerify = true
       index += 1
       continue
     }
@@ -200,9 +221,43 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
       index = taken.next
       continue
     }
+    if (command === 'hub' && flag === '--snapshot') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--snapshot 需要一个值` }
+      snapshot = taken.value
+      index = taken.next
+      continue
+    }
     return { kind: 'usage-error', message: `${command} 不支持参数 ${JSON.stringify(token)}` }
   }
 
+  if (command === 'hub') {
+    const verb = positional.shift()
+    if (verb === undefined || !['search', 'info', 'install', 'collections'].includes(verb)) {
+      return { kind: 'usage-error', message: `hub 需要子命令（search / info / install / collections），实际：${verb ?? '（缺）'}` }
+    }
+    if (verb === 'collections' && positional.length > 0) {
+      return { kind: 'usage-error', message: `hub collections 不接受位置参数：${positional.join(' ')}` }
+    }
+    const arg = positional.shift()
+    if (verb !== 'collections' && (arg === undefined || arg === '')) {
+      return { kind: 'usage-error', message: `hub ${verb} 需要一个${verb === 'search' ? '检索词' : '条目 id[@release]'}` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `hub ${verb} 只接受一个位置参数：${positional.join(' ')}` }
+    }
+    return {
+      kind: 'command',
+      command: {
+        kind: 'hub',
+        verb: verb as 'search' | 'info' | 'install' | 'collections',
+        ...(arg === undefined ? {} : { arg }),
+        ...(snapshot === undefined ? {} : { snapshot }),
+        insecureNoVerify,
+        json,
+      },
+    }
+  }
   if (command === 'instances') {
     if (positional.length > 0) {
       return { kind: 'usage-error', message: `instances 不接受位置参数：${positional.join(' ')}` }
