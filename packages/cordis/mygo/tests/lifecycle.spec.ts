@@ -1521,6 +1521,42 @@ describe('LifecycleEngine swapPolicy', () => {
     expect(h.engine.plugins()[0]?.version).toBe('2.0.0')
   })
 
+  it('force-releases the old generation when events never settle (deferred-dispose bound, R2)', async () => {
+    const logs: string[] = []
+    const h = harness({
+      swapTimeoutMs: 60,
+      logger: { error: m => logs.push(String(m)), info: () => {}, warn: m => logs.push(String(m)), debug: () => {} },
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    h.definitions.set('p', fixture('p', {
+      hooks: {
+        activate(env) {
+          // oxlint-disable-next-line typescript/no-misused-promises -- async listeners are awaited by the dispatch container.
+          env.on('lifecycle/parallel', async () => {
+            await gate
+          })
+        },
+      },
+    }))
+    await h.engine.install(source('p'))
+    h.definitions.set('p2', fixture('p', { version: '2.0.0' }))
+    const dispatch = h.ctx.parallel('lifecycle/parallel', { n: 1 })
+    await sleep(5)
+    const started = Date.now()
+    const replacement = h.engine.replace('p', source('p2'))
+    await replacement
+    const elapsed = Date.now() - started
+    // 常驻事件流永不排空：swapTimeoutMs 后强制释放旧代，replace 不无限等待。
+    expect(elapsed).toBeGreaterThanOrEqual(50)
+    expect(elapsed).toBeLessThan(2000)
+    expect(h.engine.plugins()[0]?.version).toBe('2.0.0')
+    expect(h.events.filter(event => event.name === 'plugin/deactivated')).toHaveLength(1)
+    expect(logs.some(line => line.includes('deferred-dispose-abandoned'))).toBe(true)
+    release()
+    await dispatch
+  })
+
   it('releases only after every in-flight event settles', async () => {
     const h = harness()
     let releaseParallel!: () => void

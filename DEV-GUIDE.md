@@ -190,6 +190,12 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
    `dispose-abandoned` 报告（显式警告可能资源泄漏），释放过渡队列，
    后续过渡（含 P1-global 回滚与 P2 停用）不被阻塞。
 
+**释放顺序（HMR 体验，R2）**：旧代释放先等事件排空（onIdle，保住旧代
+直到在飞处理器结束），但等待有界 = `swapTimeoutMs`——常驻事件流（周期
+事件/长事务）永不排空时按 deadline 强制释放旧代并告警
+`deferred-dispose-abandoned`（与 dispose-abandoned 同口径），杜绝换代后
+旧代无限滞留（`releaseGeneration`，lifecycle.spec 新增常驻事件流用例）。
+
 `updateConfig` 只允许改配置（EB-D22：任何代码/exports 变更必须 remove+create，
 物理不能换模块）；patch 与当前代 resolvedConfig deep-equal 时**空操作短路**
 （不 bump generation、不重跑 apply、不发 `plugin/replaced`，与 adoptStatic

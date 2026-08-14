@@ -20,7 +20,7 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
-import { buildArgsFor, listMygoPackageDirs } from './workspace-packages.js'
+import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from './workspace-packages.js'
 import type {
   PluginCompatibility,
   PluginHandleInfo,
@@ -2207,16 +2207,23 @@ async function updatePluginFromRemote(
       : await importEntry(entry)
     const declarative = await readDeclarativeManifest(root)
     const declaration = toDeclaration(declarative)
-    // HMR live swap first: the old generation stays live on any failure.
-    await ctx.pluginManager.updateRaw(raw, manifest.config ?? {}, id, declaration)
-    // Refresh the installed tree to match the new generation.
-    await rm(join(INSTALL_DIR, id), { recursive: true, force: true })
-    await preparePluginFiles(
-      root,
-      join(INSTALL_DIR, id),
-      manifest.installDeps === true || repositoryPlugin,
-      entry,
-    )
+    // 顺序原子性（HMR 体验 R2）：把最易失败的步骤前置到 staging——
+    // 依赖安装/构建全部在 INSTALL_DIR 下的 staging 目录完成，期间旧 live
+    // 代与旧磁盘树都保持原样；HMR swap 居中（失败则旧代恢复、staging
+    // 清理、磁盘未动）；成功后才原子换树（rename + 备份回滚）落盘。
+    const staging = join(INSTALL_DIR, `.staging-${id}-${randomUUID()}`)
+    try {
+      await preparePluginFiles(
+        root,
+        staging,
+        manifest.installDeps === true || repositoryPlugin,
+        entry,
+      )
+      await ctx.pluginManager.updateRaw(raw, manifest.config ?? {}, id, declaration)
+      await swapTreeIntoPlace(staging, join(INSTALL_DIR, id))
+    } finally {
+      await rm(staging, { recursive: true, force: true })
+    }
     const entryRelative = relative(root, entry)
     const next: InstallManifest = {
       ...manifest,

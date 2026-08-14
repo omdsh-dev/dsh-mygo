@@ -3048,6 +3048,13 @@ export class LifecycleEngine {
     })
   }
 
+  /**
+   * 释放旧代：事件在飞时延迟 dispose（等 onIdle 排空，保住旧代直到在飞
+   * 处理器结束），但等待有界（swapTimeoutMs，R2）——常驻事件流（周期
+   * 事件/长事务）永不排空时按 deadline 强制释放旧代并告警
+   * （deferred-dispose-abandoned，与 dispose-abandoned 同口径：诚实声明
+   * 可能打断在飞处理器），杜绝 HMR 换代后旧代无限滞留。
+   */
   private async releaseGeneration(
     record: ManagedRecord,
     generation: EngineGeneration,
@@ -3062,22 +3069,52 @@ export class LifecycleEngine {
     }
     generation.remainingEvents = new Set(inFlight)
     await new Promise<void>((resolve) => {
+      let settled = false
+      let disposing = false
       const disposers: (() => void)[] = []
-      const settle = (): void => { resolve() }
+      const cleanup = (): void => {
+        for (const disposer of disposers) disposer()
+        disposers.length = 0
+      }
+      const settle = (): void => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+      const disposeNow = async (abandoned: boolean): Promise<void> => {
+        // 竞态守卫：onIdle 排空与兜底定时器可能同时触发，只允许一次释放
+        // （disposeGeneration 幂等，但 plugin/deactivated 只能发一次）。
+        if (settled || disposing) return
+        disposing = true
+        cleanup()
+        this.idleDisposers.delete(record.id)
+        this.disposeGeneration(generation)
+        await this.disposeGenerationBounded(generation)
+        this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
+        if (abandoned) {
+          this.logger.warn(
+            `deferred-dispose-abandoned: plugin ${record.id} 旧代（generation ${generation.number}）`
+            + `的事件在 ${this.swapTimeoutMs}ms 内未排空；已放弃等待并释放旧代`
+            + `（可能打断在飞处理器，诚实声明）`,
+          )
+        }
+        settle()
+      }
       for (const event of inFlight) {
-        disposers.push(this.dispatch.onIdle(event, async () => {
+        disposers.push(this.dispatch.onIdle(event, () => {
           generation.remainingEvents.delete(event)
           if (generation.remainingEvents.size > 0) return
-          for (const disposer of disposers) disposer()
-          this.idleDisposers.delete(record.id)
-          this.disposeGeneration(generation)
-          await this.disposeGenerationBounded(generation)
-          this.emit('plugin/deactivated', this.eventPayload(record.id, generation.manifest, generation.number))
-          settle()
+          void disposeNow(false)
         }))
       }
+      // 兜底定时器：常驻事件流永不排空 → 按 swapTimeoutMs 有界等待后强制释放。
+      const timer = setTimeout(() => {
+        void disposeNow(true)
+      }, this.swapTimeoutMs)
+      disposers.push(() => clearTimeout(timer))
       this.idleDisposers.set(record.id, () => {
-        for (const disposer of disposers) disposer()
+        // releaseRecord 已自行释放各代；此处只摘订阅并结算等待。
+        cleanup()
         settle()
       })
     })

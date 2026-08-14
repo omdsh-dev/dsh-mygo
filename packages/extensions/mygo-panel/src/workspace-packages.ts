@@ -1,13 +1,15 @@
 /**
- * mygo 工作区包枚举（HMR 体验迭代 R1）：mygo 自更新把「整个仓库」作为
- * 最小更新单元——克隆后按 packages/<group>/<name> 枚举全部 @r05en1cu/*
- * 包目录并逐一同步/构建，取代早期 install.sh 时代的固定三目录清单
- * （vendor/dsh-mygo-panel 布局已在 P1/P3 退役）。纯函数面，供
- * updateMygoFromRemote 调用、包级测试直测。
+ * mygo 工作区包枚举与安装树原子提交（HMR 体验迭代 R1/R2）：mygo 自更新把
+ * 「整个仓库」作为最小更新单元——克隆后按 packages/<group>/<name> 枚举
+ * 全部 @r05en1cu/* 包目录并逐一同步/构建，取代早期 install.sh 时代的
+ * 固定三目录清单（vendor/dsh-mygo-panel 布局已在 P1/P3 退役）；插件更新
+ * 的磁盘树换入走 staging + rename 原子提交（R2，失败回滚，杜绝 live 代
+ * 与磁盘树不一致）。纯函数面，供面板 index.ts 调用、包级测试直测。
  * @module @r05en1cu/dsh-mygo-ext-panel/workspace-packages
  */
 
-import { readdir, readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** 仓库内工作区组（packages 下的一级目录）。 */
@@ -71,9 +73,39 @@ export async function buildArgsFor(
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await readFile(path)
+    await stat(path)
     return true
   } catch {
     return false
   }
+}
+
+/**
+ * 原子换入一个安装树目录（HMR 体验 R2）：staging 就绪后先把旧树改名
+ * backup（同一文件系统 rename 原子），再把 staging 改为正式目录名，最后
+ * 删除 backup。任一步失败都回滚：把 backup 改回正式名，绝不留下半换入
+ * 状态——live 代（HMR swap 已先行）与磁盘树要么都是新版、要么都是旧版。
+ * @param staging - 已就绪的新树目录（与 target 同一文件系统）。
+ * @param target - 正式安装目录（如 INSTALL_DIR/<id>）。
+ */
+export async function swapTreeIntoPlace(staging: string, target: string): Promise<void> {
+  const backup = `${target}.bak-${randomUUID()}`
+  const hadOld = await exists(target)
+  if (hadOld) await rename(target, backup)
+  try {
+    await rename(staging, target)
+  } catch (error) {
+    if (hadOld) {
+      try {
+        await rename(backup, target)
+      } catch (rollbackError) {
+        throw new Error(
+          `安装树换入失败且回滚失败：${String(error)}；回滚错误：${String(rollbackError)}`
+          + `（backup 残留 ${backup}，请手动恢复）`,
+        )
+      }
+    }
+    throw error
+  }
+  if (hadOld) await rm(backup, { recursive: true, force: true })
 }

@@ -1,14 +1,14 @@
 /**
- * HMR 体验迭代 R1：mygo 自更新「整仓为最小更新单元」——工作区包枚举与
- * 逐包构建形态推导（workspace-packages 纯函数面直测）。
+ * HMR 体验迭代 R1/R2：mygo 自更新「整仓为最小更新单元」——工作区包枚举与
+ * 逐包构建形态推导（R1）；插件更新树原子换入（staging + 备份回滚，R2）。
  * @module @r05en1cu/dsh-mygo-ext-panel/tests/workspace-packages
  */
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildArgsFor, listMygoPackageDirs } from '../src/workspace-packages.ts'
+import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from '../src/workspace-packages.ts'
 
 let root: string
 
@@ -78,3 +78,46 @@ describe('buildArgsFor（逐包构建形态）', () => {
     })
   })
 })
+
+describe('swapTreeIntoPlace（安装树原子换入，R2）', () => {
+  async function seed(dir: string, marker: string): Promise<void> {
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'marker.txt'), marker)
+  }
+
+  it('staging 就位后旧树被替换且备份清理（HMR swap 成功路径）', async () => {
+    const staging = join(root, 'staging')
+    const target = join(root, 'plugin')
+    await seed(staging, 'new')
+    await seed(target, 'old')
+    await swapTreeIntoPlace(staging, target)
+    expect(await readFile(join(target, 'marker.txt'), 'utf8')).toBe('new')
+    // 备份已删除，目录下只留正式树
+    const entries = await readdirOf(root)
+    expect(entries.filter(name => name.includes('.bak-'))).toEqual([])
+    expect(entries).toContain('plugin')
+  })
+
+  it('target 不存在时直接就位 staging（首装路径）', async () => {
+    const staging = join(root, 'staging')
+    const target = join(root, 'plugin')
+    await seed(staging, 'new')
+    await swapTreeIntoPlace(staging, target)
+    expect(await readFile(join(target, 'marker.txt'), 'utf8')).toBe('new')
+  })
+
+  it('staging 缺失时抛错且旧树原样保留（失败回滚路径）', async () => {
+    const staging = join(root, 'missing-staging')
+    const target = join(root, 'plugin')
+    await seed(target, 'old')
+    await expect(swapTreeIntoPlace(staging, target)).rejects.toThrow()
+    expect(await readFile(join(target, 'marker.txt'), 'utf8')).toBe('old')
+    const entries = await readdirOf(root)
+    expect(entries.filter(name => name.includes('.bak-'))).toEqual([])
+  })
+})
+
+async function readdirOf(dir: string): Promise<string[]> {
+  const { readdir } = await import('node:fs/promises')
+  return (await readdir(dir)).sort()
+}

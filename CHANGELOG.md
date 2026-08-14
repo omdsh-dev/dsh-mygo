@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased · next-hmr 分支（HMR 体验迭代 R2）
+
+- **`@r05en1cu/dsh-mygo`**：
+  - 旧代释放等待有界化（`releaseGeneration`）：事件在飞时延迟 dispose
+    依旧保住旧代直到在飞处理器结束，但等待有界 = `swapTimeoutMs`——
+    常驻事件流（周期事件/长事务）永不排空时按 deadline 强制释放旧代并
+    告警 `deferred-dispose-abandoned`（与 dispose-abandoned 同口径：
+    诚实声明可能打断在飞处理器），杜绝 HMR 换代后旧代无限滞留。
+    lifecycle.spec 新增常驻事件流用例（R2）。
+- **`@r05en1cu/dsh-mygo-ext-panel`**：
+  - 插件远程更新的**顺序原子性**（`updatePluginFromRemote`）：最易失败的
+    依赖安装/构建前置到 INSTALL_DIR 下 `.staging-<id>-*` staging 目录
+    （期间旧 live 代与旧磁盘树都保持原样）；HMR swap 居中（失败则旧代
+    恢复、staging 清理、磁盘未动）；成功后才 `swapTreeIntoPlace` 原子
+    换树（同文件系统 rename + 备份回滚），杜绝「live 已是新版、磁盘仍是
+    旧版/半删」的不一致。纯函数面 workspace-packages.ts 新增
+    `swapTreeIntoPlace` + 包级测试 3 例（成功替换 / 首装就位 / 失败回滚）。
+
 ## Unreleased · next-hmr 分支（HMR 体验迭代 R1）
 
 - **`@r05en1cu/dsh-mygo`**：
