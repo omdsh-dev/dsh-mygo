@@ -21,7 +21,17 @@ web 面板、loader、存储都是扩展。
 
 - GNU tar 确定性打包（`--sort=name --mtime=@0`），成员级 sha512 + fileSize
   校验，256MiB / 10000 成员上限
-- **离线原子还原**：不触网、不进 registry，失败回滚不留半成品
+- **成员二态**（P8）：默认全内嵌；`mygo pack --ref <id>`（可多次）或
+  `--ref=all` 把成员标记为 **npm 引用式**——包体不进 pack，打包时从
+  registry 元数据固化 `spec`（钉死 name@version）+ `integrity` +
+  `tarball` URL（可审计、防漂移）；restore 时在线拉取、integrity 硬校验，
+  离线环境点名缺失成员并整体拒绝。内嵌与引用可混合共存；无 `references`
+  键的旧 pack 照常还原
+- **离线原子还原**：内嵌成员不触网，失败回滚不留半成品
+- **restore 自动注册**（P8）：还原进 store 后自动注册进目标 profile
+  （等价 `dsh plugin add`——dependencies 落账 + `dsh.bundle` 对账进
+  bundles 层；无 bundle 声明的包仅进 dependencies 并提示）；幂等，
+  与手工 `dsh plugin add` 混装不撞行；`--no-register` 保持纯还原语义
 - 依赖与兼容性检查：安装前置校验（符号级、版本兼容域、hub risk/listing
   分级提示）——建议式报告，不做隐式求解
 - 跨实例搬运：`mygo clone --from <homeA> --to <homeB> <plugin>` 经内容寻址
@@ -77,7 +87,7 @@ dsh web   # profile 组合自动挂载
 
 ```sh
 mygo install <spec> | uninstall <name> | enable|disable <id>
-mygo pack [-o out.mygo-pack] | restore <pack> | init <name>
+mygo pack [-o out.mygo-pack] [--ref <id>|--ref=all] | restore <pack> [--no-register] | init <name>
 mygo instances | adopt --home <path> | clone --from <A> --to <B> <plugin>
 mygo hub search|info|install|collections
 mygo config <id> [--set '<json>']

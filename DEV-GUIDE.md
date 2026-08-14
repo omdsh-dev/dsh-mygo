@@ -255,19 +255,37 @@ communityDeps/manifestSha256`（2026-08-13 起不再内嵌 dsh.lock/v1 载荷，
 版本钉死在 plugins[]/files[] 上）。
 `manifestSha256` 对规范键序语义 JSON 计算；`generated.at` 归一 `<t>`。
 
+**P8 成员二态（兼容扩展，formatVersion 仍为 1）**：新增可选顶层
+`references[]`（npm 引用式成员：`{pluginId, version, packageName, spec,
+integrity, tarball}`——spec 钉死 `name@version`，integrity/tarball 打包时
+从 registry 元数据固化）。plugins[] 仍列全部成员；一一对应口径变为
+`plugins[] == files[] ∪ references[]`（两集不重叠）。取舍说明：不升 v2
+是因为 files[]/plugins[] 语义未变，旧还原端遇到含 references 的 pack 会
+以「不一一对应」干净拒绝（fail closed），新还原端对无 references 键的
+旧 pack 完全兼容；规范载荷仅在 references 非空时纳入该键，旧 pack 的
+manifestSha256 验证口径逐字节不变（空数组不落盘）。
+
 ### 6.2 确定性打包（B21）
 
 `buildPluginPack`：枚举还原根（`<installRoot>/<id>/<version>/`）重打包
 （`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` +
 `gzip -n` 语义的 Node zlib），排除 `.mygo-package.json`，transform `./` →
-`package/`；工具能力探测（不支持 `--sort=name` 报错）。
+`package/`；工具能力探测（不支持 `--sort=name` 报错）。P8 新增
+`references` 选项（id 列表或 'all'）：列入的成员不内嵌，改从 registry
+（`--registry`/NPM_CONFIG_REGISTRY，缺省官方）元数据固化引用。
 
-### 6.3 离线还原（B22/B23）
+### 6.3 离线还原（B22/B23）与引用拉取（P8）
 
 `installPluginPack`：清单自校验 → 自实现 tar 头部预检（精确成员集白名单，
 防换行文件名绕过）→ vendored sha512+fileSize 校验 → 内层 tarball 预检 →
-普通落盘还原（原子、可回滚）。全程离线（RT5：fetch 计数 0）；一坏多好 →
-整体拒绝、零写盘（T42）。无求解、无 lockfile 读写。
+普通落盘还原（原子、可回滚）。一坏多好 → 整体拒绝、零写盘（T42）。
+无求解、无 lockfile 读写。P8：references[] 成员在落盘前统一在线拉取
+（fetch 注入面 `fetchImpl`；integrity 与清单固化值不符硬失败），拉取/
+校验全部先于任何写入，失败点名缺失成员并整体拒绝（离线 fail-loud）；
+落盘与内嵌成员同路径同语义，事实文件尾部记 `origin:
+pack-embedded|pack-reference`（不进事实哈希）。CLI restore 默认随后自动
+注册进目标 profile（等价 `dsh plugin add`：pnpm add + bundle 对账；
+`--no-register` 关闭），幂等且与手工 add 混装不撞行。
 
 ### 6.4 CLI（扩展插件，`packages/cordis/mygo-cli`）
 

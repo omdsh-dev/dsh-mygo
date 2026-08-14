@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased · next 分支 P8（2026-08-14）— pack 引用式成员 + restore 自动注册
+
+### mygo-pack 成员二态（兼容扩展，formatVersion 仍为 1）
+
+- 清单新增可选 `references[]`（npm 引用式成员：`{pluginId, version,
+  packageName, spec, integrity, tarball}`）；一一对应口径变为
+  `plugins[] == files[] ∪ references[]`（不重叠）；规范载荷仅在
+  references 非空时纳入——无 references 键的旧 pack 还原不变，旧还原端
+  遇混合 pack 以一一对应校验干净拒绝（fail closed）。
+- 打包：`buildPluginPack` / `mygo pack --ref <id>`（可多次）/
+  `--ref=all`——引用成员不内嵌，打包时从 registry 元数据固化
+  dist.integrity/tarball（可审计防漂移；缺 integrity 拒绝打包并指认）；
+  混合 pack 两次打包字节一致。
+- 还原：`installPluginPack` 落盘前统一在线拉取引用成员（fetchImpl 注入
+  面），integrity 与清单固化值不符硬失败；离线/拉取失败点名缺失成员并
+  整体拒绝零写盘；落盘与内嵌成员同路径同语义（统一 restorePlan），
+  原子回滚语义不变；事实文件尾部记 `origin:
+  pack-embedded|pack-reference`（不进事实哈希）。
+
+### restore 自动注册（用户裁决形态）
+
+- `mygo restore` 还原进 store 后默认自动注册进目标 profile（语义等价
+  `dsh plugin add`：内嵌成员提取 vendored tarball 走 pnpm add、引用成员
+  按钉死 spec 安装，dsh.bundle 对账进 bundles 层，无 bundle 声明仅进
+  dependencies 并提示）；幂等，与手工 `dsh plugin add` 混装不撞行；
+  `--no-register` 保持纯还原语义。
+
+### 验证
+
+- 新增用例：mygo +6（pack-reference：引用打包固化与确定性 / 固化失败
+  指认 / 混合端到端含 origin 记账 / integrity 不符零写盘 / 离线点名
+  fail-loud / 旧 v1 兼容）、mygo-cli +4（pack-register：args 解析 /
+  注册对账断言 / 幂等 + 混装不撞行 / --no-register）。
+
 ## 0.2.0-rc.2（2026-08-14）— 面板 webServer 服务名适配
 
 - `@r05en1cu/dsh-mygo-ext-panel`：inject/上下文从 0811 时代的 `httpServer`
