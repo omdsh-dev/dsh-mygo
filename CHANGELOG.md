@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased · next 分支 P5（2026-08-14）— loader 扩展体系 + dsh-hub 市场适配器
+
+### LoaderAdapter 注册机制
+
+- mygo 核心新增 `src/loader-adapters.ts`：`LoaderAdapterRegistry`（对齐
+  BUILTIN_LOADERS 形态；register 重复 id 拒绝、注销器幂等、list 按 id
+  字典序、resolve 逐适配器试解析），`BUILTIN_LOADER_ADAPTERS = ['profile']`；
+  `PluginManager` 接口新增 `registerLoaderAdapter()`（返回注销器，受管
+  插件 fiber 清理调用 = 启停走治理面）与 `loaderAdapters()` 发现面。
+
+### 默认 loader：@r05en1cu/dsh-mygo-loader-profile（新包）
+
+- P3 安装执行面从 mygo-cli 收敛进 `packages/loaders/mygo-loader-profile`：
+  resolve 接受 npm 包名/git spec/tarball/本地目录四种 spec；install 只
+  执行 pnpm intent（落 pnpm + dsh.bundle 对账）；扩展面
+  uninstall/setEnabled；它是所有其他 loader 的最终执行面。
+- mygo-cli 的 install/uninstall/enable/disable 改经 adapter 调用（CLI
+  面行为不变，install-face 不回归）；cli src/install.ts re-export 执行
+  面保持既有引用兼容；cli 在首个 mygo 命令时把 profile adapter 注册进
+  治理面（被动语义要求非 mygo 首 token 零副作用）。
+
+### hub loader：@r05en1cu/dsh-mygo-loader-hub（新包）
+
+- registry 客户端：双 origin 故障转移 + 本地快照降级（显式 --snapshot
+  或 vendored `assets/registry-v1.json` 兜底）；snapshotId 摘要校验
+  （canonical JSON sha256，与 dsh-hub registry-core 同算法，已对真实
+  快照核对一致）；signature 非 null 时强制 Ed25519 验签
+  （HUB_BUILTIN_KEYS 内置常量为空 + 轮换窗口按 keyId 预留；keys 选项
+  可注入）；`--insecure-no-verify` 仅本地快照生效。
+- intent 翻译：profile-bundle → pnpm intent 交 profile 执行面；
+  guided/* → 只展示并说明；repository-plugin 默认拒绝（安装轨 0812 已
+  删除，待官方态度），dsh.bundle 启发式探针命中时实验性放行；本地
+  快照额外允许 file:/绝对路径 spec（离线验证/内网镜像语义）。
+- 可安装判定：listing blocked / release 缺失硬门；risk/listing/
+  maintenance/relations/capabilities 进安装前建议式提示（兼容性报告
+  消费维度）。collections 原子安装（任一项失败逆序回滚、整组丢弃）。
+- hub adapter 以 mygo 受管插件形态注册（bundle 行；挂载即绑定
+  vendored 快照注册进治理面，boot 期零网络 I/O）。
+- CLI：`mygo hub search / info / install / collections`，--json 信封
+  对齐现有命令风格。
+- publish-mygo.mjs 发布面纳入两个 loader 包（只改造不执行）。
+
+### 验证
+
+- 新增用例：mygo +5（loader-adapters 注册表）、loader-profile 6
+  （spec 分类 + 执行面端到端）、loader-hub 25（解析/摘要/验签/篡改/
+  故障转移/404 降级/insecure 规则 + intent 翻译 + 判定 + collections
+  回滚 + 本地快照端到端实装）、mygo-cli +9（hub-face 8 + 治理面注册 1）。
+- clone 不提升 InstallIntent 语义的评估登记于 DEV-GUIDE §14.4。
+
 ## Unreleased · next 分支 P4（2026-08-13）— 多实例接管与 HOME 隔离
 
 ### 多实例（实例 = $DSH_HOME）

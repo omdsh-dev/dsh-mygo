@@ -29,12 +29,15 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
    ▼
 @r05en1cu/dsh-mygo（实现层，Cordis 桥接）
    ├── package/*       包治理：manifest/版本选择/还原/扫描/打包
+   ├── loader-adapters.ts  LoaderAdapter 注册表（P5）
    ├── lifecycle.ts    生命周期引擎（七步替换、恢复、政策闸、提供表）
    ├── dispatch.ts     事件派发机（emit/waterfall/parallel/serial）
    ├── service.ts      PluginManagerService（ctx.pluginManager）
    └── bom/session-reader/capabilities/audit/persistence/...
    ▲                        ▲
 扩展：mygo-cli（命令面）   扩展：dsh-mygo-panel（web 面板）、
+      loaders/mygo-loader-profile（P5 默认执行面）、
+      loaders/mygo-loader-hub（P5 hub 市场适配器）、
                              extension/mygo-rdb（外部存储）
 ```
 
@@ -71,6 +74,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `governance.ts` | 治理视图（P3：pnpm 安装状态实时重建） | `readGovernanceView` |
 | `instances.ts` | 用户级实例登记处（P4：实例 = $DSH_HOME，§13.1） | `registerInstance`、`listInstances`、`unregisterInstance` |
 | `pack-cache.ts` | 跨实例只读共享缓存（P4：内容寻址，§13.3） | `cachePack`、`importCachedPack` |
+| `loader-adapters.ts` | LoaderAdapter 注册表（P5，§14.1） | `LoaderAdapterRegistry`、`BUILTIN_LOADER_ADAPTERS` |
 | `capabilities.ts` | 能力面与配额（fs/vars/llm/exec/http/fetch） | `createPluginFs` 等 |
 | `session-reader.ts` | jsonl/rdb/sqlite 会话读取 | `JsonlSessionReader` 等 |
 | `sqlite-store.ts` / `persistence.ts` / `store.ts` | 注册表持久化与 `RegistryStore` 契约 | `SqliteRegistryStore`、`RegistryStore` |
@@ -267,13 +271,14 @@ communityDeps/manifestSha256`（2026-08-13 起不再内嵌 dsh.lock/v1 载荷，
 
 `dsh --profile <p> mygo install|uninstall|enable|disable|pack|restore|init`
 （L0：`ctx.cmdlineArgs`/`appExit`，手写最小解析器；`--json` 直通结构化报告；
-退出码 0/1/2）。install/uninstall 落地为「目标 profile 目录跑 pnpm + 按
-dsh.bundle 对账 dsh.profile.bundles」（复用 @deepseek-ai/dsh-app-boot 的
-profile API）；enable/disable 写 profile cordis.patch.yml 的 id 定向
-disabled 块。`init` 以 plugin-template@2da8230 资产生成骨架，写盘前过
+退出码 0/1/2）。P5 起 install/uninstall/enable/disable 经 profile
+LoaderAdapter 调用（执行面收敛进 @r05en1cu/dsh-mygo-loader-profile；
+pnpm + dsh.bundle 对账 / patch 层 disabled 块语义不变）。`init` 以
+plugin-template@2da8230 资产生成骨架，写盘前过
 B1 + `checkTemplateAlignment` 双校验（含 7 skills + lockfile，
 `verify:self-contained` 硬性要求）。P4 新增多实例接管命令
-`instances|adopt|clone`（不依赖管理器挂载，见 §13.4）。
+`instances|adopt|clone`（不依赖管理器挂载，见 §13.4）；P5 新增
+`hub search|info|install|collections`（dsh-hub 市场面，见 §14.3）。
 
 > 已知宿主限制（P3 实测）：web profile 的 web-startup 参数解析器为严格
 > 模式，`dsh --profile web mygo ...` 的内层参数目前到不了 cmdlineArgs
@@ -336,8 +341,9 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 - 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
   `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-13 P4 后）：全量 66 文件 / 643 用例（mygo-api 6/39 +
-  mygo 54/577 + mygo-cli 6/27；含 mygo-rdb 本地未提交修正，见 docs/next
+- 计数口径（2026-08-14 P5 后）：全量 73 文件 / 688 用例（mygo-api 6/39 +
+  mygo 55/582 + mygo-cli 8/36 + mygo-loader-profile 1/6 +
+  mygo-loader-hub 3/25；含 mygo-rdb 本地未提交修正，见 docs/next
   备忘录）；EB 套件 11 文件 / 13 用例。
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
   间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
@@ -438,7 +444,82 @@ hardlink 导入，B 还原成功）→ 第二次 clone 缓存命中零写盘 →
 （未登记 HOME 拒绝 / 同一 HOME 拒绝 / assertInsideHome 跨 HOME 写拒绝）。
 逐行实录见该目录 transcript.txt。
 
-## 14. 常见任务速查
+## 14. Loader 扩展体系与 dsh-hub 适配器（P5）
+
+### 14.1 LoaderAdapter 注册机制
+
+- 契约（mygo-api `loader.ts`，P2 落地）：`LoaderAdapter {id, resolve, install, list?}`；
+  `InstallIntent` 三态（pnpm / pack / display）；`InstallTarget {home, profile}`；
+  `InstallReceipt` 回执。
+- 注册表（mygo `src/loader-adapters.ts`，对齐 BUILTIN_LOADERS 形态）：
+  `LoaderAdapterRegistry`（register 重复 id 拒绝、返回幂等注销器、list 按 id
+  字典序、resolve 逐适配器试解析）；`BUILTIN_LOADER_ADAPTERS = ['profile']`。
+- 治理面：`pluginManager.registerLoaderAdapter(adapter)` 注册（受管插件
+  activate/apply 时调用，注销器随 fiber 清理 = 启停走治理面）；
+  `pluginManager.loaderAdapters()` 为发现面。mygo-cli 在首个 mygo 命令
+  时注册 profile adapter（被动语义：非 mygo 首 token 零副作用，故注册
+  不在 apply 顶层发生）；hub adapter 以受管插件形态（bundle 行）挂载即
+  注册（绑定 vendored 快照，boot 期零网络 I/O）。
+
+### 14.2 默认 loader：@r05en1cu/dsh-mygo-loader-profile
+
+P3 安装执行面从 mygo-cli 收敛进 `packages/loaders/mygo-loader-profile`
+（face.ts 原样搬迁 + adapter.ts 契约化）：
+
+- `resolve` 接受四种 spec：npm 包名（可带区间）/ git spec（git+https、
+  https .git、github:）/ tarball（.tgz/.tar.gz，可 file: 前缀）/ 本地目录
+  （file:、相对、绝对路径）；不识别返回 null。
+- `install` 只执行 pnpm intent（display/pack 明确拒绝），落 profile 目录
+  pnpm add + dsh.bundle 对账；扩展面 `uninstall` / `setEnabled`（契约
+  只覆盖 install，卸载/启停是 profile 执行面自有语义）。
+- **它是所有其他 loader 的最终执行面**：来源适配器翻译出 pnpm intent
+  后统一由它执行。mygo-cli 的 install/uninstall/enable/disable 已改经
+  adapter 调用（CLI 面行为不变，install-face.spec 不回归）；cli
+  src/install.ts re-export 执行面保持既有引用兼容。
+
+### 14.3 hub loader：@r05en1cu/dsh-mygo-loader-hub
+
+dsh-hub 市场（`omdsh-registry/v1` 静态 JSON）适配器：
+
+- **拉取/验签**（registry.ts）：双 origin 故障转移
+  （hub.omdsh.dev → hub.0.org.cn）；本地快照降级（`--snapshot` file:///
+  路径，或远程全挂时 vendored `assets/registry-v1.json` 兜底 + 告警；
+  NDA 期远程 OAuth 门禁 404 即走此路径）。snapshotId = canonical JSON
+  （键排序递归序列化，registry-core.ts 同算法）payload 的 sha256，默认
+  强制校验；signature 非 null 时强制 Ed25519 验签（`HUB_BUILTIN_KEYS`
+  内置常量当前为空——官方公钥待部署环境公布，轮换窗口结构按 keyId
+  预留；运行时 keys 选项可注入）。`--insecure-no-verify` 只允许本地
+  快照（远程使用直接报错）。
+- **intent 翻译**（intent.ts）：`profile-bundle` → pnpm intent（精确
+  semver 归一 `name@version`；钉 40 位 commit git spec 原样）交 profile
+  执行面；`guided/*` → display（无可执行 intent，拒绝安装并说明）；
+  `repository-plugin` → 默认拒绝（该安装轨 0812 已删除，待官方态度），
+  除非探针（raw.githubusercontent 钉 commit 取 .dsh-plugin/package.json）
+  发现 `dsh.bundle` 声明 → 实验性放行（标注 warn，走 git 子目录 spec）。
+  本地快照（离线验证/内网镜像）额外允许 file:/绝对路径 spec。
+- **可安装判定**（assess.ts）：`listing.state === 'blocked'` 或 release
+  缺失为硬门；risk 分级 / vulnerabilityScan / nativeCode / installScripts /
+  maintenance / relations / capabilities 进安装前提示（建议式，不强制；
+  relations/capabilities 为 catalog 源维度，registry 快照暂未释放，
+  防御性消费）。本面即 hub 治理元数据的兼容性报告消费维度（CLI
+  `hub info` / `hub install` 前置输出）。
+- **collections**（collections.ts）：整组顺序安装，任一项失败逆序回滚
+  已装项、整组丢弃（对齐 hub 语义）。
+- **CLI 面**：`mygo hub search <query>` / `hub info <id>[@release]` /
+  `hub install <id>[@release]`（id 命中 collection 时整组原子安装）/
+  `hub collections`；`--json` 信封对齐现有命令风格。
+
+### 14.4 P4 遗留 #3 评估登记：clone 不提升到 InstallIntent 语义
+
+评估结论（2026-08-14）：**不提升**。理由：InstallIntent/InstallTarget
+契约是 profile 粒度的单实例语义；clone 的目标面是另一实例的 mygo 还原
+根（`$DSH_HOME/mygo/packages/`，installPluginPack 承担），且必须过
+InstanceRegistry 登记闸与 HOME 隔离闸——适配器契约的 sync
+`resolve(spec)` 与单实例 target 模型装不下跨实例对账。clone 维持 P4
+形态（mygo-cli install.ts 自有实现），复用 pack/共享缓存原语已足够。
+若 P6/P7 出现第三个跨实例搬运面，再评估抽象。
+
+## 15. 常见任务速查
 
 ```sh
 # 仓内全量 gates（无网拦截）

@@ -28,6 +28,8 @@ const packages = [
   'packages/cordis/mygo',
   'packages/cordis/mygo-cli',
   'packages/extensions/mygo-panel',
+  'packages/loaders/mygo-loader-profile',
+  'packages/loaders/mygo-loader-hub',
 ]
 for (const pkg of packages) {
   if (!existsSync(join(root, pkg, 'package.json'))) {
@@ -50,6 +52,8 @@ const names = [
   '@r05en1cu/dsh-mygo',
   '@r05en1cu/dsh-mygo-cli',
   '@r05en1cu/dsh-mygo-ext-panel',
+  '@r05en1cu/dsh-mygo-loader-profile',
+  '@r05en1cu/dsh-mygo-loader-hub',
 ]
 if (dryRun) {
   console.log('dry-run：构建与自检通过，未执行发布。')
