@@ -1,6 +1,6 @@
 {
   "name": "@r05en1cu/dsh-mygo-ext-panel",
-  "version": "0.2.0-rc.0",
+  "version": "0.2.0-rc.1",
   "description": "MyGO managed-plugin panel for the dsh web settings page (settings.section slot + /api/mygo/* routes)",
   "author": "r05En1cU",
   "maintainers": [
@@ -17,7 +17,8 @@
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml"
   ],
   "exports": {
     ".": {
@@ -25,15 +26,13 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "dshClient": {
-    "inject": [
-      "@deepseek-ai/dsh-client-ui-slots"
-    ],
-    "platform": "web"
-  },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-ui-slots"

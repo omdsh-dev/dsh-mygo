@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0-rc.1（2026-08-14）— 面板 bundle 声明修复
+
+- `@r05en1cu/dsh-mygo-ext-panel` 补 `dsh.bundle.patch` 声明与同包
+  `cordis.patch.yml`（insert `dsh-mygo-panel` 行）：0.2.0-rc.0 发布包缺该
+  声明，`dsh plugin add` 按普通依赖安装不打层，面板在 webui 不可见。
+  `files`/`exports` 白名单同步收录；移除冗余的 `dshClient` 旧键。
+- 版本线：`VERSION` 单源 0.2.0-rc.0 → 0.2.0-rc.1，七包同步。
+
 ## Unreleased · next 分支 P7 追加（2026-08-14）— npm 公开版 rc6 兼容性核查
 
 - registry 事实面：dsh@0.1.0-rc.6 携带 cordis ^4.0.1 / loader ^1.0.2 /

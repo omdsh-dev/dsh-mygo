@@ -19,31 +19,36 @@ export interface ImportRef {
 /** Best-effort ESM/CJS named-import collector. */
 export function collectNamedImports(source: string, file: string): ImportRef[] {
   const refs: ImportRef[] = []
+  // 具名符号解析：`type X` / `X as Y` 归一为运行时符号名；纯 type 成员返回
+  // null（类型在运行时不可探针，符号校验只能核验值导入）。
+  const parseNamed = (list: string): string[] =>
+    list.split(',').map(part => {
+      const trimmed = part.trim()
+      if (!trimmed) return null
+      if (trimmed === 'type' || trimmed.startsWith('type ')) {
+        // `type X` / `type X as Y`：整成员为类型导入，不参与运行时校验。
+        return null
+      }
+      const alias = trimmed.split(/\s+as\s+/)
+      return (alias[alias.length - 1] ?? trimmed).trim()
+    }).filter((name): name is string => name !== null && name !== '')
   const esm = /(?:import|export)\s*(?:\{[^}]*\}\s*from\s*|[\w$*]+\s*from\s*)['"]([^'"]+)['"]/g
   let match: RegExpExecArray | null
   while ((match = esm.exec(source)) !== null) {
     const specifier = match[1] as string
     const head = match[0] ?? ''
+    if (/^(?:import|export)\s+type\b/.test(head)) continue
     const brace = /\{([^}]*)\}/.exec(head)
-    const named = brace === null
-      ? []
-      : (brace[1] ?? '').split(',').map(part => {
-          const trimmed = part.trim()
-          const alias = trimmed.split(/\s+as\s+/)
-          return (alias[alias.length - 1] ?? trimmed).trim()
-        }).filter(Boolean)
+    const named = brace === null ? [] : parseNamed(brace[1] ?? '')
     refs.push({ specifier, named, file })
   }
   // `import { a, b } from 'x'`（上面的正则要求 from 同行，兼容换行写法）。
   const multiline = /import\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]/g
   while ((match = multiline.exec(source)) !== null) {
     const specifier = match[2] as string
+    if (/^import\s+type\b/.test(match[0] ?? '')) continue
     if (refs.some(ref => ref.specifier === specifier)) continue
-    const named = (match[1] ?? '').split(',').map(part => {
-      const trimmed = part.trim()
-      const alias = trimmed.split(/\s+as\s+/)
-      return (alias[alias.length - 1] ?? trimmed).trim()
-    }).filter(Boolean)
+    const named = parseNamed(match[1] ?? '')
     refs.push({ specifier, named, file })
   }
   const cjs = /const\s*\{([^}]*)\}\s*=\s*require\(['"]([^'"]+)['"]\)/g

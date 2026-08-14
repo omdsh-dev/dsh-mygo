@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import {
   InMemoryRegistryStore,
   RegistryPersistence,
@@ -145,11 +145,11 @@ describe('registry store seam', () => {
       const moduleDir = join(dir, 'module')
       mkdirSync(join(moduleDir, 'node_modules', '@deepseek-ai'), { recursive: true })
       copyFileSync(
-        '/home/rosen/workspace/dsh_dev/dsh-mygo/extension/mygo-rdb/lib/store.js',
+        fileURLToPath(new URL('../../../../extension/mygo-rdb/lib/store.js', import.meta.url)),
         join(moduleDir, 'store.js'),
       )
       symlinkSync(
-        '/home/rosen/workspace/dsh_dev/test-r05En1cU-0809/packages/cordis/mygo',
+        fileURLToPath(new URL('..', import.meta.url)),
         join(moduleDir, 'node_modules', '@deepseek-ai', 'dsh-mygo'),
         'dir',
       )

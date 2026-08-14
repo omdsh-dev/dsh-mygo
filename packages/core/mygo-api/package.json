@@ -1,7 +1,7 @@
 {
   "name": "@r05en1cu/dsh-mygo-api",
   "description": "Cordis-free upper-level plugin contract: definePlugin, manifest/environment types, PluginError vocabulary, and fake-env test surface",
-  "version": "0.2.0-rc.0",
+  "version": "0.2.0-rc.1",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dsh-external/dsh-mygo.git"
+    "url": "https://github.com/omdsh-dev/dsh-mygo.git"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

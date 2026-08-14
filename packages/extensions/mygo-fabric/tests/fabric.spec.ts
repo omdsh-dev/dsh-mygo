@@ -137,7 +137,7 @@ describe('fabric 受管块（启用/停用/幂等）', () => {
   })
 
   it('默认 spec 为 git 子目录 spec 白名单形态', () => {
-    expect(FABRIC_DEFAULT_SPECS[0]).toBe('github:dsh-external/fabric#main&path:/packages/cordis-fabric')
+    expect(FABRIC_DEFAULT_SPECS[0]).toBe('github:omdsh-dev/fabric#main&path:/packages/cordis-fabric')
     expect(FABRIC_DEFAULT_SPECS[1]).toContain('&path:/packages/cordis-fabric-dsh')
   })
 })

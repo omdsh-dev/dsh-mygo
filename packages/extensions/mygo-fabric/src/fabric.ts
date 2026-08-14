@@ -31,8 +31,8 @@ export const FABRIC_PACKAGES = ['cordis-fabric', 'cordis-fabric-dsh'] as const
  * 解除期间验证一律用本地路径 spec 覆盖，见 enableFabric options.specs）。
  */
 export const FABRIC_DEFAULT_SPECS = [
-  'github:dsh-external/fabric#main&path:/packages/cordis-fabric',
-  'github:dsh-external/fabric#main&path:/packages/cordis-fabric-dsh',
+  'github:omdsh-dev/fabric#main&path:/packages/cordis-fabric',
+  'github:omdsh-dev/fabric#main&path:/packages/cordis-fabric-dsh',
 ] as const
 
 /** extension 登记表首条：fabric。 */
@@ -40,7 +40,7 @@ export function fabricExtensionRegistration(): ExtensionRegistration {
   return {
     id: FABRIC_EXTENSION_ID,
     kind: 'extension',
-    source: 'github:dsh-external/fabric（git 子目录 spec 白名单过渡）',
+    source: 'github:omdsh-dev/fabric（git 子目录 spec 白名单过渡）',
     blockMarker: FABRIC_BLOCK_BEGIN,
     packages: FABRIC_PACKAGES,
     description: 'Fabric/Mixin 扩展层（组合缝两行由 mygo 治理层接管；硬缝走 host 补丁提案）',

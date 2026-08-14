@@ -41,6 +41,23 @@ describe('symbol verification', () => {
     expect(refs.find(ref => ref.specifier === 'pkg-b')?.named).toEqual([])
   })
 
+  it('skips type-only imports and inline type members (not runtime-probeable)', () => {
+    const source = `
+      import type { Foo } from 'pkg-types'
+      import { value, type Bar, type Baz as B } from 'pkg-mixed'
+      import {
+        thing,
+        type Multi,
+      } from 'pkg-multi'
+      export { type ReExported } from 'pkg-re'
+    `
+    const refs = collectNamedImports(source, 'index.js')
+    expect(refs.find(ref => ref.specifier === 'pkg-types')).toBeUndefined()
+    expect(refs.find(ref => ref.specifier === 'pkg-mixed')?.named).toEqual(['value'])
+    expect(refs.find(ref => ref.specifier === 'pkg-multi')?.named).toEqual(['thing'])
+    expect(refs.find(ref => ref.specifier === 'pkg-re')?.named).toEqual([])
+  })
+
   it('probes runtime exports from an ESM entry', async () => {
     const entry = join(root, 'index.mjs')
     await writeFile(entry, 'export const alpha = 1\nexport function beta() {}\nexport default { gamma: 2 }\n')
