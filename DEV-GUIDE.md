@@ -370,6 +370,11 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
   间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
   负载稳定全绿。串行分包纪律不变，包内可加 `--pool=threads`。
+- 面板包测试（rc.3 起）：`packages/extensions/mygo-panel` 不装 vitest
+  （dsh-client-* devDeps 的传递依赖 404 未公开发布，任何解析变动都会
+  撞墙），test 脚本走根级提升的 vitest 二进制 shim，vitest.config.ts
+  为 plain object（不 import 'vitest/config'——面板解析链无 vitest
+  顶层链接）。
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
 - 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。

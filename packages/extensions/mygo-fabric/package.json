@@ -1,7 +1,7 @@
 {
   "name": "@r05en1cu/dsh-mygo-ext-fabric",
   "description": "mygo fabric extension governance shell: extension registry first entry + managed-block enable/disable of the fabric composition seam",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -66,7 +66,7 @@
     "mygo": {
       "formatVersion": 1,
       "id": "dsh-mygo-fabric",
-      "version": "0.2.0-rc.2",
+      "version": "0.2.0-rc.3",
       "entry": "lib/index.js",
       "requires": {},
       "core": "^0.0.1-rc.1",

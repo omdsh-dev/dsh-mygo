@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0-rc.3（2026-08-14）— 面板桥接同步升级路径安全加固
+
+- **fail-soft（真实事故修复）**：老安装形态遗留的失效桥接（陈旧 scope
+  包名错位 / profile 链接缺失）此前会被面板启动同步重建成 patch 行，
+  指向不可解析包 → 整个 dsh boot fail-loud 挂掉。现在写桥接行前逐行
+  校验可解析性（profile node_modules + profiles/node_modules 兜底链，
+  package.json name 精确匹配防 scope 错位 + 入口存在性探测），不可
+  解析的行跳过 + 一次性告警（指明目录与清理建议），绝不写出致死行。
+- **受管块落点修复**：装配逻辑重写为纯函数（bridge-rows.ts）——只
+  替换/插入自己的标记块、用户内容逐字节不动；空文件落 `[]` 合法
+  YAML，不再出现把 `[]` 裹进块注释中间的形态；无行时整块摘除。
+- **面板包级测试落地**（此前无）：tests/bridge-rows.spec.ts 9 例
+  （失效跳过 / 落点保留用户内容 / 空文件合法 YAML / 幂等重跑 /
+  陈旧 scope 错位 / 兜底链认可 / 端到端 boot 安全）。面板不装 vitest
+  （dsh-client-* devDeps 的传递依赖 404 未公开发布，解析变动即撞墙），
+  test 脚本走根级提升的 vitest 二进制，配置 plain object 直出。
+
 ## Unreleased · next 分支 P8（2026-08-14）— pack 引用式成员 + restore 自动注册
 
 ### mygo-pack 成员二态（兼容扩展，formatVersion 仍为 1）
