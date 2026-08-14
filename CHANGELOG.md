@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.2.0-rc.6（2026-08-14）— 配置注入 webui 插件页 + 面板功能面定型 + bundle 卸载路由修正
+
+### 配置注入（核心交付）
+
+- mygo 面板 client half 新增聚合配置卡片（settings.plugin.item 槽）：
+  枚举有 Config schema 的受管插件（bridge 轨面板安装物 + bundle 轨
+  profile 成员，schema 经 fresh import 读 Config 导出；无 Config 的插件
+  静默跳过），通用配置表单（ConfigFields 共享组件）零手写 UI 即入
+  webui 插件设置页。
+- node half 新增 API：`/api/mygo/config-cards`（卡片枚举）、
+  `/api/mygo/config` GET/PUT（bridge 经 updateConfig + 桥接行回写生效；
+  bundle 经 upsertRowConfig 写 profile patch 层、宿主 watcher 重载生效；
+  行 id 取 bundle patch 首个 insert 行）。
+- row-config 基础设施从 mygo-cli 收敛进 mygo 核心（src/row-config.ts：
+  readRowConfig/writeRowConfig + upsertRowConfig 追加 id 定向覆盖行 +
+  listPatchRowIds；cli re-export 兼容）。
+- 槽契约以官方 slot-contract 同形状本地声明合并承载（面板暂不引入
+  dsh-client-ui-settings-plugins 为 devDep：其 peer 闭包含未公开发布的
+  内部包，pnpm 解析会撞 404；解析墙解除后改官方类型导入）。
+
+### 配套配置导入导出（整 profile 粒度）
+
+- `dsh.mygo-configs/v1` 单文件：导出 = profile patch 全部行的 config
+  快照（/api/mygo/config-export）；导入 = 格式校验 + 受管集分面
+  （patch 行 ∪ 卡片 ∪ bridge 集外的 id 拒绝并指认）后写回（bridge 经
+  updateConfig、其余经 upsertRowConfig；/api/mygo/config-import）。
+- pack 清单可选 configs[]（restore --with-config 应用）登记为后续项，
+  本轮未做。
+
+### 面板功能面定型
+
+- 保留三区：bundle 插件安装（npm/git/hub/pack 引用式）、整合包导入
+  导出、配套配置导入导出；版本获取/更新/自更新保留现状。
+- 退役：外部应用管理（/api/mygo/apps* 路由、AppManifest/AppInstallRequest
+  类型与全部外部应用安装/启动/停止/卸载函数、updateAppFromRemote、
+  Panel.tsx 外部应用 UI 与「安装为外部应用」流程），listUpdates 不再
+  枚举外部应用。
+
+### bundle 卸载路由修正（追加，用户实机报错）
+
+- 面板/治理面 uninstall 按轨道路由：bundle 轨成员走 profile 执行面
+  （routeBundleUninstall → profileUninstall = pnpm remove + reconcile，
+  与官方 dsh plugin remove 同路径，不再经引擎桥接轨或 dsh 子进程）；
+  桥接轨维持引擎 uninstall 语义。
+- 守卫：dsh-mygo-ext-panel 禁止经自身卸载（指引 dsh plugin remove）；
+  dsh-mygo 核心需 force: true 确认（API/UI 各自体现，UI 卸载按钮
+  隐藏面板自身、核心确认附带 force）；卸载前跑 plan 预览
+  （dependent-exists 拒绝透传）。
+- 面板测试扩展至 26 例（新增 config-cards 3 例 + uninstall-routing 4 例）。
+
 ## 0.2.0-rc.5（2026-08-14）— HMR 体验迭代（R1+R2）+ 评审修复
 
 - **评审修复（本会话）**：

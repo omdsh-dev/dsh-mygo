@@ -367,7 +367,7 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 | 存储 | `RegistryStore` | sqlite 内置 / mygo-rdb |
 | CLI 命令 | `ctx.cmdlineArgs`/`appExit`（L0） | mygo-cli |
 | web 面板 | `ctx.httpServer` 路由 + `settings.section` 客户端槽 | dsh-mygo-panel |
-| 配置卡片 | 官方 `settings.plugin.item` 槽 + settings 命名空间 | **受限**：settings 网关显式 allowlist（api-proxy.ts:120-127），插件自建命名空间 `settings-not-exposed`；需官方开放 per-plugin 暴露（EXT-3 需求 2） |
+| 配置卡片 | `settings.plugin.item` 槽聚合卡片（r6：有 Config schema 的受管插件通用配置表单） | dsh-mygo-panel（ConfigCards + config-cards.ts 内省面；槽契约本地声明合并镜像） |
 
 ## 11. 测试与开发纪律
 
@@ -385,7 +385,10 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
   撞墙），test 脚本走根级提升的 vitest 二进制 shim，vitest.config.ts
   为 plain object（不 import 'vitest/config'——面板解析链无 vitest
   顶层链接）。纯函数面（bridge-rows.ts 桥接装配、workspace-packages.ts
-  整仓枚举/构建形态，next-hmr R1）直测。
+  整仓枚举/构建形态、config-cards.ts 内省与导入导出，r6）直测；
+  卸载路由经 routeBundleUninstall 导出函数 + 临时 profile fixture 测。
+  面板模块 HOME_ROOT 在 import 时定型——测试须先于动态 import 设
+  临时 DSH_HOME（r6 实测事故：先 import 后设 env 会打到真实实例，已修复）。
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
 - 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。
@@ -646,7 +649,45 @@ patches/README.md 说明。
   收口条件 = 用户决定是否纳入主线（进 packages/extensions 并补三件套）
   或拆独立仓。当前不进发布面、不进计数口径说明之外的任何承诺。
 
-## 17. 常见任务速查
+## 17. 配置注入与面板功能面定型（r6）
+
+### 17.1 配置注入（webui 插件页）
+
+- **卡片枚举**（面板 node half `/api/mygo/config-cards`）：bridge 轨
+  （mygo-plugins 安装物，fresh import 读 `Config` 导出）+ bundle 轨
+  （profile bundle 成员，包目录经 profile node_modules / 兜底链解析）；
+  schema 走 config-cards.ts 的结构化内省（ConfigSchemaLike →
+  ConfigSchemaInfo{description, fields, template}，JSON 安全）；无 Config
+  的插件静默跳过。bundle 行 id = bundle 自带 cordis.patch.yml 首个
+  insert 行 id（bundleRowIdOf），回退成员 id。
+- **读写**：`/api/mygo/config` GET/PUT——bridge 经
+  `pluginManager.updateConfig` + 桥接行回写（HMR 生效）；bundle 经
+  `upsertRowConfig` 写 profile 用户 patch 层（行不存在则追加 id 定向
+  覆盖行，宿主 watchUserPatches 重载生效）。row-config 基础设施在 mygo
+  核心 `src/row-config.ts`（cli `mygo config` 共用，re-export 兼容）。
+- **卡片呈现**：client half 聚合卡片（`settings.plugin.item` 槽，id
+  `mygo-configs`）逐插件渲染通用表单（ConfigFields 共享组件，Panel 的
+  配置编辑器提取面）。槽契约以官方 slot-contract 同形状本地声明合并
+  承载（dsh-client-ui-settings-plugins 暂不作 devDep，解析墙见 §11）。
+
+### 17.2 配套配置导入导出（整 profile 粒度）
+
+`dsh.mygo-configs/v1` 单文件：`{format, profile, exportedAt, configs}`。
+导出 = patch 全部行 id 的 config 快照；导入 = parseConfigImport 格式
+校验 + partitionImportTargets 受管集分面（patch 行 ∪ 卡片 ∪ bridge
+集外 id 拒绝并指认）→ bridge 经 updateConfig、其余经
+upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
+
+### 17.3 面板功能面定型与 bundle 卸载路由
+
+- 定型三区：bundle 插件安装（npm/git/hub/pack 引用式）、整合包导入
+  导出、配套配置导入导出；版本获取/更新/自更新保留。
+- 已退役：外部应用管理全部面（API/函数/类型/UI）。
+- 卸载路由（routeBundleUninstall）：bundle 轨 → profileUninstall
+  （pnpm remove + reconcile，官方同路径）；守卫 = 面板自身拒绝、
+  dsh-mygo 需 force、plan 预览前置；桥接轨维持引擎 uninstall。
+
+## 18. 常见任务速查
 
 ```sh
 # 仓内全量 gates（无网拦截）

@@ -103,7 +103,7 @@ mygo config <id> [--set '<json>']
 |---|---|
 | `@r05en1cu/dsh-mygo-api` | 契约层（Cordis-free）：`definePlugin`、`PluginHooks`、`PluginError` 39 码、`LoaderAdapter` 契约——插件作者 SHOULD 只依赖它 |
 | `@r05en1cu/dsh-mygo-cli` | 命令面（本身是受管插件） |
-| `@r05en1cu/dsh-mygo-ext-panel` | web 设置页面板（`settings.section` 槽 + `/api/mygo/*`） |
+| `@r05en1cu/dsh-mygo-ext-panel` | web 设置页面板：`settings.section` 管理区（bundle 安装 / 整合包 / 配置导入导出 / 更新与自更新）+ `settings.plugin.item` 配置卡片注入（有 Config schema 的受管插件零手写 UI 即入插件设置页；外部应用管理已退役） |
 | `@r05en1cu/dsh-mygo-loader-profile` | 默认 loader（dsh 原生 profile 体系） |
 | `@r05en1cu/dsh-mygo-loader-hub` | dsh-hub 市场 loader |
 | `@r05en1cu/dsh-mygo-ext-fabric` | fabric（mixin/加载时变换）治理壳 |
