@@ -1437,6 +1437,35 @@ describe('LifecycleEngine swapPolicy', () => {
     expect(h.engine.plugins()[0]?.version).toBe('2.0.0')
   })
 
+  it('times out drain quiescence with swap-timeout when events never settle (event-driven backstop)', async () => {
+    const h = harness({ swapTimeoutMs: 60 })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    h.definitions.set('p', fixture('p', {
+      swapPolicy: 'drain',
+      hooks: {
+        activate(env) {
+          // oxlint-disable-next-line typescript/no-misused-promises -- async listeners are awaited by the dispatch container.
+          env.on('lifecycle/parallel', async () => {
+            await gate
+          })
+        },
+      },
+    }))
+    await h.engine.install(source('p'))
+    const dispatch = h.ctx.parallel('lifecycle/parallel', { n: 1 })
+    await sleep(5)
+    h.definitions.set('p2', fixture('p', { version: '2.0.0', swapPolicy: 'drain' }))
+    await expect(h.engine.replace('p', source('p2'))).rejects.toMatchObject({
+      code: 'swap-timeout',
+      details: { policy: 'drain' },
+    })
+    expect(h.engine.plugins()[0]?.version).toBe('1.0.0')
+    expect(h.events.filter(event => event.name === 'plugin/replace-failed')).toHaveLength(1)
+    release()
+    await dispatch
+  })
+
   it('proceeds once next-idle becomes free', async () => {
     let busy = true
     const h = harness({
@@ -2150,6 +2179,27 @@ describe('LifecycleEngine updateConfig, adoptStatic, dispose', () => {
     await h.engine.updateConfig('p', { step: 2 })
     expect(sawConfig).toEqual({ step: 2 })
     expect(h.events.filter(event => event.name === 'plugin/replaced')).toHaveLength(1)
+  })
+
+  it('updateConfig with a deep-equal patch is a no-op (no replace, no generation bump)', async () => {
+    const h = harness()
+    let sawConfig: unknown
+    h.definitions.set('p', fixture('p', {
+      config: z.object({ step: z.number() }),
+      hooks: {
+        async setup(_env, config) {
+          sawConfig = config
+        },
+        activate: () => {},
+      },
+    }))
+    await h.engine.install(source('p'), { config: { step: 1 } })
+    const generation = h.engine.plugins()[0]?.generation
+    const replacedBefore = h.events.filter(event => event.name === 'plugin/replaced').length
+    await h.engine.updateConfig('p', { step: 1 })
+    expect(sawConfig).toEqual({ step: 1 })
+    expect(h.engine.plugins()[0]?.generation).toBe(generation)
+    expect(h.events.filter(event => event.name === 'plugin/replaced').length).toBe(replacedBefore)
   })
 
   it('adopts static entries and shadows a dynamic install of the same id (T2-4)', async () => {

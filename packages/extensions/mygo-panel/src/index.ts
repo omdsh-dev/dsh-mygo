@@ -20,6 +20,7 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
+import { buildArgsFor, listMygoPackageDirs } from './workspace-packages.js'
 import type {
   PluginCompatibility,
   PluginHandleInfo,
@@ -2102,9 +2103,10 @@ async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
 }
 
 /**
- * mygo 自身热更新：clone 远端仓库 → 替换 checkout 里的 mygo/mygo-api/panel
- * 源码 → 重建 → 记录新 commit。Loader 会在响应后由 profile patch 变更触发
- * 热重载，受管插件在重载后通过 recover() 自动恢复。
+ * mygo 自身热更新：clone 远端仓库 → 以整个仓库为最小更新单元，枚举
+ * packages/ 下全部 @r05en1cu/* 工作区包逐一同步进 checkout → 逐包重建 →
+ * 记录新 commit。Loader 会在响应后由 profile patch 变更触发热重载，受管
+ * 插件在重载后通过 recover() 自动恢复。
  */
 async function updateMygoFromRemote(
   _ctx: PanelContext,
@@ -2121,12 +2123,14 @@ async function updateMygoFromRemote(
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-mygo-update-'))
   try {
     await cloneFromGitHub(self.url, self.ref === 'HEAD' ? undefined : self.ref, tmp)
-    const pairs: Array<[string, string]> = [
-      [join(tmp, 'packages', 'core', 'mygo-api'), join(CHECKOUT, 'packages', 'core', 'mygo-api')],
-      [join(tmp, 'packages', 'cordis', 'mygo'), join(CHECKOUT, 'packages', 'cordis', 'mygo')],
-      [join(tmp, 'vendor', 'dsh-mygo-panel'), join(CHECKOUT, 'vendor', 'dsh-mygo-panel')],
-    ]
-    for (const [src, dst] of pairs) {
+    // 整仓同步：克隆里的包目录清单即更新单元，不再维护固定三目录对。
+    const packageDirs = await listMygoPackageDirs(tmp)
+    if (packageDirs.length === 0) {
+      throw new Error('克隆仓库中没有找到任何 mygo 包（仓库结构异常？）')
+    }
+    for (const rel of packageDirs) {
+      const src = join(tmp, rel)
+      const dst = join(CHECKOUT, rel)
       await rm(dst, { recursive: true, force: true })
       await mkdir(dst, { recursive: true })
       await copyPluginTree(src, dst)
@@ -2136,23 +2140,20 @@ async function updateMygoFromRemote(
         console.error('[dsh-mygo-panel] pnpm install during self-update failed:', error)
       })
     const nodeBin = process.execPath
-    await execFileAsync(
-      nodeBin,
-      [join(CHECKOUT, 'node_modules', 'typescript', 'bin', 'tsc'), '-b', 'packages/core/mygo-api', 'packages/cordis/mygo'],
-      { cwd: CHECKOUT, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
-    )
-    for (const config of ['packages/core/mygo-api/tsdown.config.ts', 'packages/cordis/mygo/tsdown.config.ts']) {
+    const tscBin = join(CHECKOUT, 'node_modules', 'typescript', 'bin', 'tsc')
+    const tsdownBin = join(CHECKOUT, 'node_modules', 'tsdown', 'dist', 'run.mjs')
+    for (const rel of packageDirs) {
+      const dir = join(CHECKOUT, rel)
+      const args = await buildArgsFor(dir)
       await execFileAsync(
         nodeBin,
-        [join(CHECKOUT, 'node_modules', 'tsdown', 'dist', 'run.mjs'), '--config', config],
-        { cwd: CHECKOUT, env: buildEnv(), timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
+        [tscBin, ...args.tsc],
+        { cwd: dir, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
       )
-    }
-    if (await fileExists(join(CHECKOUT, 'vendor', 'dsh-mygo-panel', 'build.mjs'))) {
       await execFileAsync(
         nodeBin,
-        ['build.mjs'],
-        { cwd: join(CHECKOUT, 'vendor', 'dsh-mygo-panel'), env: buildEnv(), timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
+        [tsdownBin, ...args.tsdown],
+        { cwd: dir, env: buildEnv(), timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
       )
     }
     await writeMygoSelfState({ ...self, commit: latestCommit, installedAt: Date.now() })
@@ -2160,7 +2161,7 @@ async function updateMygoFromRemote(
       ok: true,
       id: 'dsh-mygo',
       updated: true,
-      message: 'mygo 已更新（代码已替换并重建；Loader 热重载后生效）',
+      message: 'mygo 已更新（整仓代码已替换并重建；Loader 热重载后生效）',
       commit: latestCommit,
     }
   } finally {

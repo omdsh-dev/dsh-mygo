@@ -181,7 +181,9 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
 1. 先持久化、后运行态生效（T3 规则：status 指针写在 generation 之后）；
 2. 新一代 staging 全部成功才提交，失败整体回滚；
 3. `swapPolicy`：`immediate`（直接换）/ `drain`（事件排空）/ `next-idle`
-   （Agent 空闲）——有界等待；
+   （Agent 空闲）——有界等待；`drain` 为事件驱动（订阅受影响事件的
+   idle 信号，任一事件空闲即复查合取，deadline 兜底 swap-timeout），
+   不再 5ms 忙轮询（next-hmr R1）；
 4. dispose 有界（`disposeTimeoutMs` 默认 5000ms，0..30000 可配，EB-D21 /
    design-r3 §1.7）：超时 = **停止等待并放弃所有权**（JS 无法中止运行中的
    异步生成器，诚实声明）——不再 await 剩余 disposables，计入
@@ -189,7 +191,9 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
    后续过渡（含 P1-global 回滚与 P2 停用）不被阻塞。
 
 `updateConfig` 只允许改配置（EB-D22：任何代码/exports 变更必须 remove+create，
-物理不能换模块）。
+物理不能换模块）；patch 与当前代 resolvedConfig deep-equal 时**空操作短路**
+（不 bump generation、不重跑 apply、不发 `plugin/replaced`，与 adoptStatic
+同代幂等守卫同口径，next-hmr R1）。
 
 ### 4.3 requires 政策闸（`package/requires-gate.ts` + `lifecycle.reconcileRequiresGates`）
 
@@ -374,7 +378,8 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
   （dsh-client-* devDeps 的传递依赖 404 未公开发布，任何解析变动都会
   撞墙），test 脚本走根级提升的 vitest 二进制 shim，vitest.config.ts
   为 plain object（不 import 'vitest/config'——面板解析链无 vitest
-  顶层链接）。
+  顶层链接）。纯函数面（bridge-rows.ts 桥接装配、workspace-packages.ts
+  整仓枚举/构建形态，next-hmr R1）直测。
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
 - 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。

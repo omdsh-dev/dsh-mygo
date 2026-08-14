@@ -1523,6 +1523,9 @@ export class LifecycleEngine {
 
   /**
    * Hot-config update: reuse the replace path with the same code (HP:98).
+   * 空操作短路（HMR 体验）：patch 解析后与当前 live 代 resolvedConfig
+   * deep-equal 时直接返回，不 bump generation、不重跑 apply、不发
+   * `plugin/replaced`——与 adoptStatic 的同代幂等守卫同口径。
    * @param id - plugin id to reconfigure.
    * @param patch - new resolved config value.
    */
@@ -1532,6 +1535,12 @@ export class LifecycleEngine {
       const manifest = record.generations.at(-1)?.manifest
       if (manifest === undefined) {
         throw fail('staging-failed', { stage: 'cache', cause: 'no generation to update' }, id)
+      }
+      // 先解析校验（非法 patch 依旧 manifest-invalid 失败），再与 live 代比较。
+      const resolved = this.resolveConfig(manifest, patch)
+      const live = record.generations.at(-1)
+      if (record.status === 'enabled' && live !== undefined && live.mounted && isDeepStrictEqual(resolved, live.resolvedConfig)) {
+        return
       }
       await this.replaceWithDefinition(id, record.source, manifest, false, patch)
     })
@@ -2972,17 +2981,71 @@ export class LifecycleEngine {
     events: readonly string[],
     id: string,
   ): Promise<void> {
+    if (policy === 'drain') {
+      await this.waitForDrainIdle(events, id)
+      return
+    }
+    // next-idle 没有事件信号（isTurnBusy 是宿主回调），保持有界轮询。
     const deadline = this.now() + this.swapTimeoutMs
     for (;;) {
-      const drainIdle = policy === 'drain' && events.every(event => this.dispatch.inFlightCount(event) === 0)
-      const turnIdle = policy === 'next-idle' && !(await this.isTurnBusy())
-      if (drainIdle || turnIdle) return
+      if (!(await this.isTurnBusy())) return
       const waitedMs = this.now() - deadline + this.swapTimeoutMs
       if (waitedMs >= this.swapTimeoutMs) {
         throw fail('swap-timeout', { policy, waitedMs }, id)
       }
       await new Promise(resolve => setTimeout(resolve, 5))
     }
+  }
+
+  /**
+   * Event-driven drain wait: subscribe to each affected event's idle signal
+   * instead of polling. Resolves the moment every affected event is idle at
+   * the same instant; bounded by the same swapTimeoutMs deadline. A signal
+   * fires only on a transition to zero, so the initial check after
+   * subscription covers events that are already idle (they never signal).
+   */
+  private async waitForDrainIdle(events: readonly string[], id: string): Promise<void> {
+    const allIdle = (): boolean => events.every(event => this.dispatch.inFlightCount(event) === 0)
+    if (allIdle()) return
+    const deadline = this.now() + this.swapTimeoutMs
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const disposers: (() => void)[] = []
+      const cleanup = (): void => {
+        for (const disposer of disposers) disposer()
+        disposers.length = 0
+      }
+      const check = (): void => {
+        if (settled) return
+        if (allIdle()) {
+          settled = true
+          cleanup()
+          resolve()
+          return
+        }
+        const waitedMs = this.now() - deadline + this.swapTimeoutMs
+        if (waitedMs >= this.swapTimeoutMs) {
+          settled = true
+          cleanup()
+          reject(fail('swap-timeout', { policy: 'drain', waitedMs }, id))
+        }
+      }
+      for (const event of events) {
+        disposers.push(this.dispatch.onIdle(event, check))
+      }
+      // 订阅后立即初查：订阅前已 idle 的事件不会再有信号，初查兜住并发状态。
+      check()
+      if (settled) return
+      // 兜底定时器：事件可能永不 idle（如常驻事件流），按 deadline 超时。
+      const remaining = Math.max(0, deadline - this.now())
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(fail('swap-timeout', { policy: 'drain', waitedMs: this.swapTimeoutMs }, id))
+      }, remaining)
+      disposers.push(() => clearTimeout(timer))
+    })
   }
 
   private async releaseGeneration(

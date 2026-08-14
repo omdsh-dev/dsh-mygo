@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased · next-hmr 分支（HMR 体验迭代 R1）
+
+- **`@r05en1cu/dsh-mygo`**：
+  - `updateConfig` 空操作短路：patch 解析后与当前 live 代 resolvedConfig
+    deep-equal 时直接返回——不 bump generation、不重跑 apply、不发
+    `plugin/replaced`（与 adoptStatic 同代幂等守卫同口径）；非法 patch
+    依旧 manifest-invalid。面板「配置保存」不再为无变更保存触发一次完整
+    换代（HMR 体验）。
+  - `swapPolicy: 'drain'` 静默等待事件驱动化：订阅受影响事件的 idle
+    信号（任一事件空闲即复查合取）替代 5ms 忙轮询，deadline 兜底
+    swap-timeout 语义不变；`next-idle` 保持有界轮询（isTurnBusy 无事件
+    信号）。事件流排空瞬间即换代，长等待不再空转。
+- **`@r05en1cu/dsh-mygo-ext-panel`**：
+  - mygo 自更新以**整个仓库为最小更新单元**：弃用 install.sh 时代的固定
+    三目录对（含已退役 vendor/dsh-mygo-panel 路径），改为克隆后枚举
+    `packages/<group>/<name>` 全部 `@r05en1cu/*` 工作区包逐一同步进
+    checkout 并按包构建形态逐包重建（面板 `tsc -p` + tsdown .mjs，
+    标准包 `tsc -b` + tsdown .ts）。纯函数面
+    `src/workspace-packages.ts`（枚举 + 构建形态推导）+ 包级测试 5 例。
+
 ## 0.2.0-rc.4（2026-08-14）— 受管块空内容 YAML 修复
 
 - `@r05en1cu/dsh-mygo-ext-panel`：rows 为空且用户层仅注释时，
