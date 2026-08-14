@@ -6,6 +6,10 @@
  *   → 普通落盘还原；无跨插件求解、无 lockfile 读写（pnpm 安装状态为唯一
  *   真相源，pack 只搬运 `(id, version)` 粒度的 vendored tarball）。
  * - files[].sha512 + fileSize 成员级校验为 pack 自身完整性服务（保留）。
+ * - P8：成员二态——内嵌（files[]，现状默认）与 npm 引用式（references[]：
+ *   打包时从 registry 元数据固化 spec/integrity/tarball；restore 时在线
+ *   拉取 + integrity 硬校验，离线点名 fail-loud；两者可混合；清单无
+ *   references 键的旧 pack 照常还原）。
  * 零新增第三方依赖；tar 头部遍历为最小自实现（design-r4 §3/§6）。
  * @module @r05en1cu/dsh-mygo/src/package/pack
  */
@@ -18,7 +22,8 @@ import { promisify } from 'node:util'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { isEscapingPath, parsePackageManifest, pathProblemsOf, type PluginManifestV2 } from './manifest-v2.ts'
 import { readRestoredPackage, restorePackage } from './package-restore.ts'
-import { sha256Text } from './hash.ts'
+import { fetchRegistryMetadata } from './registry-client.ts'
+import { integritySha512Hex, sha256Text } from './hash.ts'
 import type { ConflictEntry, ResolutionReport } from './report.ts'
 import { isValidRange, matchesVersionRange } from '../semver-range.ts'
 
@@ -63,6 +68,24 @@ export interface PackCommunityDep {
   readonly owner: string
 }
 
+/**
+ * 引用式成员（P8）：pack 不内嵌包体，只固化 npm 引用——restore 时在线
+ * 拉取。`integrity`/`tarball` 打包时从 registry 元数据固化（可审计、
+ * 防漂移）；spec 为钉死的 `packageName@version`。
+ */
+export interface PackReferenceEntry {
+  readonly pluginId: string
+  /** 精确版本（与 plugins[] 对齐钉死）。 */
+  readonly version: string
+  readonly packageName: string
+  /** 钉死 npm 引用：`packageName@version`。 */
+  readonly spec: string
+  /** registry dist.integrity（`sha512-<base64>`）。 */
+  readonly integrity: string
+  /** registry dist.tarball 固化 URL。 */
+  readonly tarball: string
+}
+
 export interface PackManifest {
   readonly format: 'mygo-pack/v1'
   readonly formatVersion: 1
@@ -72,6 +95,8 @@ export interface PackManifest {
   readonly manifestSha256: string
   readonly plugins: readonly PackPluginDecl[]
   readonly files: readonly PackFileEntry[]
+  /** P8：npm 引用式成员（缺省 = []，旧 v1 pack 语义不变）。 */
+  readonly references: readonly PackReferenceEntry[]
   readonly communityDeps: readonly PackCommunityDep[]
 }
 
@@ -208,6 +233,44 @@ export function parsePackManifest(raw: unknown): {
     }
   }
 
+  // P8：引用式成员（可选数组；缺省 = []，旧 v1 pack 不变）。
+  const references: PackReferenceEntry[] = []
+  if (raw.references !== undefined) {
+    if (!Array.isArray(raw.references)) {
+      push('references', 'references 必须是数组')
+    } else {
+      const pluginKeys = new Set(plugins.map(plugin => `${plugin.id}@${plugin.version}`))
+      for (const [index, entry] of raw.references.entries()) {
+        const path = `references[${index}]`
+        if (!isRecord(entry)) {
+          push(path, '不是对象')
+          continue
+        }
+        const version = typeof entry.version === 'string' ? entry.version : ''
+        if (typeof entry.pluginId !== 'string' || !pluginKeys.has(`${String(entry.pluginId ?? '')}@${version}`)) {
+          push(`${path}.pluginId`, 'pluginId+version 必须在 plugins 中')
+        }
+        if (typeof entry.packageName !== 'string' || entry.packageName === '') push(`${path}.packageName`, 'packageName 必须是非空字符串')
+        const spec = typeof entry.spec === 'string' ? entry.spec : ''
+        if (spec !== `${String(entry.packageName ?? '')}@${version}`) push(`${path}.spec`, 'spec 必须是钉死的 packageName@version')
+        if (typeof entry.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/=]+$/.test(entry.integrity)) {
+          push(`${path}.integrity`, 'integrity 必须是 sha512-<base64> 形态')
+        }
+        if (typeof entry.tarball !== 'string' || !/^https?:\/\/\S+$/.test(entry.tarball)) {
+          push(`${path}.tarball`, 'tarball 必须是 http(s) URL')
+        }
+        references.push({
+          pluginId: String(entry.pluginId ?? ''),
+          version,
+          packageName: String(entry.packageName ?? ''),
+          spec,
+          integrity: String(entry.integrity ?? ''),
+          tarball: String(entry.tarball ?? ''),
+        })
+      }
+    }
+  }
+
   if (problems.length > 0) return { problems }
   return {
     value: {
@@ -224,6 +287,7 @@ export function parsePackManifest(raw: unknown): {
       manifestSha256: raw.manifestSha256 as string,
       plugins,
       files,
+      references,
       communityDeps,
     },
     problems,
@@ -257,6 +321,18 @@ export function canonicalPackPayload(manifest: PackManifest): Record<string, unk
       fileSize: file.fileSize,
       ...(file.integrity === undefined ? {} : { integrity: file.integrity }),
     })),
+    // P8：references 仅在非空时进规范载荷——旧 v1 pack（无 references 键）
+    // 的 manifestSha256 验证口径不变（向后兼容）。
+    ...((manifest.references ?? []).length === 0 ? {} : {
+      references: (manifest.references ?? []).map(reference => ({
+        pluginId: reference.pluginId,
+        version: reference.version,
+        packageName: reference.packageName,
+        spec: reference.spec,
+        integrity: reference.integrity,
+        tarball: reference.tarball,
+      })),
+    }),
     communityDeps: manifest.communityDeps.map(dep => ({
       name: dep.name,
       range: dep.range,
@@ -401,6 +477,13 @@ export interface PackBuildOptions {
   readonly includeCommunityDeps?: boolean
   /** 只打包指定插件 id 集（P4 clone 导出；缺省打包全部已还原插件）。 */
   readonly plugins?: readonly string[]
+  /**
+   * P8：引用式成员（id 列表或 'all'）。列入的成员不内嵌包体，打包时从
+   * registry 元数据固化 dist.integrity/tarball 进清单（可审计、防漂移）。
+   */
+  readonly references?: 'all' | readonly string[]
+  /** P8：引用固化的 registry 元数据来源（缺省 NPM_CONFIG_REGISTRY 或官方）。 */
+  readonly registry?: string
 }
 
 export type PackBuildOutcome =
@@ -519,10 +602,77 @@ export async function buildPluginPack(
       }
     }
     const managedNames = new Set(packageNames.values())
+    // P8：引用式成员集（id → 引用）；其余成员照常内嵌。
+    const referenceIds = new Set<string>(
+      options.references === 'all'
+        ? restored.map(entry => entry.id)
+        : options.references ?? [],
+    )
+    for (const id of referenceIds) {
+      if (!restored.some(entry => entry.id === id)) {
+        return { ok: false, report: packReport(`引用式成员 ${id} 不在已还原集内`, []) }
+      }
+    }
+    const embedded = restored.filter(entry => !referenceIds.has(entry.id))
+    const referenceEntries: PackReferenceEntry[] = []
     const fileEntries: PackFileEntry[] = []
     const communityDeps: PackCommunityDep[] = []
     const problems: ConflictEntry[] = []
-    for (const [index, entry] of restored.entries()) {
+    const collectDeps = async (entry: { readonly id: string; readonly version: string; readonly dir: string }): Promise<void> => {
+      if (options.includeCommunityDeps === false) return
+      const pkg = await readPackageJson(entry.dir)
+      if (pkg === undefined) return
+      const collect = (
+        source: Record<string, unknown> | undefined,
+        kind: 'dependency' | 'peerDependency',
+      ): void => {
+        for (const [name, range] of Object.entries(source ?? {})) {
+          if (typeof range !== 'string' || managedNames.has(name)) continue
+          communityDeps.push({ name, range, kind, owner: entry.id })
+        }
+      }
+      collect(pkg.dependencies as Record<string, unknown> | undefined, 'dependency')
+      collect(pkg.peerDependencies as Record<string, unknown> | undefined, 'peerDependency')
+    }
+    for (const entry of restored.filter(entry => referenceIds.has(entry.id))) {
+      // 引用固化：registry 元数据取该版本的 dist.integrity/tarball。
+      const packageName = packageNames.get(`${entry.id}@${entry.version}`) ?? entry.id
+      try {
+        const metadata = await fetchRegistryMetadata(packageName, {
+          ...(options.registry === undefined ? {} : { registry: options.registry }),
+        })
+        const versionInfo = metadata.versions.find(candidate => candidate.version === entry.version)
+        if (versionInfo?.integrity === undefined) {
+          problems.push({
+            plugin: entry.id,
+            constraint: { kind: 'pack', target: packageName, range: entry.version },
+            chain: [entry.id],
+            candidates: [{ version: entry.version, rejected: ['registry 元数据缺该版本或缺 dist.integrity（无法固化引用）'] }],
+            actions: ['改用内嵌式打包（去掉 --ref）或确认 registry 提供 integrity'],
+          })
+          continue
+        }
+        referenceEntries.push({
+          pluginId: entry.id,
+          version: entry.version,
+          packageName,
+          spec: `${packageName}@${entry.version}`,
+          integrity: versionInfo.integrity,
+          tarball: versionInfo.tarball,
+        })
+        await collectDeps(entry)
+      } catch (error) {
+        problems.push({
+          plugin: entry.id,
+          constraint: { kind: 'pack', target: packageName, range: entry.version },
+          chain: [entry.id],
+          candidates: [{ version: entry.version, rejected: [`引用固化失败：${error instanceof Error ? error.message : String(error)}`] }],
+          actions: ['检查 registry 可达性后重试，或改用内嵌式打包'],
+        })
+      }
+    }
+    referenceEntries.sort((a, b) => `${a.pluginId}@${a.version}`.localeCompare(`${b.pluginId}@${b.version}`))
+    for (const [index, entry] of embedded.entries()) {
       const tgzPath = join(filesDir, `${index}.tgz`)
       const tarPath = join(work, `${index}.tar`)
       const retar = await retarPackage(entry.dir, tgzPath, tarPath, tarCmd)
@@ -559,22 +709,7 @@ export async function buildPluginPack(
         fileSize: bytes.length,
         ...(fact?.integrity === undefined ? {} : { integrity: fact.integrity }),
       })
-      if (options.includeCommunityDeps !== false) {
-        const pkg = await readPackageJson(entry.dir)
-        if (pkg !== undefined) {
-          const collect = (
-            source: Record<string, unknown> | undefined,
-            kind: 'dependency' | 'peerDependency',
-          ): void => {
-            for (const [name, range] of Object.entries(source ?? {})) {
-              if (typeof range !== 'string' || managedNames.has(name)) continue
-              communityDeps.push({ name, range, kind, owner: entry.id })
-            }
-          }
-          collect(pkg.dependencies as Record<string, unknown> | undefined, 'dependency')
-          collect(pkg.peerDependencies as Record<string, unknown> | undefined, 'peerDependency')
-        }
-      }
+      await collectDeps(entry)
     }
     if (problems.length > 0) {
       return {
@@ -608,13 +743,20 @@ export async function buildPluginPack(
         packageName: packageNames.get(`${entry.id}@${entry.version}`) ?? entry.id,
       })),
       files: fileEntries,
+      references: referenceEntries,
       communityDeps,
     }
     const manifest: PackManifest = {
       ...manifestBase,
       manifestSha256: sha256Text(JSON.stringify(canonicalPackPayload(manifestBase as PackManifest))),
     }
-    await writeFile(join(packageRoot, 'mygo-pack.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8')
+    // 空 references 不落盘（保持全内嵌 pack 输出与 P8 前逐字节一致；
+    // parse 时缺省归一为 []）。
+    const { references: _omit, ...manifestRest } = manifest
+    const manifestForWrite = referenceEntries.length === 0
+      ? manifestRest
+      : { ...manifestRest, references: referenceEntries }
+    await writeFile(join(packageRoot, 'mygo-pack.json'), JSON.stringify(manifestForWrite, null, 2) + '\n', 'utf8')
 
     const tarPath = join(work, 'pack.tar')
     await execFileAsync(tarCmd, [
@@ -646,6 +788,12 @@ export async function buildPluginPack(
 export interface PackInstallOptions {
   /** 安装侧 core 版本覆盖（缺省用 PackContext.coreVersion）。 */
   readonly coreVersion?: string
+  /** P8：引用式成员拉取的 fetch 注入（测试/代理；缺省全局 fetch）。 */
+  readonly fetchImpl?: (url: string) => Promise<{
+    readonly ok: boolean
+    readonly status: number
+    arrayBuffer(): Promise<ArrayBuffer>
+  }>
 }
 
 export type PackInstallOutcome =
@@ -653,6 +801,13 @@ export type PackInstallOutcome =
     readonly ok: true
     /** 本次还原的 (id, version) 清单（确定性序）。 */
     readonly restored: readonly { readonly id: string; readonly version: string }[]
+    /** P8：成员明细（id/version/packageName/来源），注册面消费。 */
+    readonly members: readonly {
+      readonly id: string
+      readonly version: string
+      readonly packageName: string
+      readonly origin: 'embedded' | 'reference'
+    }[]
     readonly warnings: readonly string[]
   }
   | { readonly ok: false; readonly report: ResolutionReport }
@@ -777,8 +932,8 @@ export async function installPluginPack(
     }
   }
 
-  // 预检：plugins[] ↔ files[] 以 (id, version) 一一对应（多/少/错配/重复/
-  // 下标错位 → pack-invalid，最早时机拒绝）。
+  // 预检：plugins[] ↔ files[] ∪ references[] 以 (id, version) 一一对应
+  // （P8：内嵌成员在 files[]，引用成员在 references[]，两者不重叠）。
   const pluginKeySet = new Set<string>()
   for (const plugin of manifest.plugins) {
     const key = `${plugin.id}@${plugin.version}`
@@ -825,19 +980,37 @@ export async function installPluginPack(
     }
     seenFileKeys.add(key)
   }
-  if (seenFileKeys.size !== pluginKeySet.size || [...pluginKeySet].some(key => !seenFileKeys.has(key))) {
-    const missing = [...pluginKeySet].filter(key => !seenFileKeys.has(key))
-    const extra = [...seenFileKeys].filter(key => !pluginKeySet.has(key))
+  const seenReferenceKeys = new Set<string>()
+  for (const reference of manifest.references) {
+    const key = `${reference.pluginId}@${reference.version}`
+    if (seenReferenceKeys.has(key) || seenFileKeys.has(key)) {
+      return {
+        ok: false,
+        report: packReport(`pack 清单成员 ${key} 在 files[]/references[] 重复声明`, [{
+          plugin: '<pack>',
+          constraint: { kind: 'pack', target: key, range: 'references' },
+          chain: ['<pack>'],
+          candidates: [{ version: reference.version, rejected: ['成员同时出现在内嵌与引用集合'] }],
+          actions: ['重新打包'],
+        }]),
+      }
+    }
+    seenReferenceKeys.add(key)
+  }
+  const memberKeys = new Set([...seenFileKeys, ...seenReferenceKeys])
+  if (memberKeys.size !== pluginKeySet.size || [...pluginKeySet].some(key => !memberKeys.has(key))) {
+    const missing = [...pluginKeySet].filter(key => !memberKeys.has(key))
+    const extra = [...memberKeys].filter(key => !pluginKeySet.has(key))
     return {
       ok: false,
       report: packReport(
-        `pack 清单 plugins[] 与 files[] 不一一对应（缺 vendored 文件：${missing.join(', ') || '无'}；多出：${extra.join(', ') || '无'}）`,
+        `pack 清单 plugins[] 与成员集（files[]∪references[]）不一一对应（缺：${missing.join(', ') || '无'}；多出：${extra.join(', ') || '无'}）`,
         [{
           plugin: '<pack>',
           constraint: { kind: 'pack', target: missing[0] ?? extra[0] ?? 'plugins', range: 'files' },
           chain: ['<pack>'],
-          candidates: [{ version: '<manifest>', rejected: ['plugins[] 与 files[] 集合不一致'] }],
-          actions: ['重新打包并保持 plugins[]/files[] 一一对应'],
+          candidates: [{ version: '<manifest>', rejected: ['plugins[] 与成员集合不一致'] }],
+          actions: ['重新打包并保持 plugins[] 与 files[]∪references[] 一一对应'],
         }],
       ),
     }
@@ -881,18 +1054,71 @@ export async function installPluginPack(
     }
   }
 
+  // P8：引用式成员在线拉取（全部拉取与 integrity 校验先于任何落盘写入；
+  // 失败即整体拒绝、零写盘，并点名缺失成员——离线环境的 fail-loud 面）。
+  const referenceBytes = new Map<string, Uint8Array>()
+  if (manifest.references.length > 0) {
+    const fetchFailures: ConflictEntry[] = []
+    for (const reference of manifest.references) {
+      const key = `${reference.pluginId}@${reference.version}`
+      try {
+        const response = await (options.fetchImpl ?? fetch)(reference.tarball)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        const expectedHex = integritySha512Hex(reference.integrity)
+        const actualHex = createHash('sha512').update(bytes).digest('hex')
+        if (expectedHex === undefined || actualHex !== expectedHex) {
+          throw new Error(`integrity 不符（清单声明 ${reference.integrity.slice(0, 28)}…）`)
+        }
+        referenceBytes.set(key, bytes)
+      } catch (error) {
+        fetchFailures.push({
+          plugin: reference.pluginId,
+          constraint: { kind: 'pack', target: reference.tarball, range: reference.version },
+          chain: [reference.pluginId],
+          candidates: [{
+            version: reference.version,
+            rejected: [`引用成员拉取失败：${error instanceof Error ? error.message : String(error)}`],
+          }],
+          actions: ['确认网络/registry 可达后重试，或换用全内嵌 pack（离线场景）'],
+        })
+      }
+    }
+    if (fetchFailures.length > 0) {
+      return {
+        ok: false,
+        report: packReport(
+          `引用式成员拉取失败（restore 引用成员需要在线）：${fetchFailures.map(failure => `${failure.plugin}@${failure.constraint.range}`).join(', ')}`,
+          fetchFailures,
+        ),
+      }
+    }
+  }
+
+  // 统一成员还原面（plugins[] 序确定性；内嵌与引用同路径同语义）。
+  const restorePlan = manifest.plugins.map(plugin => {
+    const key = `${plugin.id}@${plugin.version}`
+    const file = manifest.files.find(candidate => `${candidate.pluginId}@${candidate.version}` === key)
+    if (file !== undefined) {
+      return { origin: 'embedded' as const, plugin, file, bytes: fileBytes.get(file.path) }
+    }
+    const reference = manifest.references.find(candidate => `${candidate.pluginId}@${candidate.version}` === key)
+    return { origin: 'reference' as const, plugin, reference, bytes: referenceBytes.get(key) }
+  })
+
   // 内层 tarball 预检（B23）：manifest 形状/身份一致性，全部通过才落盘。
   const preflightManifests = new Map<string, PluginManifestV2>()
   const preflightProblems: ConflictEntry[] = []
-  for (const file of manifest.files) {
-    const bytes = fileBytes.get(file.path)
+  for (const plan of restorePlan) {
+    const target = plan.origin === 'embedded' ? plan.file?.path ?? '' : plan.reference?.tarball ?? ''
+    const bytes = plan.bytes
     if (bytes === undefined) continue
     const inner = listGzipTarMembers(bytes)
     if (inner.tar === undefined || inner.members === undefined) {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'tarball' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'tarball' },
+        chain: [plan.plugin.id],
         candidates: [{ version: '<file>', rejected: [`内层 tarball 非法：${inner.problems.join('；')}`] }],
         actions: ['重新打包'],
       })
@@ -901,9 +1127,9 @@ export async function installPluginPack(
     const pkgJsonMember = findMember(inner.members, 'package/package.json')
     if (pkgJsonMember === undefined || pkgJsonMember.typeflag !== '0') {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'package.json' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'package.json' },
+        chain: [plan.plugin.id],
         candidates: [{ version: '<file>', rejected: ['内层 tarball 缺 package/package.json'] }],
         actions: ['重新打包'],
       })
@@ -914,9 +1140,9 @@ export async function installPluginPack(
       pkgRaw = JSON.parse(Buffer.from(memberBytes(inner.tar, pkgJsonMember)).toString('utf8')) as Record<string, unknown>
     } catch {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'package.json' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'package.json' },
+        chain: [plan.plugin.id],
         candidates: [{ version: '<file>', rejected: ['package.json 不是合法 JSON'] }],
         actions: ['重新打包'],
       })
@@ -925,23 +1151,23 @@ export async function installPluginPack(
     const pluginParsed = parsePackageManifest(pkgRaw)
     if (pluginParsed.value === undefined) {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'manifest' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'manifest' },
+        chain: [plan.plugin.id],
         candidates: [{ version: '<file>', rejected: pluginParsed.problems.map(problem => `${problem.path}: ${problem.message}`) }],
         actions: ['由插件作者修复 dsh.mygo manifest'],
       })
       continue
     }
-    if (pkgRaw.name !== file.packageName || pluginParsed.value.id !== file.pluginId
-      || pluginParsed.value.version !== file.version) {
+    if (pkgRaw.name !== plan.plugin.packageName || pluginParsed.value.id !== plan.plugin.id
+      || pluginParsed.value.version !== plan.plugin.version) {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'identity' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'identity' },
+        chain: [plan.plugin.id],
         candidates: [{
           version: pluginParsed.value.version,
-          rejected: [`包身份与清单不一致（packageName=${String(pkgRaw.name)}，id=${pluginParsed.value.id}，声明=${file.pluginId}@${file.version}）`],
+          rejected: [`包身份与清单不一致（packageName=${String(pkgRaw.name)}，id=${pluginParsed.value.id}，声明=${plan.plugin.id}@${plan.plugin.version}）`],
         }],
         actions: ['重新打包'],
       })
@@ -950,15 +1176,15 @@ export async function installPluginPack(
     const pathProblems = pathProblemsOf(pluginParsed.value)
     if (pathProblems.length > 0) {
       preflightProblems.push({
-        plugin: file.pluginId,
-        constraint: { kind: 'pack', target: file.path, range: 'paths' },
-        chain: [file.pluginId],
+        plugin: plan.plugin.id,
+        constraint: { kind: 'pack', target, range: 'paths' },
+        chain: [plan.plugin.id],
         candidates: [{ version: pluginParsed.value.version, rejected: pathProblems.map(problem => `${problem.path}: ${problem.message}`) }],
         actions: ['由插件作者修复路径声明'],
       })
       continue
     }
-    preflightManifests.set(`${file.pluginId}@${file.version}`, pluginParsed.value)
+    preflightManifests.set(`${plan.plugin.id}@${plan.plugin.version}`, pluginParsed.value)
   }
   if (preflightProblems.length > 0) {
     // 任务 1.3：summary 必须携带实际违例与上限值（而非只报个数）。
@@ -988,28 +1214,28 @@ export async function installPluginPack(
     }
   }
   const restored: { id: string; version: string }[] = []
-  for (const file of manifest.files) {
-    const bytes = fileBytes.get(file.path)
-    const preflightManifest = preflightManifests.get(`${file.pluginId}@${file.version}`)
+  for (const plan of restorePlan) {
+    const bytes = plan.bytes
+    const preflightManifest = preflightManifests.get(`${plan.plugin.id}@${plan.plugin.version}`)
     if (bytes === undefined || preflightManifest === undefined) {
       // 预检 1:1 + 哈希环之后本分支不可达；防御性保留并保证零残留。
       await rollback()
       return {
         ok: false,
-        report: packReport(`还原缺少 vendored 文件：${file.pluginId}`, [{
-          plugin: file.pluginId,
-          constraint: { kind: 'pack', target: file.pluginId, range: file.version },
-          chain: [file.pluginId],
-          candidates: [{ version: file.version, rejected: ['无对应 files[] 条目'] }],
+        report: packReport(`还原缺少成员包体：${plan.plugin.id}`, [{
+          plugin: plan.plugin.id,
+          constraint: { kind: 'pack', target: plan.plugin.id, range: plan.plugin.version },
+          chain: [plan.plugin.id],
+          candidates: [{ version: plan.plugin.version, rejected: ['无对应成员条目'] }],
           actions: ['重新打包'],
         }]),
       }
     }
-    const dir = join(ctx.installRoot, file.pluginId, file.version)
-    const existing = await readRestoredPackage(dir, file.pluginId, file.version)
+    const dir = join(ctx.installRoot, plan.plugin.id, plan.plugin.version)
+    const existing = await readRestoredPackage(dir, plan.plugin.id, plan.plugin.version)
     if (existing !== undefined && existing.entrySha256 !== '') {
       // 同版本有效事实文件已存在：复用，不重写。
-      restored.push({ id: file.pluginId, version: file.version })
+      restored.push({ id: plan.plugin.id, version: plan.plugin.version })
       continue
     }
     // 目录不存在或损坏：先移开旧目录（若存在）再全新还原，失败可整体回滚。
@@ -1023,34 +1249,39 @@ export async function installPluginPack(
       await rename(dir, backup)
       movedAside.set(dir, backup)
     }
+    const expectedSha512Hex = plan.origin === 'embedded'
+      ? plan.file?.sha512
+      : integritySha512Hex(plan.reference?.integrity ?? '')
+    const sourceIntegrity = plan.origin === 'embedded' ? plan.file?.integrity : plan.reference?.integrity
     try {
       await restorePackage(dir, {
-        version: file.version,
-        tarball: file.path,
+        version: plan.plugin.version,
+        tarball: plan.origin === 'embedded' ? plan.file?.path ?? '' : plan.reference?.tarball ?? '',
         manifest: preflightManifest,
-        ...(file.integrity === undefined ? {} : { integrity: file.integrity }),
+        ...(sourceIntegrity === undefined ? {} : { integrity: sourceIntegrity }),
       }, {
         localTarballBytes: bytes,
-        expectedSha512Hex: file.sha512,
+        ...(expectedSha512Hex === undefined ? {} : { expectedSha512Hex }),
         tmpDir: ctx.tmpDir,
+        origin: plan.origin === 'embedded' ? 'pack-embedded' : 'pack-reference',
         ...(ctx.tarCmd === undefined ? {} : { tarCmd: ctx.tarCmd }),
       })
     } catch (error) {
       await rollback()
       return {
         ok: false,
-        report: packReport(`还原失败：${file.pluginId}（${error instanceof Error ? error.message : String(error)}）`, [{
-          plugin: file.pluginId,
-          constraint: { kind: 'pack', target: file.path, range: file.version },
-          chain: [file.pluginId],
-          candidates: [{ version: file.version, rejected: ['本地 tarball 提取/校验失败'] }],
+        report: packReport(`还原失败：${plan.plugin.id}（${error instanceof Error ? error.message : String(error)}）`, [{
+          plugin: plan.plugin.id,
+          constraint: { kind: 'pack', target: plan.origin === 'embedded' ? plan.file?.path ?? '' : plan.reference?.tarball ?? '', range: plan.plugin.version },
+          chain: [plan.plugin.id],
+          candidates: [{ version: plan.plugin.version, rejected: ['成员包体提取/校验失败'] }],
           actions: ['从可信来源重新获取 pack 后重试'],
         }]),
       }
     }
     if (!existed) createdDirs.push(dir)
     if (!idDirExisted) createdIdDirs.push(idDir)
-    restored.push({ id: file.pluginId, version: file.version })
+    restored.push({ id: plan.plugin.id, version: plan.plugin.version })
   }
   for (const backup of movedAside.values()) {
     await rm(backup, { recursive: true, force: true })
@@ -1071,5 +1302,11 @@ export async function installPluginPack(
     }
   }
 
-  return { ok: true, restored, warnings }
+  const memberFacts = restorePlan.map(plan => ({
+    id: plan.plugin.id,
+    version: plan.plugin.version,
+    packageName: plan.plugin.packageName,
+    origin: plan.origin,
+  }))
+  return { ok: true, restored, members: memberFacts, warnings }
 }

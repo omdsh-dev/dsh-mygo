@@ -33,6 +33,8 @@ export interface RestoredPackage {
   /** entry 文件字节数。 */
   readonly entryFileSize?: number
   readonly integrity?: string
+  /** P8：还原来源（pack 内嵌 / pack 引用拉取）；不进事实哈希的尾部记账字段。 */
+  readonly origin?: 'pack-embedded' | 'pack-reference'
 }
 
 export interface RestorePackageOptions {
@@ -45,6 +47,8 @@ export interface RestorePackageOptions {
   readonly expectedSha512Hex?: string
   /** 临时工作目录（解包中转；默认目标目录旁的系统临时目录）。 */
   readonly tmpDir?: string
+  /** P8：还原来源记账（写进事实文件尾部，不进 manifestSha256）。 */
+  readonly origin?: 'pack-embedded' | 'pack-reference'
 }
 
 /** Path traversal guard: resolved path must stay under the package root. */
@@ -144,7 +148,13 @@ export async function restorePackage(
     const manifestSha256 = sha256Text(JSON.stringify(factBase))
     await writeFile(
       join(pkgRoot, '.mygo-package.json'),
-      JSON.stringify({ ...factBase, entrySha512, manifestSha256, installedAt: new Date().toISOString() }, null, 2),
+      JSON.stringify({
+        ...factBase,
+        entrySha512,
+        manifestSha256,
+        installedAt: new Date().toISOString(),
+        ...(options.origin === undefined ? {} : { origin: options.origin }),
+      }, null, 2),
     )
     await mkdir(dirname(target), { recursive: true })
     await rename(pkgRoot, target)
@@ -189,6 +199,7 @@ export async function readRestoredPackage(
       readonly entrySha512?: unknown
       readonly tarballSha512?: unknown
       readonly entryFileSize?: unknown
+      readonly origin?: unknown
     }
     if (fact.format !== 'dsh.mygo-package/v1' || fact.id !== id || fact.version !== version) return undefined
     const manifest = fact.manifest as PluginManifestV2 | undefined
@@ -219,6 +230,7 @@ export async function readRestoredPackage(
         ? fact.entryFileSize
         : (await stat(assertInside(dir, fact.entry))).size,
       ...(typeof fact.integrity === 'string' ? { integrity: fact.integrity } : {}),
+      ...(fact.origin === 'pack-embedded' || fact.origin === 'pack-reference' ? { origin: fact.origin } : {}),
     }
   } catch {
     return undefined

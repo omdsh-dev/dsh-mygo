@@ -13,3 +13,8 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-group@1.0.1'
   - '@deepseek-ai/dsh-app-boot@0.1.0-rc.2'
   - '@deepseek-ai/dsh-launch-environment@0.1.0-rc.2'
+  # 已更名/退役的内部包（registry 404 属预期），lockfile 存量条目豁免
+  # minimumReleaseAge 校验（2026-08-14 本机供应链策略拦截实录）。
+  - '@deepseek-ai/dsh-compact@0.0.1-rc.1'
+  - '@deepseek-ai/dsh-paths@0.0.1-rc.1'
+  - '@deepseek-ai/dsh-user-interaction@0.0.1-rc.1'
