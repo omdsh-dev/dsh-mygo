@@ -142,7 +142,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       expect(packJson.plugins.map(item => item.id).sort()).toEqual(['dsh-tool-time', 'zotero-wave-rag'])
 
       out = capture()
-      const restoreCode = await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-r', '--json'])
+      const restoreCode = await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-r', '--no-register', '--json'])
       expect(restoreCode).toBe(0)
       const restoreJson = JSON.parse(out.stdout.text()) as {
         ok: boolean
@@ -189,7 +189,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       await repackWithFileTamper(packPath, tampered, 0)
 
       out = capture()
-      const jsonCode = await invokeCli(q.ctx, ['restore', tampered, '--profile', 'cli-r', '--json'])
+      const jsonCode = await invokeCli(q.ctx, ['restore', tampered, '--profile', 'cli-r', '--no-register', '--json'])
       expect(jsonCode).toBe(1)
       expect(q.exitCode.value).toBe(1)
       const parsed = JSON.parse(out.stdout.text()) as { ok: boolean; report: { code: string } }
@@ -197,7 +197,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       expect(parsed.report.code).toBe('pack-hash-mismatch')
 
       out = capture()
-      const humanCode = await invokeCli(q.ctx, ['restore', tampered, '--profile', 'cli-r'])
+      const humanCode = await invokeCli(q.ctx, ['restore', tampered, '--profile', 'cli-r', '--no-register'])
       expect(humanCode).toBe(1)
       expect(out.stdout.text()).toContain('✗ pack-hash-mismatch：')
       expect(out.stdout.text()).toContain('  文件 files/0.tgz')
@@ -222,7 +222,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       expect(packManifest.plugins.map(item => item.id)).toContain('dsh-mygo-cli')
 
       out = capture()
-      expect(await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-r', '--json'])).toBe(0)
+      expect(await invokeCli(q.ctx, ['restore', packPath, '--profile', 'cli-r', '--no-register', '--json'])).toBe(0)
 
       // 还原后：CLI 插件在 R 的还原根中，入口文件与仓库源码逐字节一致。
       const pathsR = resolveMygoPaths('cli-r', process.env)

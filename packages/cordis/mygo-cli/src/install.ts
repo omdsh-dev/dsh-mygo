@@ -8,9 +8,10 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import {
   MYGO_MANAGER_VERSION,
   assertInsideHome,
@@ -19,12 +20,14 @@ import {
   compareVersions,
   importCachedPack,
   installPluginPack,
+  listGzipTarMembers,
   listInstances,
   parseVersion,
   registerInstance,
   resolveMygoPaths,
 } from '@r05en1cu/dsh-mygo'
 import type { InstanceRecord } from '@r05en1cu/dsh-mygo'
+import { profileInstall } from '@r05en1cu/dsh-mygo-loader-profile'
 
 // P5：profile 执行面收敛进 loader 包；此处 re-export 兼容既有引用。
 export {
@@ -218,4 +221,85 @@ function readRestoredPackageSync(idDir: string, id: string, version: string): bo
   } catch {
     return false
   }
+}
+
+// ---------------------------------------------------------------------------
+// P8：restore 自动注册（语义等价于用户手工跑 dsh plugin add）
+// ---------------------------------------------------------------------------
+
+export interface PackMemberLike {
+  readonly id: string
+  readonly version: string
+  readonly packageName: string
+  readonly origin: 'embedded' | 'reference'
+}
+
+export interface PackMemberRegistration {
+  readonly id: string
+  readonly packageName: string
+  readonly origin: 'embedded' | 'reference'
+  /** 是否经 dsh.bundle 对账进 dsh.profile.bundles（false = 仅 dependencies）。 */
+  readonly bundled: boolean
+}
+
+export interface RegisterPackMembersResult {
+  readonly ok: boolean
+  readonly registrations: readonly PackMemberRegistration[]
+  readonly error?: string | undefined
+}
+
+/** 从 pack 中提取一个内嵌成员的 vendored tarball 到临时文件。 */
+async function extractEmbeddedMember(packPath: string, id: string, version: string): Promise<string> {
+  const bytes = new Uint8Array(await readFile(packPath))
+  const unpacked = listGzipTarMembers(bytes)
+  if (unpacked.tar === undefined || unpacked.members === undefined) {
+    throw new Error(`pack 不是合法 gzip/tar：${unpacked.problems.join('；')}`)
+  }
+  const manifestRaw = unpacked.members.find(member => member.name === 'mygo-pack.json')
+  if (manifestRaw === undefined) throw new Error('pack 缺 mygo-pack.json')
+  const manifest = JSON.parse(
+    Buffer.from(unpacked.tar.subarray(manifestRaw.dataOffset, manifestRaw.dataOffset + manifestRaw.size)).toString('utf8'),
+  ) as { readonly files?: readonly { readonly pluginId: string; readonly version: string; readonly path: string }[] }
+  const file = (manifest.files ?? []).find(entry => entry.pluginId === id && entry.version === version)
+  if (file === undefined) throw new Error(`pack 中没有内嵌成员 ${id}@${version}`)
+  const member = unpacked.members.find(candidate => candidate.name === file.path)
+  if (member === undefined) throw new Error(`pack 缺成员文件 ${file.path}`)
+  const dest = join(await mkdtemp(join(tmpdir(), 'mygo-register-')), `${id}-${version}.tgz`)
+  await writeFile(dest, unpacked.tar.subarray(member.dataOffset, member.dataOffset + member.size))
+  return dest
+}
+
+/**
+ * restore 后把成员注册进目标 profile：内嵌成员提取 vendored tarball 走
+ * profileInstall（pnpm add tarball + bundle 对账），引用成员按钉死 spec
+ * （packageName@version）走同一路径——与 dsh plugin add 完全同语义，
+ * 幂等且不产生双行/双账。
+ */
+export async function registerPackMembers(
+  packPath: string,
+  members: readonly PackMemberLike[],
+  target: { readonly home: string; readonly profile: string },
+): Promise<RegisterPackMembersResult> {
+  const registrations: PackMemberRegistration[] = []
+  for (const member of members) {
+    let spec = `${member.packageName}@${member.version}`
+    if (member.origin === 'embedded') {
+      try {
+        spec = await extractEmbeddedMember(packPath, member.id, member.version)
+      } catch (error) {
+        return { ok: false, registrations, error: `提取内嵌成员 ${member.id} 失败：${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
+    const outcome = profileInstall(spec, { profile: target.profile, home: target.home, cwd: dirname(spec) })
+    if (!outcome.ok) {
+      return { ok: false, registrations, error: `注册 ${member.packageName} 失败：${outcome.error ?? 'pnpm 失败'}` }
+    }
+    registrations.push({
+      id: member.id,
+      packageName: member.packageName,
+      origin: member.origin,
+      bundled: (outcome.bundles ?? []).includes(member.packageName),
+    })
+  }
+  return { ok: true, registrations }
 }

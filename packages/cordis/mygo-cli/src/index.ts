@@ -35,7 +35,7 @@ import {
   renderUsage,
   renderUsageError,
 } from './render.ts'
-import { adoptInstance, clonePlugin } from './install.ts'
+import { adoptInstance, clonePlugin, registerPackMembers } from './install.ts'
 import { runHubCommand } from './hub.ts'
 import { readRowConfig, writeRowConfig } from './config.ts'
 
@@ -342,6 +342,7 @@ async function runPack(
   const outcome = await managerFor(current.profile).buildPack({
     output,
     includeCommunityDeps: command.includeCommunityDeps,
+    ...(command.references === undefined ? {} : { references: command.references }),
   })
   if (outcome.ok) {
     if (command.json) {
@@ -350,6 +351,7 @@ async function runPack(
         packPath: output,
         sha256: outcome.sha256,
         plugins: outcome.manifest.plugins,
+        references: outcome.manifest.references,
         communityDeps: outcome.manifest.communityDeps,
       }))
     } else {
@@ -358,6 +360,7 @@ async function runPack(
         outcome.sha256,
         outcome.manifest.plugins.length,
         outcome.manifest.communityDeps.length,
+        outcome.manifest.references.length,
       ))
     }
     return 0
@@ -385,15 +388,28 @@ async function runRestore(
   const outcome = await managerFor(target).installPack(packPath, core === undefined ? {} : { coreVersion: core })
   if (outcome.ok) {
     const pluginCount = outcome.restored.length
+    // P8：restore 后自动注册进目标 profile（等价 dsh plugin add；--no-register 关闭）。
+    let registrations: readonly import('./install.ts').PackMemberRegistration[] = []
+    if (command.register && outcome.members.length > 0) {
+      const registered = await registerPackMembers(packPath, outcome.members, {
+        home: resolveDshHome(process.env),
+        profile: target,
+      })
+      if (!registered.ok) {
+        return errorEnvelope('restore', 'register-failed', `还原已完成但注册失败：${registered.error ?? ''}`, command.json)
+      }
+      registrations = registered.registrations
+    }
     if (command.json) {
       internals.stdout.write(jsonOutput('restore', {
         ok: true,
         profile: target,
         plugins: pluginCount,
         warnings: outcome.warnings,
+        registrations,
       }))
     } else {
-      internals.stdout.write(renderRestoreSuccess(target, pluginCount, outcome.warnings))
+      internals.stdout.write(renderRestoreSuccess(target, pluginCount, outcome.warnings, registrations))
     }
     return 0
   }

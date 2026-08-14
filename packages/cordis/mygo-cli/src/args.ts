@@ -10,12 +10,16 @@ export type CliCommand =
     readonly kind: 'pack'
     readonly output: string
     readonly includeCommunityDeps: boolean
+    /** P8：引用式成员（id 列表或 'all'；缺省全内嵌）。 */
+    readonly references?: 'all' | readonly string[]
     readonly json: boolean
   }
   | {
     readonly kind: 'restore'
     readonly pack: string
     readonly targetProfile?: string
+    /** P8：restore 后自动注册进目标 profile（缺省 true；--no-register 关闭）。 */
+    readonly register: boolean
     readonly json: boolean
   }
   | {
@@ -139,6 +143,8 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   let to: string | undefined
   let snapshot: string | undefined
   let set: string | undefined
+  let register = true
+  const refs: string[] = []
   let insecureNoVerify = false
   let index = 0
   let flagsEnded = false
@@ -166,6 +172,14 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         return { kind: 'usage-error', message: `--no-community-deps 仅 pack 支持` }
       }
       includeCommunityDeps = false
+      index += 1
+      continue
+    }
+    if (token === '--no-register') {
+      if (command !== 'restore') {
+        return { kind: 'usage-error', message: `--no-register 仅 restore 支持` }
+      }
+      register = false
       index += 1
       continue
     }
@@ -226,6 +240,13 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
       const taken = takeValue(rest, index, inline)
       if (!taken.ok) return { kind: 'usage-error', message: `--to 需要一个值` }
       to = taken.value
+      index = taken.next
+      continue
+    }
+    if (command === 'pack' && flag === '--ref') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--ref 需要一个值` }
+      refs.push(taken.value)
       index = taken.next
       continue
     }
@@ -334,12 +355,23 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
     if (positional.length > 0) {
       return { kind: 'usage-error', message: `pack 不接受位置参数：${positional.join(' ')}` }
     }
+    const refAll = refs.includes('all')
+    const refIds = refs.filter(entry => entry !== 'all')
+    if (refAll && refIds.length > 0) {
+      return { kind: 'usage-error', message: '--ref=all 不能与其他 --ref 混用' }
+    }
+    for (const ref of refIds) {
+      if (!/^[a-z][a-z0-9-]*$/.test(ref)) {
+        return { kind: 'usage-error', message: `非法插件 id（须匹配 /^[a-z][a-z0-9-]*$/）：${JSON.stringify(ref)}` }
+      }
+    }
     return {
       kind: 'command',
       command: {
         kind: 'pack',
         output,
         includeCommunityDeps,
+        ...(refs.length === 0 ? {} : { references: refAll ? 'all' as const : refIds }),
         json,
       },
     }
@@ -358,6 +390,7 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         kind: 'restore',
         pack,
         ...(targetProfile === undefined ? {} : { targetProfile }),
+        register,
         json,
       },
     }

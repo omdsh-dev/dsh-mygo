@@ -65,15 +65,27 @@ export function renderPackSuccess(
   sha256: string,
   pluginCount: number,
   communityDepCount: number,
+  referenceCount = 0,
 ): string {
   const lines = [`✓ 已打包 ${pluginCount} 个插件 → ${packPath}`, `  sha256 ${sha256}`]
+  if (referenceCount > 0) lines.push(`  引用式成员 ${referenceCount} 个（restore 时需在线拉取）`)
   if (communityDepCount > 0) lines.push(`  社区依赖声明 ${communityDepCount} 条（--json 查看明细）`)
   return lines.join('\n') + '\n'
 }
 
-/** restore 成功的人类可读输出（含告警）。 */
-export function renderRestoreSuccess(profile: string, pluginCount: number, warnings: readonly string[]): string {
+/** restore 成功的人类可读输出（含告警与注册摘要）。 */
+export function renderRestoreSuccess(
+  profile: string,
+  pluginCount: number,
+  warnings: readonly string[],
+  registrations: readonly { readonly packageName: string; readonly bundled: boolean }[] = [],
+): string {
   const lines = [`✓ 已还原 → profile ${profile}：${pluginCount} 个插件`]
+  for (const registration of registrations) {
+    lines.push(registration.bundled
+      ? `  已注册 ${registration.packageName}（bundle 层激活）`
+      : `  已注册 ${registration.packageName}（无 dsh.bundle 声明，仅进 dependencies 不挂载）`)
+  }
   for (const warning of warnings) lines.push(`  [warn] ${warning}`)
   return lines.join('\n') + '\n'
 }
@@ -156,17 +168,19 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
   const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config', string> = {
     pack: [
-      '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--no-community-deps] [--json]',
+      '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--ref <id>|--ref=all] [--no-community-deps] [--json]',
       '',
       '  -o/--output <path>  产物路径（缺省 ./<profile>-plugins.mygo-pack）',
+      '  --ref <id>          引用式成员（不内嵌包体，restore 时在线拉取；可多次；--ref=all 全引用）',
       '  --no-community-deps  关闭社区依赖收割（B25）',
       common,
     ].join('\n'),
     restore: [
-      '用法：dsh --profile <profile> mygo restore <pack> [--profile <target>] [--json]',
+      '用法：dsh --profile <profile> mygo restore <pack> [--profile <target>] [--no-register] [--json]',
       '',
       '  <pack>               本地 .mygo-pack 路径（必填）',
       '  --profile <target>   还原目标 profile（缺省当前 profile）',
+      '  --no-register        只还原进 store，不注册进 profile（缺省自动注册，等价 dsh plugin add）',
       common,
     ].join('\n'),
     init: [
