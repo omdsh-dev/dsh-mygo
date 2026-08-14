@@ -1,13 +1,14 @@
 /**
- * 受管插件配置卡片（r7.1 合并）：settings.plugin.item 槽里每个受管插件
- * 一张卡片，标题旁带 "mygo" 小标；schema 与当前配置读 /api/mygo/config-cards，
- * 保存经 PUT /api/mygo/config —— 统一走 mygo 核心方法（bridge 轨 HMR、
- * bundle 轨 profile patch 层），与默认插件配置层不再重复定义。
+ * 受管插件配置卡片（r7.2 官方折叠形态）：settings.plugin.item 槽里每个
+ * 受管插件一张卡片，外壳对齐官方 PluginCard——头部按钮折叠/展开、未保存
+ * 徽章、chevron、放弃修改/保存 footer；标题旁带 "mygo" 小标。schema 与
+ * 当前配置读 /api/mygo/config-cards，保存经 PUT /api/mygo/config ——
+ * 统一走 mygo 核心方法（bridge 轨 HMR、bundle 轨 profile patch 层）。
  * @module @r05en1cu/dsh-mygo-ext-panel/client/PluginConfigCard
  */
 import { useCallback, useEffect, useState } from 'react'
 import css from './Panel.module.css'
-import { ConfigFieldEditor, editableOf, type ConfigFieldShape } from './ConfigFields'
+import { ConfigFieldEditor, editableOf, isPlainObject, type ConfigFieldShape } from './ConfigFields'
 
 /** config-cards API 返回的一张卡片（注册时捕获的种子信息）。 */
 export interface MygoPluginCardSeed {
@@ -47,13 +48,32 @@ async function fetchJson<T>(path: string, init?: { readonly method?: string; rea
   return (await res.json()) as T
 }
 
-/** 一张受管插件的配置卡片（表单编辑，保存走 mygo 核心 API）。 */
+/** JSON 安全深比较（draft 与当前配置的脏检查）。 */
+function isDeepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a)) {
+    if (a.length !== (b as unknown[]).length) return false
+    return a.every((entry, index) => isDeepEqual(entry, (b as unknown[])[index]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every(key => Object.prototype.hasOwnProperty.call(right, key) && isDeepEqual(left[key], right[key]))
+}
+
+/** 一张受管插件的官方折叠形态配置卡片（保存走 mygo 核心 API）。 */
 export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed }): JSX.Element {
   const { seed } = props
+  const [open, setOpen] = useState(false)
   const [row, setRow] = useState<ConfigCardRow | undefined>()
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<string | undefined>()
+  const [failed, setFailed] = useState(false)
+  const [notice, setNotice] = useState<string | undefined>()
   const [error, setError] = useState<string | undefined>()
 
   const load = useCallback(async (): Promise<void> => {
@@ -70,6 +90,7 @@ export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed 
         out[field.name] = editableOf(field, (mine.config as Record<string, unknown> | undefined)?.[field.name])
       }
       setDraft(out)
+      setFailed(false)
       setError(undefined)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -78,10 +99,13 @@ export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed 
 
   useEffect(() => { void load() }, [load])
 
+  const dirty = row !== undefined && !isDeepEqual(draft, isPlainObject(row.config) ? row.config : {})
+
   const save = useCallback(async (): Promise<void> => {
     setSaving(true)
-    setMessage(undefined)
+    setFailed(false)
     setError(undefined)
+    setNotice(undefined)
     try {
       const result = await fetchJson<ActionResult>('/config', {
         method: 'PUT',
@@ -93,74 +117,98 @@ export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed 
         },
       })
       if (!result.ok) throw new Error(result.error ?? '保存失败')
-      setMessage(result.message ?? '已保存')
+      setNotice(result.message ?? '已保存')
       await load()
     } catch (caught) {
+      setFailed(true)
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
       setSaving(false)
     }
   }, [seed.id, seed.kind, seed.rowId, draft, load])
 
+  const discard = useCallback((): void => {
+    if (row === undefined) return
+    const out: Record<string, unknown> = {}
+    for (const field of row.schema.fields) {
+      out[field.name] = editableOf(field, (row.config as Record<string, unknown> | undefined)?.[field.name])
+    }
+    setDraft(out)
+    setFailed(false)
+    setError(undefined)
+    setNotice(undefined)
+  }, [row])
+
   if (row === undefined && error === undefined) {
     return (
-      <div className={css.card}>
-        <div className={css.skeletonRow} style={{ height: '120px', border: '0', borderRadius: '12px' }} />
-      </div>
+      <li className={css.oCard}>
+        <div className={css.skeletonRow} style={{ height: '64px', border: '0', borderRadius: '12px' }} />
+      </li>
     )
   }
 
+  const description = row?.schema.description !== undefined && row.schema.description !== ''
+    ? row.schema.description
+    : '由 mygo 核心管理'
+  const title = seed.id + (seed.enabled ? '' : '（已停用）')
+
   return (
-    <div className={css.card}>
-      <div className={css.cardBody}>
-        <div className={css.cardMain}>
-          <div className={css.cardTitleRow}>
-            <div className={css.cardTitle}>{seed.id}</div>
-            <div className={css.cardBadges}>
-              <span className={css.badge + ' ' + css.badgeMygo}>mygo</span>
-              <span className={css.railChip}>{seed.kind}</span>
-              {!seed.enabled && (
-                <span className={css.badge + ' ' + css.badgeOff}>
-                  <span className={css.badgeDot} />
-                  已停用
-                </span>
-              )}
-            </div>
+    <li className={open ? css.oCard + ' ' + css.oCardOpen : css.oCard}>
+      <button
+        type="button"
+        className={css.oHeader}
+        aria-expanded={open}
+        aria-label={(open ? '收起设置' : '展开设置') + '：' + title}
+        onClick={() => setOpen(!open)}
+      >
+        <span className={css.oHeadText}>
+          <span className={css.oName}>
+            {title}
+            <span className={css.oMygoBadge}>mygo</span>
+          </span>
+          <span className={css.oDescription}>{description}</span>
+        </span>
+        {dirty ? <span className={css.oPending}>未保存</span> : null}
+        <span className={open ? css.oChevron + ' ' + css.oChevronOpen : css.oChevron} />
+      </button>
+      {open && row !== undefined && (
+        <div className={css.oBody}>
+          <div className={css.configFields}>
+            {row.schema.fields.map(field => (
+              <ConfigFieldEditor
+                key={field.name}
+                field={field}
+                value={draft[field.name]}
+                onChange={(next) => setDraft(current => ({ ...current, [field.name]: next }))}
+              />
+            ))}
+            {row.schema.fields.length === 0 && (
+              <p className={css.oHint}>插件未暴露可表单化的字段。</p>
+            )}
           </div>
-          <div className={css.cardMeta}>
-            <span className={css.metaChip}>{seed.packageName}</span>
-            <span className={css.metaChip}>·</span>
-            <span className={css.metaChip}>由 mygo 核心管理</span>
+          {notice !== undefined && <p className={css.oHint}>{notice}</p>}
+          {error !== undefined && !failed && <p className={css.oFailed}>{error}</p>}
+          <div className={css.oFooter}>
+            {failed ? <p className={css.oFailed}>本部署没有接受这些值，已保留供你修改。</p> : null}
+            <button
+              type="button"
+              className={css.oDiscard}
+              disabled={!dirty || saving}
+              onClick={discard}
+            >
+              放弃修改
+            </button>
+            <button
+              type="button"
+              className={css.oSave}
+              disabled={!dirty || saving}
+              onClick={() => void save()}
+            >
+              {saving ? '保存中…' : '保存'}
+            </button>
           </div>
-          {row?.schema.description !== undefined && row.schema.description !== '' && (
-            <div className={css.fieldHint}>{row.schema.description}</div>
-          )}
-          {row !== undefined && (
-            <div className={css.configFields}>
-              {row.schema.fields.map(field => (
-                <ConfigFieldEditor
-                  key={field.name}
-                  field={field}
-                  value={draft[field.name]}
-                  onChange={(next) => setDraft(current => ({ ...current, [field.name]: next }))}
-                />
-              ))}
-              {row.schema.fields.length === 0 && (
-                <div className={css.fieldHint}>插件未暴露可表单化的字段。</div>
-              )}
-            </div>
-          )}
         </div>
-      </div>
-      <div className={css.details}>
-        <div className={css.rowInline}>
-          <button className={css.btn + ' ' + css.btnSm} disabled={saving} onClick={() => void save()}>
-            {saving ? '保存中…' : '保存配置'}
-          </button>
-          {message !== undefined && <span className={css.fieldHint}>{message}</span>}
-          {error !== undefined && <span className={css.fieldError}>{error}</span>}
-        </div>
-      </div>
-    </div>
+      )}
+    </li>
   )
 }

@@ -383,12 +383,6 @@
   color: var(--dsw-alias-state-error-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
 }
-.badgeMygo {
-  color: var(--dsw-alias-brand-primary);
-  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
-  font-family: var(--dsw-font-mono, ui-monospace, monospace);
-  letter-spacing: .02em;
-}
 .railChip {
   color: var(--dsw-alias-label-secondary);
   border: 1px solid var(--dsw-alias-border-l1);
@@ -863,6 +857,164 @@
 }
 .pillErr {
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* ------------------------------------------------------------------ */
+/* 受管插件配置卡片：官方折叠卡片形态（对齐 ui-settings-plugins PluginCard） */
+/* ------------------------------------------------------------------ */
+.oCard {
+  list-style: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  transition: border-color .16s, background .16s;
+}
+.oCard:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+.oCardOpen {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+.oHeader {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 12px;
+  display: flex;
+}
+.oHeader:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+.oHeadText {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  display: flex;
+}
+.oName {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-primary);
+  gap: 8px;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+}
+.oMygoBadge {
+  color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  letter-spacing: .02em;
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.oDescription {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+.oPending {
+  flex: none;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+.oChevron {
+  flex: none;
+  border-right: 1.5px solid var(--dsw-alias-label-tertiary);
+  border-bottom: 1.5px solid var(--dsw-alias-label-tertiary);
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  transition: transform .16s;
+}
+.oChevronOpen {
+  transform: rotate(225deg);
+}
+.oBody {
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  margin: 0 16px;
+  padding: 12px 0 8px;
+  flex-direction: column;
+  gap: 10px;
+  display: flex;
+}
+.oHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+.oFailed {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-state-error-primary);
+}
+.oFooter {
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  display: flex;
+}
+.oDiscard,
+.oSave {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.oDiscard {
+  border-color: var(--dsw-alias-border-l2);
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+}
+.oDiscard:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+.oSave {
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+.oDiscard:disabled,
+.oSave:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.oDiscard:focus-visible,
+.oSave:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
 }
 
 /* ------------------------------------------------------------------ */
