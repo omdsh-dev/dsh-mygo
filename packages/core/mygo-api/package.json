@@ -1,7 +1,7 @@
 {
   "name": "@r05en1cu/dsh-mygo-api",
   "description": "Cordis-free upper-level plugin contract: definePlugin, manifest/environment types, PluginError vocabulary, and fake-env test surface",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.0-rc.5",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {

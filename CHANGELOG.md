@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased · next-hmr 分支（HMR 体验迭代 R2）
+## 0.2.0-rc.5（2026-08-14）— HMR 体验迭代（R1+R2）+ 评审修复
+
+- **评审修复（本会话）**：
+  - `updatePluginFromRemote` 两处 `importEntry(entry)` 改 `importEntry(entry,
+    true)`（mygo-panel）：Node ESM 按 URL 缓存，同进程重复更新同一插件
+    此前换入的是缓存旧模块（评审 Major #1）。
+  - bundle-rail `writeBlock` 追加前摘除顶层 `[]` 占位文档（否则构成非法
+    YAML 打挂下次 boot，实机事故）；`removeBlock` 后无内容行回落 `[]`。
+    bundle-rail.spec 新增占位用例。
+- **文档**：`mygo-pack.md` 整合包格式使用说明（仓库根），README 链接。
+
+### R2 — 旧代释放有界化 + 插件更新树原子换入
 
 - **`@r05en1cu/dsh-mygo`**：
   - 旧代释放等待有界化（`releaseGeneration`）：事件在飞时延迟 dispose
@@ -18,7 +29,7 @@
     旧版/半删」的不一致。纯函数面 workspace-packages.ts 新增
     `swapTreeIntoPlace` + 包级测试 3 例（成功替换 / 首装就位 / 失败回滚）。
 
-## Unreleased · next-hmr 分支（HMR 体验迭代 R1）
+### R1 — updateConfig 空操作短路 + drain 事件驱动 + 自更新整仓同步
 
 - **`@r05en1cu/dsh-mygo`**：
   - `updateConfig` 空操作短路：patch 解析后与当前 live 代 resolvedConfig
