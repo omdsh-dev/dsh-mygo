@@ -72,6 +72,8 @@ export { cachePack, cachedPackPath, importCachedPack, packCacheDir } from './pac
 export type { CachePackResult, ImportCachedPackResult } from './pack-cache.ts'
 export { BUILTIN_LOADER_ADAPTERS, LoaderAdapterRegistry } from './loader-adapters.ts'
 export type { LoaderAdapterResolution } from './loader-adapters.ts'
+export { ExtensionRegistry, extensionViews } from './extensions.ts'
+export type { ExtensionRegistration, ExtensionView } from './extensions.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'

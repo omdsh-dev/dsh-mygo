@@ -49,6 +49,8 @@ import { listInstances, registerInstance } from './instances.ts'
 import type { InstanceRecord } from './instances.ts'
 import { LoaderAdapterRegistry } from './loader-adapters.ts'
 import type { LoaderAdapter } from '@r05en1cu/dsh-mygo-api'
+import { ExtensionRegistry, extensionViews } from './extensions.ts'
+import type { ExtensionRegistration, ExtensionView } from './extensions.ts'
 import type { AuditClass } from './audit.ts'
 import type { RegistryStore } from './store.ts'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -56,7 +58,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { readGovernanceView, type GovernanceView } from './governance.ts'
 import { writeMygoSelfInstallation } from './self.ts'
@@ -102,6 +104,8 @@ export class PluginManagerService extends Service implements PluginManager {
   private readonly packageManager: PluginPackageManager
   /** P5 loader 扩展体系：安装来源适配器注册表（发现/启停走本服务治理面）。 */
   private readonly adapters = new LoaderAdapterRegistry()
+  /** P6 extension 登记表（扩展治理壳注册面；启用态推导见 extensions()）。 */
+  private readonly extensionRegistry = new ExtensionRegistry()
   /** 实例 dsh 版本（P4 治理事实；DSH_CORE_VERSION 可解析时非空）。 */
   private readonly dshVersion: string | undefined
 
@@ -158,6 +162,27 @@ export class PluginManagerService extends Service implements PluginManager {
   /** P5：已注册 loader adapter 发现面（按 id 字典序，确定性）。 */
   loaderAdapters(): readonly LoaderAdapter[] {
     return this.adapters.list()
+  }
+
+  /**
+   * P6 extension 登记表：登记一个扩展（受管扩展插件 activate/apply 时
+   * 调用；注销器随 fiber 清理）。重复 id 拒绝。
+   */
+  registerExtension(registration: ExtensionRegistration): () => void {
+    return this.extensionRegistry.register(registration)
+  }
+
+  /**
+   * P6：扩展治理视图（启用态从 profile patch 层受管块标记推导，版本取
+   * profile dependencies 子集——pnpm/patch 文件为唯一真相源）。
+   */
+  extensions(): readonly ExtensionView[] {
+    const view = this.governanceView()
+    const patchText = existsSync(view.patchPath) ? readFileSync(view.patchPath, 'utf8') : ''
+    return extensionViews(this.extensionRegistry.list(), {
+      patchText,
+      dependencies: view.dependencies,
+    })
   }
 
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */

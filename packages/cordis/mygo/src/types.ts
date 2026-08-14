@@ -131,6 +131,13 @@ export interface PluginManager {
   registerLoaderAdapter(adapter: import('@r05en1cu/dsh-mygo-api').LoaderAdapter): () => void
   /** P5：已注册 loader adapter 发现面（按 id 字典序，确定性）。 */
   loaderAdapters(): readonly import('@r05en1cu/dsh-mygo-api').LoaderAdapter[]
+  /**
+   * P6 extension 登记表：登记一个扩展（受管扩展插件 activate/apply 时
+   * 调用；返回的注销器随插件 fiber 清理）。重复 id 拒绝。
+   */
+  registerExtension(registration: import('./extensions.ts').ExtensionRegistration): () => void
+  /** P6：扩展治理视图（启用态从 profile patch 层受管块推导；版本取 dependencies 子集）。 */
+  extensions(): readonly import('./extensions.ts').ExtensionView[]
   /** P4 BOM：导出当前统一依赖图为 `dsh.bom/v1`（JSON + Markdown，原子写）。 */
   bomExport(): Promise<{ readonly bom: import('./bom.ts').BomDocument; readonly jsonPath: string; readonly mdPath: string }>
   /**

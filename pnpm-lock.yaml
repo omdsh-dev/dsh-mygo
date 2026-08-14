@@ -173,6 +173,34 @@ importers:
         specifier: ^4.1.8
         version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1))
 
+  packages/extensions/mygo-fabric:
+    dependencies:
+      '@r05en1cu/dsh-mygo':
+        specifier: workspace:^
+        version: link:../../cordis/mygo
+      '@r05en1cu/dsh-mygo-loader-profile':
+        specifier: workspace:^
+        version: link:../../loaders/mygo-loader-profile
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@r05en1cu/dsh-mygo-api':
+        specifier: workspace:^
+        version: link:../../core/mygo-api
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.1
+      tsdown:
+        specifier: ^0.22.2
+        version: 0.22.14(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1))
+
   packages/extensions/mygo-panel:
     dependencies:
       '@deepseek-ai/cordis':
