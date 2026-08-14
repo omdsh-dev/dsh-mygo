@@ -47,6 +47,8 @@ import { extractPlugin, loadPluginEntry, PluginPackageManager, resolveCoreVersio
 import type { PluginManifestV2 } from './package/index.ts'
 import { listInstances, registerInstance } from './instances.ts'
 import type { InstanceRecord } from './instances.ts'
+import { LoaderAdapterRegistry } from './loader-adapters.ts'
+import type { LoaderAdapter } from '@r05en1cu/dsh-mygo-api'
 import type { AuditClass } from './audit.ts'
 import type { RegistryStore } from './store.ts'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -98,6 +100,8 @@ export class PluginManagerService extends Service implements PluginManager {
   private engine: LifecycleEngine | undefined
   private persistence: RegistryPersistence | undefined
   private readonly packageManager: PluginPackageManager
+  /** P5 loader 扩展体系：安装来源适配器注册表（发现/启停走本服务治理面）。 */
+  private readonly adapters = new LoaderAdapterRegistry()
   /** 实例 dsh 版本（P4 治理事实；DSH_CORE_VERSION 可解析时非空）。 */
   private readonly dshVersion: string | undefined
 
@@ -141,6 +145,19 @@ export class PluginManagerService extends Service implements PluginManager {
   /** P4 多实例：用户级实例登记处只读面（实例 = $DSH_HOME；不含插件账）。 */
   instances(): readonly InstanceRecord[] {
     return listInstances()
+  }
+
+  /**
+   * P5 loader 扩展体系：注册一个安装来源适配器（受管插件 activate 时
+   * 调用；返回的注销器随插件 fiber 清理 = 启停走治理面）。重复 id 拒绝。
+   */
+  registerLoaderAdapter(adapter: LoaderAdapter): () => void {
+    return this.adapters.register(adapter)
+  }
+
+  /** P5：已注册 loader adapter 发现面（按 id 字典序，确定性）。 */
+  loaderAdapters(): readonly LoaderAdapter[] {
+    return this.adapters.list()
   }
 
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */

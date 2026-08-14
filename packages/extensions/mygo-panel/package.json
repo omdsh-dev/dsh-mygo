@@ -42,9 +42,11 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
     "@r05en1cu/dsh-mygo": "workspace:^",
     "@r05en1cu/dsh-mygo-api": "workspace:^",
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@r05en1cu/dsh-mygo-loader-hub": "workspace:^",
+    "@r05en1cu/dsh-mygo-loader-profile": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

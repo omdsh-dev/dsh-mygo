@@ -92,6 +92,12 @@ importers:
       '@r05en1cu/dsh-mygo':
         specifier: workspace:^
         version: link:../mygo
+      '@r05en1cu/dsh-mygo-loader-hub':
+        specifier: workspace:^
+        version: link:../../loaders/mygo-loader-hub
+      '@r05en1cu/dsh-mygo-loader-profile':
+        specifier: workspace:^
+        version: link:../../loaders/mygo-loader-profile
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -178,6 +184,12 @@ importers:
       '@r05en1cu/dsh-mygo-api':
         specifier: workspace:^
         version: link:../../core/mygo-api
+      '@r05en1cu/dsh-mygo-loader-hub':
+        specifier: workspace:^
+        version: link:../../loaders/mygo-loader-hub
+      '@r05en1cu/dsh-mygo-loader-profile':
+        specifier: workspace:^
+        version: link:../../loaders/mygo-loader-profile
     devDependencies:
       '@deepseek-ai/dsh-client-runtime':
         specifier: ^0.0.1-rc.1
@@ -209,6 +221,59 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+
+  packages/loaders/mygo-loader-hub:
+    dependencies:
+      '@r05en1cu/dsh-mygo-api':
+        specifier: workspace:^
+        version: link:../../core/mygo-api
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@r05en1cu/dsh-mygo-loader-profile':
+        specifier: workspace:^
+        version: link:../mygo-loader-profile
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.1
+      tsdown:
+        specifier: ^0.22.2
+        version: 0.22.14(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1))
+
+  packages/loaders/mygo-loader-profile:
+    dependencies:
+      '@deepseek-ai/dsh-app-boot':
+        specifier: ^0.1.0-rc.2
+        version: 0.1.0-rc.2(e40cc4230594e430a5b6b66c301fe886)
+      '@r05en1cu/dsh-mygo':
+        specifier: workspace:^
+        version: link:../../cordis/mygo
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@r05en1cu/dsh-mygo-api':
+        specifier: workspace:^
+        version: link:../../core/mygo-api
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.1
+      tsdown:
+        specifier: ^0.22.2
+        version: 0.22.14(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1))
 
 packages:
 

@@ -19,6 +19,7 @@ import {
 import { resolve } from 'node:path'
 import { parseCliArgs, type CliCommand } from './args.ts'
 import { InitError, generatePluginSkeleton } from './init.ts'
+import { createProfileLoaderAdapter, type ProfileLoaderAdapter } from '@r05en1cu/dsh-mygo-loader-profile'
 import {
   jsonOutput,
   renderAdoptSuccess,
@@ -33,7 +34,21 @@ import {
   renderUsage,
   renderUsageError,
 } from './render.ts'
-import { adoptInstance, clonePlugin, profileInstall, profileSetEnabled, profileUninstall } from './install.ts'
+import { adoptInstance, clonePlugin } from './install.ts'
+import { runHubCommand } from './hub.ts'
+
+/** 治理面上带 loader 注册面的管理器最小结构（P5）。 */
+interface LoaderRegistryHost {
+  registerLoaderAdapter?(adapter: ProfileLoaderAdapter): () => void
+  loaderAdapters?(): readonly { readonly id: string }[]
+}
+
+/** profile 执行面 adapter：优先治理面注册实例（发现走治理面），缺省现场构造。 */
+function profileAdapterOf(ctx: CliHost): ProfileLoaderAdapter {
+  const manager = ctx.get<LoaderRegistryHost>('pluginManager')
+  const registered = manager?.loaderAdapters?.().find(adapter => adapter.id === 'profile')
+  return (registered as ProfileLoaderAdapter | undefined) ?? createProfileLoaderAdapter()
+}
 
 /** Cordis 插件名（稳定；manifest id 同源）。 */
 export const name = 'dsh-mygo-cli'
@@ -59,11 +74,23 @@ export const internals: { stdout: { write(chunk: string): unknown }; stderr: { w
 
 /**
  * Cordis apply：被动语义 + 派发。`mygo` 之后的参数交给 {@link invokeCli}。
+ * P5：profile 执行面 adapter 在首个 mygo 命令时注册进治理面（已注册则
+ * 跳过）——被动语义要求非 mygo 首 token 完全无副作用，故注册不在
+ * apply 顶层发生。
  */
 export async function apply(ctx: CliHost): Promise<void> {
   const args = ctx.get<CmdlineArgsLike>('cmdlineArgs')?.get() ?? []
   if (args[0] !== 'mygo') return
+  ensureProfileAdapterRegistered(ctx)
   await invokeCli(ctx, args.slice(1))
+}
+
+/** profile adapter 注册（幂等；管理器缺注册面时跳过，命令面仍有现场构造兜底）。 */
+function ensureProfileAdapterRegistered(ctx: CliHost): void {
+  const manager = ctx.get<LoaderRegistryHost>('pluginManager')
+  if (manager?.registerLoaderAdapter === undefined) return
+  if (manager.loaderAdapters?.().some(adapter => adapter.id === 'profile') ?? false) return
+  manager.registerLoaderAdapter(createProfileLoaderAdapter())
 }
 
 /**
@@ -137,7 +164,19 @@ async function runCommand(ctx: CliHost, command: CliCommand): Promise<number> {
     case 'instances': return runInstances(command)
     case 'adopt': return runAdopt(command)
     case 'clone': return runClone(command)
+    case 'hub': return runHub(ctx, command)
   }
+}
+
+/** hub 命令面（P5）：检索/详情不依赖管理器；install 需要当前 profile。 */
+async function runHub(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'hub' }>): Promise<number> {
+  const io = { stdout: (chunk: string) => internals.stdout.write(chunk), stderr: (chunk: string) => internals.stderr.write(chunk) }
+  if (command.verb !== 'install') {
+    return runHubCommand(command, { home: resolveDshHome(process.env), profile: '' }, io)
+  }
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('hub', 'no-profile', current.reason, command.json)
+  return runHubCommand(command, { home: resolveDshHome(process.env), profile: current.profile }, io)
 }
 
 // ---------------------------------------------------------------------------
@@ -202,19 +241,24 @@ async function runClone(command: Extract<CliCommand, { readonly kind: 'clone' }>
   return 0
 }
 
-/** 安装执行面（P3 原生形态）：目标 profile 目录 pnpm + dsh.bundle 对账。 */
-function runInstall(
+/** 安装执行面（P5 adapter 形态）：spec 经 profile adapter 解析为 pnpm intent 后执行。 */
+async function runInstall(
   ctx: CliHost,
   command: Extract<CliCommand, { readonly kind: 'install' }>,
-): number {
+): Promise<number> {
   const current = profileOf(ctx)
   if (!current.ok) return errorEnvelope('install', 'no-profile', current.reason, command.json)
-  const outcome = profileInstall(command.spec, { profile: current.profile })
-  if (!outcome.ok) return errorEnvelope('install', 'install-failed', outcome.error ?? 'pnpm 失败', command.json)
+  const adapter = profileAdapterOf(ctx)
+  const intent = adapter.resolve(command.spec)
+  if (intent === null) {
+    return errorEnvelope('install', 'install-failed', `无法识别的安装 spec：${command.spec}`, command.json)
+  }
+  const receipt = await adapter.install(intent, { home: resolveDshHome(process.env), profile: current.profile })
+  if (!receipt.ok) return errorEnvelope('install', 'install-failed', receipt.error?.message ?? 'pnpm 失败', command.json)
   if (command.json) {
-    internals.stdout.write(jsonOutput('install', { ok: true, profile: outcome.profile, bundles: outcome.bundles }))
+    internals.stdout.write(jsonOutput('install', { ok: true, profile: receipt.profile, bundles: receipt.bundles }))
   } else {
-    internals.stdout.write(renderInstallSuccess('install', outcome.profile, outcome.bundles ?? []))
+    internals.stdout.write(renderInstallSuccess('install', receipt.profile ?? current.profile, receipt.bundles ?? []))
   }
   return 0
 }
@@ -225,7 +269,7 @@ function runUninstall(
 ): number {
   const current = profileOf(ctx)
   if (!current.ok) return errorEnvelope('uninstall', 'no-profile', current.reason, command.json)
-  const outcome = profileUninstall(command.name, { profile: current.profile })
+  const outcome = profileAdapterOf(ctx).uninstall(command.name, { home: resolveDshHome(process.env), profile: current.profile })
   if (!outcome.ok) return errorEnvelope('uninstall', 'uninstall-failed', outcome.error ?? 'pnpm 失败', command.json)
   if (command.json) {
     internals.stdout.write(jsonOutput('uninstall', { ok: true, profile: outcome.profile, bundles: outcome.bundles }))
@@ -241,7 +285,7 @@ function runSetEnabled(
 ): number {
   const current = profileOf(ctx)
   if (!current.ok) return errorEnvelope(command.kind, 'no-profile', current.reason, command.json)
-  const outcome = profileSetEnabled(command.id, command.kind === 'enable', { profile: current.profile })
+  const outcome = profileAdapterOf(ctx).setEnabled(command.id, command.kind === 'enable', { home: resolveDshHome(process.env), profile: current.profile })
   if (!outcome.ok) return errorEnvelope(command.kind, `${command.kind}-failed`, outcome.error ?? '写入失败', command.json)
   if (command.json) {
     internals.stdout.write(jsonOutput(command.kind, { ok: true, profile: outcome.profile, id: command.id }))

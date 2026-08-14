@@ -472,6 +472,8 @@ async function copyPluginTree(source: string, target: string): Promise<void> {
 const MYGO_RUNTIME_PACKAGES = [
   '@r05en1cu/dsh-mygo',
   '@r05en1cu/dsh-mygo-api',
+  '@r05en1cu/dsh-mygo-loader-profile',
+  '@r05en1cu/dsh-mygo-loader-hub',
   '@deepseek-ai/cordis',
   '@deepseek-ai/schemastery',
 ] as const

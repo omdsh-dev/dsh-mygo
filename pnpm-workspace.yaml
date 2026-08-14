@@ -2,6 +2,7 @@ packages:
   - packages/core/*
   - packages/cordis/*
   - packages/extensions/*
+  - packages/loaders/*
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-include@1.0.6'
   - '@deepseek-ai/cordis-plugin-loader@1.0.2'

@@ -123,6 +123,14 @@ export interface PluginManager {
    * 实例 = $DSH_HOME；每条记录仅 {home, dshVersion, lastSeenAt}，不含插件账。
    */
   instances(): readonly import('./instances.ts').InstanceRecord[]
+  /**
+   * P5 loader 扩展体系：注册一个安装来源适配器（LoaderAdapter）。受管
+   * 插件在 activate/apply 时调用；返回的注销器随插件 fiber 清理调用
+   * （启停走治理面）。重复 id 拒绝。
+   */
+  registerLoaderAdapter(adapter: import('@r05en1cu/dsh-mygo-api').LoaderAdapter): () => void
+  /** P5：已注册 loader adapter 发现面（按 id 字典序，确定性）。 */
+  loaderAdapters(): readonly import('@r05en1cu/dsh-mygo-api').LoaderAdapter[]
   /** P4 BOM：导出当前统一依赖图为 `dsh.bom/v1`（JSON + Markdown，原子写）。 */
   bomExport(): Promise<{ readonly bom: import('./bom.ts').BomDocument; readonly jsonPath: string; readonly mdPath: string }>
   /**

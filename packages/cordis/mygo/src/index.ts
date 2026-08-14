@@ -70,6 +70,8 @@ export {
 export type { InstanceRecord, InstanceRegistryOptions } from './instances.ts'
 export { cachePack, cachedPackPath, importCachedPack, packCacheDir } from './pack-cache.ts'
 export type { CachePackResult, ImportCachedPackResult } from './pack-cache.ts'
+export { BUILTIN_LOADER_ADAPTERS, LoaderAdapterRegistry } from './loader-adapters.ts'
+export type { LoaderAdapterResolution } from './loader-adapters.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'
