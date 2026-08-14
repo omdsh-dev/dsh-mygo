@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased · next 分支 P7 追加（2026-08-14）— npm 公开版 rc6 兼容性核查
+
+- registry 事实面：dsh@0.1.0-rc.6 携带 cordis ^4.0.1 / loader ^1.0.2 /
+  include ^1.0.6 / app-boot ^0.1.0-rc.6 / home-paths ^0.1.0-rc.6 等；
+  dsh-storage*/dsh-invariants/dsh-skill 等子包 latest 仍指 0.0.1-rc.1、
+  next 指 0.1.0-rc.6（双 dist-tag 线）；dsh-type-meta 复核仍未公开发布。
+- 干净环境实测（npm 装 rc6 + tarball 装 mygo/mygo-cli，临时 DSH_HOME）：
+  web profile 启动 HTTP 200、--dump-config 见 mygo 两行、mygo-self.json
+  写入、启动日志零报错；cordis 全线 4.0.1 单一版本；mygo 运行时 import
+  的 dsh-storage-domain 经 profiles/node_modules 回退链落到宿主 0.1.0-rc.6
+  拷贝且工作正常；dsh-home-paths rc.2 与 rc.6 lib 逐字节相同。
+- 最小修复：mygo / mygo-api 的 dsh-* peerDependencies 从 `^0.0.1-rc.1`
+  放宽为 `>=0.0.1-rc.1 <0.2.0`（声明面覆盖宿主 0.1.0-rc.x 线，实测相容）。
+  schemastery 3.18.1-rc.1 精确钉版保留（P3 类型可移植性裁决；与宿主
+  3.18.1 双实例共存实测无故障）。
+- 已知限制不变：web profile 严格参数解析使 `dsh --profile web mygo ...`
+  内层参数到不了 CLI（host 缝隙，P3 起登记，host 补丁提案候选）。
+
 ## Unreleased · next 分支 P7（2026-08-14）— 0812 机会面落地 + 遗留收口
 
 ### 机会面五项

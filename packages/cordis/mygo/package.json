@@ -47,9 +47,9 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-invariants": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-storage": "^0.0.1-rc.1",
-    "@deepseek-ai/dsh-storage-domain": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-invariants": ">=0.0.1-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-storage": ">=0.0.1-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-storage-domain": ">=0.0.1-rc.1 <0.2.0",
     "@deepseek-ai/schemastery": "3.18.1-rc.1"
   },
   "dependencies": {
