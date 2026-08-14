@@ -16,6 +16,7 @@ import { InstallPanel } from './InstallPanel'
 import { UpdatesPanel } from './UpdatesPanel'
 import { ConfigHelper, type HelperPanelState } from './ConfigHelper'
 import { ConfigEditor, type ConfigDrawerState } from './ConfigEditor'
+import { ConfigTransfer } from './ConfigTransfer'
 
 export type { ConfigFieldShape } from './ConfigFields'
 export type { MygoPluginRow, RemoteUpdateRow } from './api'
@@ -361,6 +362,7 @@ export function Panel(): JSX.Element {
             <button className={css.btn + ' ' + css.btnGhost + ' ' + css.btnSm} onClick={bomExport}>
               导出 BOM
             </button>
+            <ConfigTransfer onNotice={reportNotice} onError={reportError} />
           </div>
         </div>
       </div>

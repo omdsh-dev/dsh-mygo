@@ -383,6 +383,12 @@
   color: var(--dsw-alias-state-error-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
 }
+.badgeMygo {
+  color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  letter-spacing: .02em;
+}
 .railChip {
   color: var(--dsw-alias-label-secondary);
   border: 1px solid var(--dsw-alias-border-l1);

@@ -1,11 +1,16 @@
 /**
  * dsh-mygo-panel browser half — a dsh web Settings section that lists and
  * manages mygo-managed plugins. All data crosses the /api/mygo JSON API.
+ *
+ * 插件配置合并（r7.1）：受管插件在 settings.plugin.item（默认插件配置区）
+ * 逐张渲染配置卡片（mygo 小标 + 核心 API 读写），取代原先的聚合卡片；
+ * 卡片集合随 config-cards 轮询差异注册/注销。
  */
+import { createElement } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { Panel } from './Panel'
-import { MygoConfigCards } from './ConfigCards'
+import { MygoPluginConfigCard, type MygoPluginCardSeed } from './PluginConfigCard'
 
 /**
  * settings.plugin.item 槽契约镜像（与官方 dsh-client-ui-settings-plugins
@@ -26,6 +31,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export const inject = ['slots']
 
+/** mygo 卡片排在官方 feature 卡片（bash/agent-loop/web-search）之后。 */
+const MYGO_CARD_ORDER = 70
+/** config-cards 轮询间隔：覆盖面板安装/卸载后的卡片集合变化。 */
+const MYGO_CARD_POLL_MS = 8000
+
+interface CardsResult {
+  readonly ok: boolean
+  readonly cards?: readonly MygoPluginCardSeed[]
+}
+
 export function apply(ctx: ClientContext): void {
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -34,12 +49,53 @@ export function apply(ctx: ClientContext): void {
     label: () => 'My 插件',
     inject: () => ({}),
   }, Panel))
-  // r6 配置注入：有 Config schema 的受管插件经聚合卡片进 webui 插件设置页。
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    id: 'mygo-configs',
-    order: 70,
-    label: () => 'mygo 插件配置',
-    inject: () => ({}),
-  }, MygoConfigCards))
+  // r7.1：受管插件逐张卡片直接进默认插件配置区（mygo 小标；读写统一走
+  // mygo 核心方法）。轮询 config-cards 维护集合：新增注册、消失注销；
+  // 注入回调返回组合 disposer，随声明生命周期/插件卸载整体拆除。
+  ctx.slots.inject('settings.plugin.item', () => {
+    const disposers = new Map<string, () => void>()
+    let timer: ReturnType<typeof setInterval> | undefined
+    let closed = false
+    let inFlight = false
+    const sync = async (): Promise<void> => {
+      if (closed || inFlight) return
+      inFlight = true
+      try {
+        const res = await fetch('/api/mygo/config-cards')
+        const data = (await res.json()) as CardsResult
+        const cards = data.cards ?? []
+        const seen = new Set<string>()
+        for (const card of cards) {
+          const entryId = 'mygo-config-' + card.id
+          seen.add(entryId)
+          if (disposers.has(entryId)) continue
+          const dispose = ctx.slots.register({
+            name: 'settings.plugin.item',
+            id: entryId,
+            order: MYGO_CARD_ORDER,
+            label: () => 'mygo · ' + card.id,
+          }, () => createElement(MygoPluginConfigCard, { seed: card }))
+          disposers.set(entryId, dispose)
+        }
+        for (const [entryId, dispose] of disposers) {
+          if (!seen.has(entryId)) {
+            dispose()
+            disposers.delete(entryId)
+          }
+        }
+      } catch {
+        // 服务端暂不可达：下个轮询周期重试
+      } finally {
+        inFlight = false
+      }
+    }
+    void sync()
+    timer = setInterval(() => { void sync() }, MYGO_CARD_POLL_MS)
+    return () => {
+      closed = true
+      if (timer !== undefined) clearInterval(timer)
+      for (const dispose of disposers.values()) dispose()
+      disposers.clear()
+    }
+  })
 }

@@ -703,7 +703,24 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
   {results: [{id, ok, updated?, message?, error?}], message}。
   枚举逻辑抽取为 remoteInstallEntries() 与 listUpdates 共用。
 - 面板头部：mygo 版本 chip、启用/停用/隔离/遮蔽/bridge/bundle/BOM 统计
-  chips、可更新数角标（更新标签页）、刷新/检查更新/导出 BOM 全局按钮。
+  chips、可更新数角标（更新标签页）、刷新/检查更新/导出 BOM/配置导入导出
+  全局按钮。
+
+### 17.5 插件配置合并（r7.1）
+
+- **决策**：受管插件配置与默认插件配置层（官方 settings.plugin.item 卡片 +
+  settings-file 写路径）存在重复定义/修改风险，统一按 mygo 核心方法为准。
+- **实现**：撤销 settings.plugin.item 的聚合卡片（mygo-configs），改为
+  轮询 /api/mygo/config-cards（8s）差异注册——每个受管插件一张独立卡片
+  （id mygo-config-<pluginId>，order 70，排在官方 bash/agent-loop/
+  web-search 之后），标题旁带 "mygo" 小标；schema/当前配置读 config-cards，
+  保存经 PUT /api/mygo/config（bridge 轨 HMR、bundle 轨 patch 层），
+  与默认配置层零重复。
+- **配套**：整 profile 配置导入/导出从聚合卡片迁入 mygo 面板头部
+  （ConfigTransfer：导出下载 /api/mygo/config-export，导入弹窗
+  PUT /api/mygo/config-import）；ConfigCards.tsx 移除。
+- 动态集合：插件安装/卸载后由轮询拾取（新增注册、消失注销）；注入回调
+  返回组合 disposer，随声明生命周期与插件卸载整体拆除。
 
 ## 18. 常见任务速查
 
