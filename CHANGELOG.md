@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-rc.4（2026-08-14）— 受管块空内容 YAML 修复
+
+- `@r05en1cu/dsh-mygo-ext-panel`：rows 为空且用户层仅注释时，
+  `buildProfilePatchText` 漏落顶层 `[]`——只剩注释的文件被 YAML 解析为
+  null，host 侧要求顶层数组，下一次 boot fail-loud（rc.3 回归事故）。
+  修复并补事故用例（仅注释文件 + 无行 → 注释保留 + 落 `[]`）。
+
 ## 0.2.0-rc.3（2026-08-14）— 面板桥接同步升级路径安全加固
 
 - **planState 双账去重（追加，实机报错修复）**：`@r05en1cu/dsh-mygo`

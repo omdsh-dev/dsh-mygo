@@ -1,7 +1,7 @@
 {
   "name": "@r05en1cu/dsh-mygo-cli",
   "description": "mygo managed-plugin CLI: pack/restore/init as a dsh app plugin (design-r5)",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -81,7 +81,7 @@
     "mygo": {
       "formatVersion": 1,
       "id": "dsh-mygo-cli",
-      "version": "0.2.0-rc.3",
+      "version": "0.2.0-rc.4",
       "entry": "lib/index.js",
       "requires": {},
       "core": "^0.0.1-rc.1",

@@ -40,6 +40,13 @@ describe('buildProfilePatchText（受管块落点）', () => {
     expect(buildProfilePatchText('[]\n', [])).toBe('[]\n')
   })
 
+  it('仅注释文件 + 无行：保留注释且落顶层 []（rc.3 事故形态）', () => {
+    const commentsOnly = '# 用户补丁层\n# 第二行注释\n'
+    const next = buildProfilePatchText(commentsOnly, [])
+    expect(next.startsWith('# 用户补丁层')).toBe(true)
+    expect(next.trimEnd().endsWith('[]')).toBe(true)
+  })
+
   it('用户内容逐字节保留（块前），重跑幂等', () => {
     const once = buildProfilePatchText(USER_LAYER, [row('alpha')])
     expect(once.startsWith(USER_LAYER.trimEnd())).toBe(true)

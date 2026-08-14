@@ -56,7 +56,10 @@ export function buildProfilePatchText(existing: string, rows: readonly BridgeRow
   if (rows.length === 0) {
     const kept = [headText, tailText.replace(/\s+$/, '')].filter(part => part !== '')
     if (kept.length === 0) return '[]\n'
-    return kept.join('\n\n') + '\n'
+    const body = kept.join('\n\n')
+    // 仅剩注释/空白时也必须落顶层数组——YAML 只有注释解析为 null，
+    // host 侧要求顶层数组（rc.3 事故形态）。
+    return hasContent(body) ? body + '\n' : body + '\n[]\n'
   }
   let block = `${ROW_MARKER_START}\n- insert:\n`
   for (const row of rows) {
