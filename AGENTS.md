@@ -17,12 +17,10 @@
 ## next 分支重做约定（2026-08-13 登记）
 
 - `next` 分支为 v0.2 重做线：包名统一 `@r05en1cu/dsh-*`，`author` /
-  `maintainers` 声明 `r05En1cU`；发布留作 handoff（dsh_dev/AGENTS.md 发布
-  禁令条款），publish-mygo.mjs 只改造不执行。
-- 现阶段分发渠道：不发任何公开 registry（含自有 scope）；一律走
-  GitHub repo + pnpm git spec 安装形态（`dsh plugin add github:<owner>/
-  <repo>#<commit>&path:/packages/<pkg>`），依赖 push 禁令解除后生效
-  （2026-08-13 用户裁决）。
+  `maintainers` 声明 `r05En1cU`。
+- 发布与推送已解除（2026-08-14 用户裁决）：七包已发布
+  `0.2.0-rc.0`（`next` tag），main/next 已推 origin。后续发布走
+  publish-mygo.mjs（`--tag next`，发布后验证 npm view 可见）。
 - 强耦合依赖分析体系（resolver / dsh.lock / 冲突求解 / 激活求解器）已退役
   （P1，2026-08-13）：存档提交 `43bb296`（main）；pnpm 安装状态为唯一真相源，
   mygo 账本降级为治理视图（P3 已落地 `src/governance.ts`）。
