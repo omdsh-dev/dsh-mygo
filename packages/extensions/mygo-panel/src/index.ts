@@ -20,6 +20,8 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
+import { listPatchRowIds, readProfilePatchText, readRowConfig, upsertRowConfig } from '@r05en1cu/dsh-mygo'
+import { profileUninstall } from '@r05en1cu/dsh-mygo-loader-profile'
 import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from './workspace-packages.js'
 import type {
   PluginCompatibility,
@@ -61,9 +63,6 @@ const HOME_ROOT = process.env.DSH_HOME !== undefined && process.env.DSH_HOME !==
   ? process.env.DSH_HOME
   : join(homedir(), '.dsh')
 const INSTALL_DIR = join(HOME_ROOT, 'mygo-plugins')
-
-/** Managed external-app root: standalone processes, not Cordis plugins. */
-const APPS_DIR = join(HOME_ROOT, 'mygo-apps')
 
 /** mygo 自身安装状态（install.sh 写入，供检查/热更新自身）。 */
 const SELF_STATE = join(HOME_ROOT, 'mygo-self.json')
@@ -108,16 +107,65 @@ function profilePatchPath(): string {
 const MANIFEST = '.mygo-install.json'
 
 /** Per-app manifest file inside each installed external-app directory. */
-const APP_MANIFEST = '.mygo-app.json'
 
 /** Append-only operation log for external apps (best-effort records). */
-const APP_AUDIT = join(APPS_DIR, 'audit.jsonl')
 
 // rc.3：桥接行装配/可解析性校验收敛进 bridge-rows.ts（纯函数可测面）。
 import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
 
 export const name = 'dsh-mygo-panel'
 export const inject = ['pluginManager', 'webServer']
+
+/** bundle 卸载路由的结果信封（API 层直接透传）。 */
+export interface BundleUninstallOutcome {
+  readonly ok: boolean
+  readonly id?: string
+  readonly message?: string
+  readonly error?: string
+  readonly warning?: string
+}
+
+/**
+ * bundle 轨成员的卸载（r6 路由修正）：profile 执行面（pnpm remove +
+ * reconcile，与官方 dsh plugin remove 同路径），带守卫——面板自身
+ * （dsh-mygo-ext-panel）拒绝经自身卸载；dsh-mygo 核心需 force 确认
+ * （管理面中断警告）；卸载前跑 plan 预览（dependent-exists 等拒绝）。
+ * 桥接轨成员不经此路由（维持引擎 uninstall 语义）。
+ */
+export async function routeBundleUninstall(
+  ctx: PanelContext,
+  id: string,
+  force: boolean,
+  profile: string = panelProfile(),
+): Promise<BundleUninstallOutcome> {
+  if (id === 'dsh-mygo-ext-panel') {
+    return {
+      ok: false,
+      error: '面板不能经自身卸载（请求正由它服务）。请改用 dsh plugin remove @r05en1cu/dsh-mygo-ext-panel',
+    }
+  }
+  if (id === 'dsh-mygo' && !force) {
+    return {
+      ok: false,
+      error: '卸载 dsh-mygo 核心将中断 mygo 管理面（含本面板）。确认请带 force: true，或改用 dsh plugin remove @r05en1cu/dsh-mygo',
+    }
+  }
+  const plan = await ctx.pluginManager.plan({ op: 'uninstall', id })
+  if (!plan.accepted) {
+    return { ok: false, error: plan.error?.message ?? '卸载预览被拒绝' }
+  }
+  const member = ctx.pluginManager.bundleList().find(candidate => candidate.id === id)
+  const outcome = profileUninstall(member?.packageName ?? id, { profile, home: HOME_ROOT })
+  if (!outcome.ok) {
+    return { ok: false, error: outcome.error ?? 'pnpm remove 失败' }
+  }
+  return {
+    ok: true,
+    id,
+    message: `插件 ${id} 已卸载（profile bundle 层已对账）`,
+    ...(id === 'dsh-mygo' ? { warning: 'mygo 管理面已随核心卸载中断' } : {}),
+  }
+}
 
 interface WebServerLike {
   register(route: {
@@ -199,43 +247,6 @@ interface MygoSelfState {
   readonly ref: string
   readonly commit: string
   readonly installedAt: number
-}
-
-/** One installed external app (standalone process, not a Cordis plugin). */
-interface AppManifest {
-  readonly id: string
-  readonly kind: 'external-app'
-  readonly method: InstallManifest['method']
-  readonly source: string
-  /** npm script used to launch the app (`start` / `dev`). */
-  readonly startCommand: string
-  /** Runtime confinement tier: `none` or `workspace` (landlock/bwrap). */
-  readonly sandbox: 'none' | 'workspace'
-  /** Remote repository provenance when installed from GitHub. */
-  readonly remote?: RemoteRef
-  /** Shell commands run before `npm run build` at install/update time. */
-  readonly setup?: readonly string[]
-  /** Whether the repo build script was skipped at install/update time. */
-  readonly skipBuild?: boolean
-  /** External apps are never synchronously uninstallable by the manager. */
-  readonly syncUninstall: false
-  readonly installedAt: number
-  pid?: number
-  startedAt?: number
-}
-
-interface AppInstallRequest {
-  readonly method?: 'github' | 'folder' | 'archive'
-  readonly url?: string
-  readonly ref?: string
-  readonly path?: string
-  readonly sandbox?: 'none' | 'workspace'
-  /** Override the launch command: an npm script name or a raw shell command. */
-  readonly startCommand?: string
-  /** Skip the repo's build script entirely (e.g. dev-mode apps). */
-  readonly skipBuild?: boolean
-  /** Optional shell commands run inside the app dir before `npm run build`. */
-  readonly setup?: readonly string[]
 }
 
 /** Bridge package directory for one installed plugin id. */
@@ -628,164 +639,20 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-/** Structural schemastery schema surface (no runtime dependency on the package). */
-interface ConfigSchemaLike {
-  readonly type?: string
-  readonly meta?: {
-    readonly required?: boolean
-    readonly default?: unknown
-    readonly description?: string | Record<string, string>
-    readonly role?: string
-    readonly extra?: unknown
-    readonly min?: number
-    readonly max?: number
-    readonly step?: number
-    readonly pattern?: { readonly source?: string; readonly flags?: string }
-  }
-  readonly dict?: Record<string, ConfigSchemaLike>
-  readonly list?: readonly ConfigSchemaLike[]
-  readonly inner?: ConfigSchemaLike
-  readonly value?: unknown
-  readonly builder?: () => ConfigSchemaLike
-}
-
-/** One user-editable config field surfaced by the panel. */
-interface ConfigFieldInfo {
-  readonly name: string
-  readonly type: string
-  readonly required: boolean
-  readonly description?: string
-  readonly role?: string
-  readonly extra?: unknown
-  readonly min?: number
-  readonly max?: number
-  readonly step?: number
-  readonly pattern?: string
-  readonly default?: unknown
-  readonly literal?: unknown
-  readonly enumValues?: readonly unknown[]
-  readonly children?: readonly ConfigFieldInfo[]
-}
-
-/** Schema summary + a JSON-safe starter template for one plugin config. */
-interface ConfigSchemaInfo {
-  readonly description: string
-  readonly fields: readonly ConfigFieldInfo[]
-  readonly template: unknown
-}
-
-/** Resolve lazy schemastery nodes so introspection sees the real shape. */
-function resolveConfigSchema(schema: ConfigSchemaLike): ConfigSchemaLike {
-  if (schema.type === 'lazy' && schema.builder !== undefined) {
-    try {
-      return resolveConfigSchema(schema.builder())
-    } catch {
-      return schema
-    }
-  }
-  return schema
-}
-
-/** JSON-safe starter value for one schema node (placeholder, never a live path). */
-function configSchemaTemplateOf(schema: ConfigSchemaLike): unknown {
-  const node = resolveConfigSchema(schema)
-  switch (node.type) {
-    case 'object': {
-      const out: Record<string, unknown> = {}
-      for (const [name, field] of Object.entries(node.dict ?? {})) {
-        const child = resolveConfigSchema(field)
-        if (child.meta?.default !== undefined) {
-          out[name] = child.meta.default
-        } else {
-          out[name] = configSchemaTemplateOf(child)
-        }
-      }
-      return out
-    }
-    case 'union': {
-      const branches = node.list ?? []
-      const preferred = branches.find(branch => resolveConfigSchema(branch).meta?.default !== undefined) ?? branches[0]
-      return preferred === undefined ? undefined : configSchemaTemplateOf(preferred)
-    }
-    case 'array':
-      return []
-    case 'dict':
-      return {}
-    case 'const':
-      return node.value
-    case 'string':
-      return ''
-    case 'number':
-    case 'integer':
-      return 0
-    case 'boolean':
-      return false
-    case 'transform':
-      return node.inner === undefined ? undefined : configSchemaTemplateOf(node.inner)
-    default:
-      return node.meta?.default
-  }
-}
-
-/** Describe one object field for the panel's expandable config surface. */
-function configFieldInfoOf(name: string, field: ConfigSchemaLike): ConfigFieldInfo {
-  const node = resolveConfigSchema(field)
-  const description = node.meta?.description
-  return {
-    name,
-    type: node.type ?? 'any',
-    required: node.meta?.required ?? false,
-    ...(description === undefined
-      ? {}
-      : { description: typeof description === 'string' ? description : JSON.stringify(description) }),
-    ...(node.meta?.role === undefined ? {} : { role: node.meta.role }),
-    ...(node.meta?.extra === undefined ? {} : { extra: node.meta.extra }),
-    ...(node.meta?.min === undefined ? {} : { min: node.meta.min }),
-    ...(node.meta?.max === undefined ? {} : { max: node.meta.max }),
-    ...(node.meta?.step === undefined ? {} : { step: node.meta.step }),
-    ...(node.meta?.pattern === undefined || node.meta.pattern.source === undefined
-      ? {}
-      : { pattern: node.meta.pattern.source }),
-    ...(node.meta?.default === undefined ? {} : { default: node.meta.default }),
-    ...(node.type === 'const' ? { literal: node.value } : {}),
-    ...(node.type === 'union'
-      ? {
-          enumValues: (node.list ?? [])
-            .filter(branch => resolveConfigSchema(branch).type === 'const')
-            .map(branch => (resolveConfigSchema(branch) as { value?: unknown }).value),
-        }
-      : {}),
-    ...(node.type === 'object'
-      ? {
-          children: Object.entries(node.dict ?? {}).map(([childName, child]) => configFieldInfoOf(childName, child)),
-        }
-      : {}),
-  }
-}
-
-/** Schema summary + starter template for one schemastery Config schema. */
-function configSchemaInfoOf(schema: ConfigSchemaLike): ConfigSchemaInfo | undefined {
-  const root = resolveConfigSchema(schema)
-  let description = ''
-  try {
-    const text = String(schema)
-    if (text !== '') description = text
-  } catch {
-    // unreadable description: keep empty
-  }
-  let fields: ConfigFieldInfo[] = []
-  if (root.type === 'object') {
-    fields = Object.entries(root.dict ?? {}).map(([name, field]) => configFieldInfoOf(name, field))
-  } else if (root.type === 'union') {
-    const firstObject = (root.list ?? []).find(branch => resolveConfigSchema(branch).type === 'object')
-    if (firstObject !== undefined) {
-      fields = Object.entries(resolveConfigSchema(firstObject).dict ?? {}).map(([name, field]) => configFieldInfoOf(name, field))
-    }
-  }
-  const template = configSchemaTemplateOf(root)
-  if (typeof template !== 'object' || template === null || Array.isArray(template)) return undefined
-  return { description, fields, template }
-}
+/** 配置卡片基础设施（r6）：schema 内省/模板/bundle 行 id/配置导入导出（见 config-cards.ts）。 */
+import {
+  buildConfigExport,
+  bundleRowIdOf,
+  configSchemaInfoOf,
+  configSchemaTemplateOf,
+  CONFIG_EXPORT_FORMAT,
+  parseConfigImport,
+  partitionImportTargets,
+  resolveConfigSchema,
+  type ConfigFieldInfo,
+  type ConfigSchemaInfo,
+  type ConfigSchemaLike,
+} from './config-cards.js'
 
 /** Read the declared Config schema of one plugin root by importing its entry. */
 async function readConfigSchemaInfo(root: string): Promise<ConfigSchemaInfo | undefined> {
@@ -804,6 +671,131 @@ async function readConfigSchemaInfo(root: string): Promise<ConfigSchemaInfo | un
   const Config = (raw as { Config?: unknown } | undefined)?.Config
   if (typeof Config !== 'function') return undefined
   return configSchemaInfoOf(Config as ConfigSchemaLike)
+}
+
+// ---------------------------------------------------------------------------
+// r6：配置注入（webui 插件页）的后端面——卡片枚举 / 读写 / 导入导出
+// ---------------------------------------------------------------------------
+
+/** 一张配置卡片（config-cards API 的返回单元）。 */
+interface ConfigCardInfo {
+  readonly id: string
+  readonly kind: 'bridge' | 'bundle'
+  /** bundle 行的 patch 行 id（config 写入目标；bridge 同 id）。 */
+  readonly rowId: string
+  readonly packageName: string
+  readonly schema: ConfigSchemaInfo
+  readonly config: unknown
+  readonly enabled: boolean
+}
+
+async function firstExisting(candidates: readonly string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    if (await fileExists(join(candidate, 'package.json'))) return candidate
+  }
+  return undefined
+}
+
+/**
+ * 枚举有 Config schema 的受管插件卡片：bridge 轨（面板安装目录，schema
+ * 经 fresh import 读 Config 导出）+ bundle 轨（profile bundle 成员，包目
+ * 录经 profile node_modules/兜底链解析，行 id 取 bundle patch 首个 insert
+ * 行）。无 Config 的插件静默跳过（不出卡片不报错）。
+ */
+async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCardInfo[]> {
+  const out: ConfigCardInfo[] = []
+  const managerPlugins = new Map(ctx.pluginManager.plugins().map(plugin => [plugin.id, plugin] as const))
+  // bridge 轨
+  let dirNames: string[] = []
+  try {
+    dirNames = (await readdir(INSTALL_DIR, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+  } catch {
+    dirNames = []
+  }
+  for (const dirName of dirNames) {
+    if (dirName.endsWith('-mygo') || dirName.startsWith('.')) continue
+    try {
+      const manifest = JSON.parse(await readFile(join(INSTALL_DIR, dirName, MANIFEST), 'utf8')) as InstallManifest
+      const schema = await readConfigSchemaInfo(join(INSTALL_DIR, dirName))
+      if (schema === undefined) continue
+      out.push({
+        id: manifest.id,
+        kind: 'bridge',
+        rowId: manifest.id,
+        packageName: bridgeNameOf(manifest.id),
+        schema,
+        config: ctx.pluginManager.configOf(manifest.id) ?? manifest.config ?? {},
+        enabled: managerPlugins.get(manifest.id)?.status === 'enabled',
+      })
+    } catch {
+      // 读取失败的安装物：跳过（rc.3 同口径 fail-soft）
+    }
+  }
+  // bundle 轨
+  const profileDir = join(HOME_ROOT, 'profiles', panelProfile())
+  for (const member of ctx.pluginManager.bundleList()) {
+    const packageName = member.packageName ?? member.id
+    const dir = await firstExisting([
+      join(profileDir, 'node_modules', packageName),
+      join(HOME_ROOT, 'profiles', 'node_modules', packageName),
+    ])
+    if (dir === undefined) continue
+    const schema = await readConfigSchemaInfo(dir)
+    if (schema === undefined) continue
+    let rowId = member.id
+    try {
+      rowId = bundleRowIdOf(await readFile(join(dir, 'cordis.patch.yml'), 'utf8')) ?? member.id
+    } catch {
+      // bundle 无 patch 文件：回退成员 id
+    }
+    const current = readRowConfig(HOME_ROOT, panelProfile(), rowId)
+    out.push({
+      id: member.id,
+      kind: 'bundle',
+      rowId,
+      packageName,
+      schema,
+      config: current.ok ? current.config : {},
+      enabled: member.enabled,
+    })
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** 单个 config 读取（bridge → configOf；bundle → patch 行）。 */
+async function readPluginConfig(ctx: PanelContext, id: string, kind: string, rowId?: string): Promise<unknown> {
+  if (kind === 'bridge') return ctx.pluginManager.configOf(id) ?? {}
+  const result = readRowConfig(HOME_ROOT, panelProfile(), rowId ?? id)
+  return result.ok ? result.config : {}
+}
+
+/** bundle 行 id 推导（写路径）：bundle patch 首个 insert 行，回退成员 id。 */
+async function rowIdOfBundleMember(id: string, packageName?: string): Promise<string> {
+  const dir = await firstExisting([
+    join(HOME_ROOT, 'profiles', panelProfile(), 'node_modules', packageName ?? id),
+    join(HOME_ROOT, 'profiles', 'node_modules', packageName ?? id),
+  ])
+  if (dir !== undefined) {
+    try {
+      return bundleRowIdOf(await readFile(join(dir, 'cordis.patch.yml'), 'utf8')) ?? id
+    } catch {
+      // fallback
+    }
+  }
+  return id
+}
+
+/** 导出整 profile 用户层 config（patch 全部行的 config 快照）。 */
+async function exportProfileConfigs(): Promise<Record<string, Record<string, unknown>>> {
+  const text = readProfilePatchText(HOME_ROOT, panelProfile())
+  const out: Record<string, Record<string, unknown>> = {}
+  for (const id of listPatchRowIds(text)) {
+    const result = readRowConfig(HOME_ROOT, panelProfile(), id)
+    if (result.ok && result.config !== undefined) out[id] = result.config
+  }
+  return out
 }
 
 /** Deep-merge one example object into a template, touching schema-known keys only. */
@@ -1680,335 +1672,23 @@ async function ensureBridgeClientDeclarations(): Promise<void> {
   }
 }
 
-/** Directory helpers for one external app. */
-function appDirOf(id: string): string {
-  return join(APPS_DIR, id)
-}
-function appCodeDirOf(id: string): string {
-  return join(appDirOf(id), 'app')
-}
-function appStateDirOf(id: string): string {
-  return join(appDirOf(id), 'state')
-}
-function appLogsDirOf(id: string): string {
-  return join(appDirOf(id), 'logs')
-}
-
-/** Append one best-effort operation record to the external-app audit log. */
-async function appAudit(class_: string, id: string, details: Record<string, unknown>): Promise<void> {
-  try {
-    await mkdir(APPS_DIR, { recursive: true })
-    await appendFile(APP_AUDIT, `${JSON.stringify({ v: 1, ts: Date.now(), class: class_, id, ...details })}\n`, 'utf8')
-  } catch {
-    // audit is best-effort; failures never block app operations
-  }
-}
-
-async function readAppManifest(id: string): Promise<AppManifest> {
-  return JSON.parse(await readFile(join(appDirOf(id), APP_MANIFEST), 'utf8')) as AppManifest
-}
-
-async function writeAppManifest(manifest: AppManifest): Promise<void> {
-  await writeFile(join(appDirOf(manifest.id), APP_MANIFEST), JSON.stringify(manifest, null, 2))
-}
-
-/** Whether a recorded PID is still alive (best-effort liveness probe). */
-function appIsRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Locate an app root: the tree itself, or its single inner directory with a package.json. */
-async function locateAppRoot(tree: string): Promise<string> {
-  const hasPackage = async (dir: string): Promise<boolean> => {
-    try {
-      await stat(join(dir, 'package.json'))
-      return true
-    } catch {
-      return false
-    }
-  }
-  if (await hasPackage(tree)) return tree
-  const entries = (await readdir(tree, { withFileTypes: true })).filter(entry => entry.isDirectory())
-  if (entries.length === 1 && await hasPackage(join(tree, entries[0]!.name))) {
-    return join(tree, entries[0]!.name)
-  }
-  const unsupported = await detectOldWorkspacePlugin(tree)
-  if (unsupported !== undefined) throw new Error(unsupported)
-  throw new Error('未找到 package.json（外部应用安装根）')
-}
-
-/** The npm script used to launch an app: `start`, falling back to `dev`. */
-async function appStartCommandOf(root: string): Promise<string> {
-  const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
-    readonly scripts?: Record<string, string>
-  }
-  if (pkg.scripts?.start !== undefined) return 'start'
-  if (pkg.scripts?.dev !== undefined) return 'dev'
-  throw new Error('外部应用需要 package.json 的 start 或 dev 脚本')
-}
-
-/**
- * Whether an app's `build` script is a compile step worth running at install
- * (tsc/tsdown/vite/next build/...). Packaging-only scripts (electron-builder,
- * dmg, pack) are skipped — they target release artifacts, not a runnable tree.
- */
-function appBuildNeeded(scripts: Record<string, string> | undefined): boolean {
-  const build = scripts?.build
-  if (build === undefined || build === '') return false
-  if (/electron-builder|\bbuilder\b|\bdmg\b|\bpack\b|\bpkg\b/i.test(build)) return false
-  return /tsc|tsdown|tsup|vite|next build|webpack|rollup|nest build/i.test(build)
-}
-
-/** Install one external app from a prepared root directory. */
-async function prepareAppCode(
-  codeDir: string,
-  root: string,
-  setup: readonly string[],
-  skipBuild: boolean,
-): Promise<void> {
-  await mkdir(codeDir, { recursive: true })
-  await copyPluginTree(root, codeDir)
-  const allDependencies = await allDependenciesOf(root)
-  const link = join(codeDir, 'node_modules')
-  await rm(link, { force: true, recursive: true })
-  await mkdir(link, { recursive: true })
-  await linkWorkspaceDependencies(codeDir, allDependencies)
-  await withInstallableManifest(
-    codeDir,
-    () => execFileAsync(
-      'npm',
-      ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'],
-      { cwd: codeDir, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
-    ),
-  )
-  await linkWorkspaceDependencies(codeDir, allDependencies)
-  await linkFrameworkDependencies(codeDir)
-  for (const command of setup) {
-    await execFileAsync(command, [], {
-      cwd: codeDir,
-      shell: true,
-      timeout: 300_000,
-      maxBuffer: 32 * 1024 * 1024,
-    })
-  }
-  const pkg = JSON.parse(await readFile(join(codeDir, 'package.json'), 'utf8')) as {
-    readonly scripts?: Record<string, string>
-  }
-  if (!skipBuild && appBuildNeeded(pkg.scripts)) {
-    await execFileAsync(
-      'npm',
-      ['run', 'build'],
-      { cwd: codeDir, timeout: 600_000, maxBuffer: 64 * 1024 * 1024, env: buildEnv() },
-    )
-    await linkWorkspaceDependencies(codeDir, allDependencies)
-  }
-}
-
-async function installAppFromRoot(
-  root: string,
-  method: InstallManifest['method'],
-  source: string,
-  sandbox: 'none' | 'workspace',
-  setup: readonly string[] = [],
-  startCommandOverride?: string,
-  skipBuild = false,
-  remote?: RemoteRef,
-): Promise<{ readonly ok: true; readonly id: string; readonly message: string; readonly syncUninstall: false }> {
-  let id: string | undefined
-  try {
-    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { readonly name?: unknown }
-    id = typeof pkg.name === 'string' ? pluginIdOf(pkg.name) : undefined
-  } catch {
-    id = undefined
-  }
-  if (id === undefined) id = pluginIdOf(basename(root))
-  const target = appDirOf(id)
-  try {
-    await stat(target)
-    throw new Error(`外部应用 ${id} 已安装，请先卸载或清理安装目录`)
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || (error as { code?: string }).code !== 'ENOENT') {
-      throw error
-    }
-  }
-  const startCommand = startCommandOverride ?? await appStartCommandOf(root)
-  await mkdir(target, { recursive: true })
-  try {
-    const codeDir = appCodeDirOf(id)
-    await mkdir(appStateDirOf(id), { recursive: true })
-    await mkdir(appLogsDirOf(id), { recursive: true })
-    await prepareAppCode(codeDir, root, setup, skipBuild)
-    const manifest: AppManifest = {
-      id,
-      kind: 'external-app',
-      method,
-      source,
-      startCommand,
-      sandbox,
-      ...(remote === undefined ? {} : { remote }),
-      ...(setup.length > 0 ? { setup } : {}),
-      ...(skipBuild ? { skipBuild: true } : {}),
-      syncUninstall: false,
-      installedAt: Date.now(),
-    }
-    await writeAppManifest(manifest)
-    await appAudit('install', id, { ok: true, sandbox })
-    return { ok: true, id, message: `外部应用 ${id} 已安装`, syncUninstall: false }
-  } catch (error) {
-    await rm(target, { recursive: true, force: true })
-    await appAudit('install-failed', id, { error: error instanceof Error ? error.message : String(error) })
-    throw error
-  }
-}
-
-/** Start one external app as a detached process group; the PID is recorded in its manifest. */
-async function startExternalApp(
-  ctx: PanelContext,
-  id: string,
-): Promise<{ readonly ok: true; readonly pid: number; readonly message: string }> {
-  const manifest = await readAppManifest(id)
-  if (manifest.pid !== undefined && appIsRunning(manifest.pid)) {
-    return { ok: true, pid: manifest.pid, message: `外部应用 ${id} 已在运行` }
-  }
-  const pkg = JSON.parse(await readFile(join(appCodeDirOf(id), 'package.json'), 'utf8')) as {
-    readonly scripts?: Record<string, string>
-  }
-  const isNpmScript = manifest.startCommand === 'start'
-    || manifest.startCommand === 'dev'
-    || pkg.scripts?.[manifest.startCommand] !== undefined
-  let argv = isNpmScript
-    ? ['npm', 'run', manifest.startCommand]
-    : ['/bin/sh', '-c', manifest.startCommand]
-  if (manifest.sandbox === 'workspace') {
-    if (ctx.sandbox === undefined) {
-      throw new Error('sandbox 服务不可用：workspace 档需要宿主 sandbox（landlock/bwrap）')
-    }
-    argv = ctx.sandbox.confine(argv, { mode: 'workspace-write', workspaceRoot: appDirOf(id) }).argv
-  }
-  const logPath = join(appLogsDirOf(id), `${Date.now()}.log`)
-  const logFd = openSync(logPath, 'a')
-  const child = spawn(argv[0], argv.slice(1), {
-    cwd: appCodeDirOf(id),
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-    env: { ...process.env, DSH_APP_ID: id, DSH_APP_STATE: appStateDirOf(id) },
-  })
-  manifest.pid = child.pid
-  manifest.startedAt = Date.now()
-  await writeAppManifest(manifest)
-  await appAudit('start', id, { pid: child.pid, sandbox: manifest.sandbox })
-  return { ok: true, pid: child.pid!, message: `外部应用 ${id} 已启动（日志 ${logPath}）` }
-}
-
-/** Stop one external app by killing its process group (best-effort). */
-async function stopExternalApp(id: string): Promise<{ readonly ok: true; readonly stopped: boolean; readonly remaining: readonly string[] }> {
-  const manifest = await readAppManifest(id)
-  if (manifest.pid === undefined || !appIsRunning(manifest.pid)) {
-    manifest.pid = undefined
-    manifest.startedAt = undefined
-    await writeAppManifest(manifest)
-    return { ok: true, stopped: true, remaining: [] }
-  }
-  const pid = manifest.pid
-  try {
-    process.kill(-pid, 'SIGTERM')
-  } catch {
-    // group already gone
-  }
-  let stopped = false
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 100))
-    if (!appIsRunning(pid)) {
-      stopped = true
-      break
-    }
-  }
-  if (!stopped) {
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      // group already gone
-    }
-    await new Promise(resolve => setTimeout(resolve, 300))
-    stopped = !appIsRunning(pid)
-  }
-  manifest.pid = undefined
-  manifest.startedAt = undefined
-  await writeAppManifest(manifest)
-  await appAudit('stop', id, { stopped })
-  return { ok: true, stopped, remaining: stopped ? [] : ['process'] }
-}
-
-/**
- * Uninstall one external app: best-effort process stop, then remove the
- * installed tree. External apps are never synchronously uninstallable — the
- * response carries what may remain (processes the manager could not stop).
- */
-async function uninstallExternalApp(
-  id: string,
-): Promise<{ readonly ok: true; readonly id: string; readonly message: string; readonly syncUninstall: false; readonly remaining: readonly string[] }> {
-  let remaining: readonly string[] = []
-  try {
-    const stopped = await stopExternalApp(id)
-    remaining = stopped.remaining
-  } catch {
-    // unknown or already removed: nothing to stop
-  }
-  await rm(appDirOf(id), { recursive: true, force: true })
-  await appAudit('uninstall', id, { remaining })
-  return {
-    ok: true,
-    id,
-    message: '外部应用已卸载（文件已删除）',
-    syncUninstall: false,
-    remaining,
-  }
-}
-
-/** List every installed external app with liveness derived from its recorded PID. */
-async function listExternalApps(): Promise<AppManifest[]> {
-  let entries: string[]
-  try {
-    entries = (await readdir(APPS_DIR, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-  } catch {
-    return []
-  }
-  const apps: AppManifest[] = []
-  for (const name of entries) {
-    try {
-      apps.push(await readAppManifest(name))
-    } catch {
-      // no manifest or unreadable: skip
-    }
-  }
-  return apps.sort((left, right) => left.id.localeCompare(right.id))
-}
-
-/** One update-check result for a remote-installed plugin or external app. */
-interface RemoteUpdateStatus {
-  readonly id: string
-  readonly kind: 'plugin' | 'app' | 'mygo'
-  readonly url: string
-  readonly ref: string
-  readonly currentCommit: string
-  readonly latestCommit?: string
-  readonly upToDate?: boolean
-  readonly error?: string
-}
-
 async function readMygoSelfState(): Promise<MygoSelfState | undefined> {
   try {
     return JSON.parse(await readFile(SELF_STATE, 'utf8')) as MygoSelfState
   } catch {
     return undefined
   }
+}
+
+interface RemoteUpdateStatus {
+  readonly id: string
+  readonly kind: 'plugin' | 'mygo'
+  readonly url: string
+  readonly ref: string
+  readonly currentCommit: string
+  readonly latestCommit?: string
+  readonly upToDate?: boolean
+  readonly error?: string
 }
 
 async function writeMygoSelfState(state: MygoSelfState): Promise<void> {
@@ -2046,7 +1726,7 @@ async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
       })
     }
   }
-  const entries: Array<{ readonly id: string; readonly kind: 'plugin' | 'app'; readonly remote: RemoteRef }> = []
+  const entries: Array<{ readonly id: string; readonly kind: 'plugin'; readonly remote: RemoteRef }> = []
   try {
     for (const dirName of (await readdir(INSTALL_DIR, { withFileTypes: true }))
       .filter(entry => entry.isDirectory())
@@ -2061,20 +1741,6 @@ async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
     }
   } catch {
     // no plugin installs yet
-  }
-  try {
-    for (const dirName of (await readdir(APPS_DIR, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)) {
-      try {
-        const manifest = JSON.parse(await readFile(join(appDirOf(dirName), APP_MANIFEST), 'utf8')) as AppManifest
-        if (manifest.remote !== undefined) entries.push({ id: manifest.id, kind: 'app', remote: manifest.remote })
-      } catch {
-        // unreadable manifest: skip
-      }
-    }
-  } catch {
-    // no app installs yet
   }
   for (const { id, kind, remote } of entries.sort((a, b) => a.id.localeCompare(b.id))) {
     try {
@@ -2254,42 +1920,6 @@ async function updatePluginFromRemote(
  * app tree keeping `state/` and `logs/`, re-run setup/build, restart if it
  * was running before.
  */
-async function updateAppFromRemote(
-  ctx: PanelContext,
-  id: string,
-): Promise<{ readonly ok: true; readonly id: string; readonly updated: boolean; readonly message: string; readonly commit?: string }> {
-  const manifest = await readAppManifest(id)
-  const remote = manifest.remote
-  if (remote === undefined) throw new Error(`外部应用 ${id} 没有远程仓库，无法更新`)
-  const latestCommit = await remoteLatest(remote.url, remote.ref)
-  if (latestCommit === remote.commit) {
-    return { ok: true, id, updated: false, message: `外部应用 ${id} 已是最新` }
-  }
-  const wasRunning = manifest.pid !== undefined && appIsRunning(manifest.pid)
-  if (wasRunning) await stopExternalApp(id)
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-app-update-'))
-  try {
-    await cloneFromGitHub(remote.url, remote.ref === 'HEAD' ? undefined : remote.ref, tmp)
-    const root = await locateAppRoot(tmp)
-    await rm(appCodeDirOf(id), { recursive: true, force: true })
-    await prepareAppCode(appCodeDirOf(id), root, manifest.setup ?? [], manifest.skipBuild === true)
-    const next: AppManifest = {
-      ...manifest,
-      pid: undefined,
-      startedAt: undefined,
-      remote: { ...remote, commit: latestCommit },
-      installedAt: Date.now(),
-    }
-    await writeAppManifest(next)
-    await appAudit('update', id, { commit: latestCommit })
-  } finally {
-    await rm(tmp, { recursive: true, force: true })
-  }
-  if (wasRunning) await startExternalApp(ctx, id)
-  return { ok: true, id, updated: true, message: `外部应用 ${id} 已更新`, commit: latestCommit }
-}
-
-/** Install one plugin from a prepared root directory. */
 async function preparePluginFiles(
   root: string,
   target: string,
@@ -3335,6 +2965,101 @@ export function apply(ctx: PanelContext): void {
           })
           return
         }
+        // r6：配置注入后端面——卡片枚举 / 读写 / 整 profile 导入导出。
+        if (method === 'GET' && path === '/api/mygo/config-cards') {
+          json(200, { ok: true, cards: await collectConfigCards(ctx) })
+          return
+        }
+        if (method === 'GET' && path === '/api/mygo/config') {
+          const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+          const id = query.get('id') ?? ''
+          const kind = query.get('kind') ?? ''
+          if (id === '') {
+            json(400, { ok: false, error: 'config 读取需要 id 参数' })
+            return
+          }
+          const rowId = query.get('rowId') ?? undefined
+          json(200, { ok: true, id, kind, config: await readPluginConfig(ctx, id, kind, rowId) })
+          return
+        }
+        if (method === 'PUT' && path === '/api/mygo/config') {
+          const body = JSON.parse(await readBody(req)) as {
+            readonly id?: string
+            readonly kind?: string
+            readonly rowId?: string
+            readonly config?: unknown
+          }
+          if (body.id === undefined || typeof body.config !== 'object' || body.config === null || Array.isArray(body.config)) {
+            json(400, { ok: false, error: 'config 写入需要 id 与对象形态的 config' })
+            return
+          }
+          const config = body.config as Record<string, unknown>
+          if (body.kind === 'bridge') {
+            await ctx.pluginManager.updateConfig(body.id, config)
+            await syncBridgeRows({ [body.id]: ctx.pluginManager.configOf(body.id) })
+            json(200, { ok: true, id: body.id, kind: 'bridge', message: `插件 ${body.id} 配置已更新（HMR 生效）` })
+            return
+          }
+          const rowId = body.rowId ?? await rowIdOfBundleMember(
+            body.id,
+            ctx.pluginManager.bundleList().find(member => member.id === body.id)?.packageName,
+          )
+          const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), rowId, config)
+          if (!outcome.ok) {
+            json(400, { ok: false, error: outcome.error })
+            return
+          }
+          json(200, {
+            ok: true,
+            id: body.id,
+            kind: 'bundle',
+            rowId,
+            message: `插件 ${body.id} 配置已写入 profile patch 层（宿主 watcher 重载生效）`,
+          })
+          return
+        }
+        if (method === 'GET' && path === '/api/mygo/config-export') {
+          const configs = await exportProfileConfigs()
+          json(200, buildConfigExport(panelProfile(), configs, new Date().toISOString()))
+          return
+        }
+        if (method === 'PUT' && path === '/api/mygo/config-import') {
+          const parsed = parseConfigImport(JSON.parse(await readBody(req)))
+          if (!parsed.ok) {
+            json(400, { ok: false, error: parsed.error })
+            return
+          }
+          const patchIds = new Set(listPatchRowIds(readProfilePatchText(HOME_ROOT, panelProfile())))
+          const cardIds = new Set((await collectConfigCards(ctx)).map(card => card.id))
+          const bridgeIds = new Set(ctx.pluginManager.plugins().map(plugin => plugin.id))
+          const partition = partitionImportTargets(parsed.configs, new Set([...patchIds, ...cardIds, ...bridgeIds]))
+          const applied: string[] = []
+          const failures: { readonly id: string; readonly reason: string }[] = [...partition.rejected]
+          for (const id of partition.accepted) {
+            try {
+              if (bridgeIds.has(id)) {
+                await ctx.pluginManager.updateConfig(id, parsed.configs[id])
+                applied.push(id)
+                continue
+              }
+              const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), id, parsed.configs[id] as Record<string, unknown>)
+              if (outcome.ok) applied.push(id)
+              else failures.push({ id, reason: outcome.error ?? '写入失败' })
+            } catch (error) {
+              failures.push({ id, reason: error instanceof Error ? error.message : String(error) })
+            }
+          }
+          await syncBridgeRows()
+          json(failures.length === 0 ? 200 : 400, {
+            ok: failures.length === 0,
+            applied,
+            rejected: failures,
+            message: failures.length === 0
+              ? `已导入 ${applied.length} 个插件的配置（bridge 经 HMR、bundle 经 patch watcher 生效）`
+              : `${failures.length} 个 id 导入失败`,
+          })
+          return
+        }
         if (method === 'POST' && path === '/api/mygo/bom/check') {
           const body = JSON.parse(await readBody(req)) as { readonly target?: string }
           const report = await ctx.pluginManager.bomCheck(body.target === undefined ? {} : { target: body.target })
@@ -3433,88 +3158,11 @@ export function apply(ctx: PanelContext): void {
           })
           return
         }
-        if (method === 'GET' && (path === '/api/mygo/apps' || path === '/api/mygo/apps/')) {
-          const apps = (await listExternalApps()).map(app => ({
-            id: app.id,
-            kind: app.kind,
-            startCommand: app.startCommand,
-            sandbox: app.sandbox,
-            syncUninstall: app.syncUninstall,
-            running: app.pid !== undefined && appIsRunning(app.pid),
-            processOwned: app.pid !== undefined,
-          }))
-          json(200, { ok: true, apps })
-          return
-        }
-        if (method === 'POST' && path === '/api/mygo/apps/install') {
-          const body = JSON.parse(await readBody(req)) as AppInstallRequest
-          const sandbox = body.sandbox === 'workspace' ? 'workspace' : 'none'
-          const setup = Array.isArray(body.setup)
-            ? body.setup.filter((item): item is string => typeof item === 'string')
-            : []
-          const startCommandOverride = typeof body.startCommand === 'string' && body.startCommand.trim() !== ''
-            ? body.startCommand.trim()
-            : undefined
-          const skipBuild = body.skipBuild === true
-          if (body.method === 'github') {
-            const url = body.url?.trim()
-            if (url === undefined || url.length === 0) throw new Error('缺少 GitHub 仓库地址')
-            const tmp = await mkdtemp(join(tmpdir(), 'dsh-app-install-'))
-            try {
-              await cloneFromGitHub(url, body.ref, tmp)
-              const root = await locateAppRoot(tmp)
-              const commit = await gitHeadOf(tmp)
-              const remote: RemoteRef = { url, ref: body.ref?.trim() || 'HEAD', commit }
-              json(200, await installAppFromRoot(root, 'github', url, sandbox, setup, startCommandOverride, skipBuild, remote))
-            } finally {
-              await rm(tmp, { recursive: true, force: true })
-            }
-            return
-          }
-          if (body.method === 'folder') {
-            const folder = body.path?.trim()
-            if (folder === undefined || folder.length === 0) throw new Error('缺少文件夹路径')
-            const root = resolve(folder)
-            if ((await stat(root)).isDirectory() !== true) throw new Error(`不是文件夹: ${root}`)
-            const appRoot = await locateAppRoot(root)
-            json(200, await installAppFromRoot(appRoot, 'folder', root, sandbox, setup, startCommandOverride, skipBuild))
-            return
-          }
-          if (body.method === 'archive') {
-            const file = body.path?.trim()
-            if (file === undefined || file.length === 0) throw new Error('缺少压缩包路径')
-            const archive = resolve(file)
-            if ((await stat(archive)).isFile() !== true) throw new Error(`不是文件: ${archive}`)
-            const tmp = await mkdtemp(join(tmpdir(), 'dsh-app-install-'))
-            try {
-              await extractArchive(archive, tmp)
-              const root = await locateAppRoot(tmp)
-              json(200, await installAppFromRoot(root, 'archive', archive, sandbox, setup, startCommandOverride, skipBuild))
-            } finally {
-              await rm(tmp, { recursive: true, force: true })
-            }
-            return
-          }
-          throw new Error('method 必须是 github / folder / archive')
-        }
-        const appMatch = /^\/api\/mygo\/apps\/([^/]+)\/(start|stop|uninstall)$/.exec(path)
-        if (method === 'POST' && appMatch !== null) {
-          const id = appMatch[1]
-          const action = appMatch[2]
-          if (action === 'start') {
-            json(200, await startExternalApp(ctx, id))
-          } else if (action === 'stop') {
-            json(200, await stopExternalApp(id))
-          } else {
-            json(200, await uninstallExternalApp(id))
-          }
-          return
-        }
         if (method === 'GET' && (path === '/api/mygo/updates' || path === '/api/mygo/updates/')) {
           json(200, { ok: true, updates: await listUpdates() })
           return
         }
-        const updateMatch = /^\/api\/mygo\/updates\/(plugins|apps|mygo)(?:\/([^/]+))?$/.exec(path)
+        const updateMatch = /^\/api\/mygo\/updates\/(plugins|mygo)(?:\/([^/]+))?$/.exec(path)
         if (method === 'POST' && updateMatch !== null) {
           const kind = updateMatch[1]
           if (kind === 'mygo') {
@@ -3534,9 +3182,8 @@ export function apply(ctx: PanelContext): void {
           }
           const id = updateMatch[2]
           if (id === undefined) throw new Error('缺少更新目标 id')
-          json(200, kind === 'plugins'
-            ? await updatePluginFromRemote(ctx, id)
-            : await updateAppFromRemote(ctx, id))
+          if (kind !== 'plugins') throw new Error(`不支持的更新目标类型：${kind}`)
+          json(200, await updatePluginFromRemote(ctx, id))
           return
         }
         const match = /^\/api\/mygo\/plugins\/([^/]+)\/(enable|disable|uninstall)$/.exec(path)
@@ -3556,13 +3203,17 @@ export function apply(ctx: PanelContext): void {
               }
               await ctx.pluginManager.bundleSetEnabled(id, false, force)
             } else {
-              await ctx.pluginManager.bundleUninstall(id)
+              // r6 卸载路由修正：bundle 轨走 profile 执行面（见 routeBundleUninstall）。
+              let force = false
+              try {
+                const body = JSON.parse(await readBody(req)) as { readonly force?: unknown }
+                force = body.force === true
+              } catch {
+                // no body: keep the default
+              }
+              const outcome = await routeBundleUninstall(ctx, id, force)
+              json(outcome.ok ? 200 : 400, outcome)
             }
-            json(200, {
-              ok: true,
-              id,
-              message: action === 'enable' ? '插件已启用' : action === 'disable' ? '插件已停用' : '插件已卸载',
-            })
             return
           }
           let force = false
