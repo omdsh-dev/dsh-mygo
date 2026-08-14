@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import css from './Panel.module.css'
+import {
+  ConfigFieldEditor,
+  defaultValueOf,
+  editableOf,
+  isPlainObject,
+  type ConfigFieldShape,
+} from './ConfigFields'
+export type { ConfigFieldShape } from './ConfigFields'
 
 export interface MygoPluginRow {
   readonly id: string
@@ -11,19 +19,9 @@ export interface MygoPluginRow {
   readonly hostConflicts?: readonly string[]
 }
 
-export interface MygoAppRow {
-  readonly id: string
-  readonly kind: 'external-app'
-  readonly startCommand: string
-  readonly sandbox: 'none' | 'workspace'
-  readonly syncUninstall: false
-  readonly running: boolean
-  readonly processOwned: boolean
-}
-
 export interface RemoteUpdateRow {
   readonly id: string
-  readonly kind: 'plugin' | 'app' | 'mygo'
+  readonly kind: 'plugin' | 'mygo'
   readonly url: string
   readonly ref: string
   readonly currentCommit: string
@@ -32,31 +30,12 @@ export interface RemoteUpdateRow {
   readonly error?: string
 }
 
-/** One configurable field surfaced by the panel (mirrors the server shape). */
-export interface ConfigFieldShape {
-  readonly name: string
-  readonly type: string
-  readonly required: boolean
-  readonly description?: string
-  readonly role?: string
-  readonly extra?: unknown
-  readonly min?: number
-  readonly max?: number
-  readonly step?: number
-  readonly pattern?: string
-  readonly default?: unknown
-  readonly literal?: unknown
-  readonly enumValues?: readonly unknown[]
-  readonly children?: readonly ConfigFieldShape[]
-}
-
 interface ApiResult {
   readonly ok: boolean
   readonly error?: string
   readonly details?: Readonly<Record<string, unknown>>
   readonly message?: string
   readonly plugins?: readonly MygoPluginRow[]
-  readonly apps?: readonly MygoAppRow[]
   readonly updates?: readonly RemoteUpdateRow[]
   readonly plan?: PlanShape
   readonly id?: string
@@ -112,48 +91,6 @@ interface ConfigPanelState {
   readonly notice?: string
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** Starter value for one field (schema default first, then type placeholder). */
-function defaultValueOf(field: ConfigFieldShape): unknown {
-  if (field.default !== undefined) return field.default
-  switch (field.type) {
-    case 'string':
-      return ''
-    case 'number':
-    case 'integer':
-      return 0
-    case 'boolean':
-      return false
-    case 'const':
-      return field.literal
-    case 'union':
-      return field.enumValues?.[0]
-    case 'array':
-      return []
-    case 'object': {
-      const out: Record<string, unknown> = {}
-      for (const child of field.children ?? []) out[child.name] = defaultValueOf(child)
-      return out
-    }
-    default:
-      return undefined
-  }
-}
-
-/** Current value merged with schema defaults, one level per field. */
-function editableOf(field: ConfigFieldShape, current: unknown): unknown {
-  if (field.type === 'object') {
-    const base = isPlainObject(current) ? current : {}
-    const out: Record<string, unknown> = {}
-    for (const child of field.children ?? []) out[child.name] = editableOf(child, base[child.name])
-    return out
-  }
-  return current === undefined ? defaultValueOf(field) : current
-}
-
 /** One config-helper chat message. */
 interface HelperMessage {
   readonly role: 'user' | 'assistant'
@@ -204,133 +141,12 @@ const STATUS_LABEL: Record<string, string> = {
   shadowed: '遮蔽',
 }
 
-/** Schemastery-style field editor: scalar controls + nested object groups. */
-function ConfigFieldEditor(props: {
-  readonly field: ConfigFieldShape
-  readonly value: unknown
-  readonly onChange: (value: unknown) => void
-}): JSX.Element {
-  const { field, value, onChange } = props
-  const setRaw = (raw: string): void => {
-    if (field.type === 'number' || field.type === 'integer') {
-      const parsed = raw === '' ? 0 : Number(raw)
-      onChange(Number.isFinite(parsed) ? parsed : 0)
-    } else if (field.type === 'boolean') {
-      onChange(raw === 'true')
-    } else {
-      onChange(raw)
-    }
-  }
-  let control: JSX.Element
-  if (field.type === 'object') {
-    control = (
-      <div className={css.configFields}>
-        {(field.children ?? []).map(child => (
-          <ConfigFieldEditor
-            key={child.name}
-            field={child}
-            value={isPlainObject(value) ? value[child.name] : defaultValueOf(child)}
-            onChange={(next) => {
-              const base = isPlainObject(value) ? { ...value } : {}
-              onChange({ ...base, [child.name]: next })
-            }}
-          />
-        ))}
-      </div>
-    )
-  } else if (field.type === 'boolean') {
-    control = (
-      <input
-        className={css.input}
-        type="checkbox"
-        checked={value === true}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-    )
-  } else if (field.type === 'number' || field.type === 'integer') {
-    control = (
-      <input
-        className={css.input}
-        type="number"
-        value={typeof value === 'number' ? value : 0}
-        min={field.min}
-        max={field.max}
-        step={field.step}
-        onChange={(event) => setRaw(event.target.value)}
-      />
-    )
-  } else if (field.type === 'const') {
-    control = <span className={css.configFieldType}>{String(field.literal ?? '')}</span>
-  } else if (field.role === 'select' || (field.type === 'union' && (field.enumValues ?? []).length > 0)) {
-    const extraOptions = (field.extra as { readonly options?: readonly unknown[] } | undefined)?.options
-    const options = extraOptions ?? field.enumValues ?? []
-    control = (
-      <select
-        className={css.input}
-        value={typeof value === 'string' ? value : String(value ?? '')}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map((option, index) => (
-          <option key={index} value={String(option)}>{String(option)}</option>
-        ))}
-      </select>
-    )
-  } else if (field.role === 'textarea' || field.type === 'array' || field.type === 'dict') {
-    control = (
-      <textarea
-        className={css.configTextarea}
-        rows={3}
-        spellCheck={false}
-        defaultValue={typeof value === 'string' ? value : JSON.stringify(value ?? '', null, 2)}
-        onBlur={(event) => {
-          const raw = event.target.value
-          try {
-            onChange(field.type === 'string' ? raw : JSON.parse(raw))
-          } catch {
-            onChange(field.type === 'string' ? raw : (value ?? ''))
-          }
-        }}
-      />
-    )
-  } else {
-    control = (
-      <input
-        className={css.input}
-        type={field.role === 'color' ? 'color' : 'text'}
-        value={typeof value === 'string' ? value : String(value ?? '')}
-        pattern={field.pattern}
-        onChange={(event) => setRaw(event.target.value)}
-      />
-    )
-  }
-  return (
-    <div className={css.configField}>
-      <div className={css.row}>
-        <span className={css.configFieldName}>{field.name}</span>
-        <span className={css.configFieldType}>
-          {field.type}{field.required ? ' · 必填' : ' · 可选'}
-          {field.literal !== undefined ? ` · ${String(field.literal)}` : ''}
-        </span>
-        {field.default !== undefined && (
-          <span className={css.configFieldDefault}>默认 {JSON.stringify(field.default)}</span>
-        )}
-      </div>
-      {field.description !== undefined && <div className={css.inlineText}>{field.description}</div>}
-      {control}
-    </div>
-  )
-}
-
 export function Panel(): JSX.Element {
   const [plugins, setPlugins] = useState<readonly MygoPluginRow[] | null>(null)
-  const [apps, setApps] = useState<readonly MygoAppRow[] | null>(null)
   const [error, setError] = useState<string | undefined>()
   const [errorDetails, setErrorDetails] = useState<Readonly<Record<string, unknown>> | undefined>()
   const [notice, setNotice] = useState<string | undefined>()
-  const [appError, setAppError] = useState<string | undefined>()
-  const [appNotice, setAppNotice] = useState<string | undefined>()
   const [busy, setBusy] = useState(false)
-  const [appBusy, setAppBusy] = useState(false)
   const [updates, setUpdates] = useState<readonly RemoteUpdateRow[] | null>(null)
   const [updatesBusy, setUpdatesBusy] = useState(false)
   const [updatesMessage, setUpdatesMessage] = useState<string | undefined>()
@@ -341,11 +157,6 @@ export function Panel(): JSX.Element {
   const [path, setPath] = useState('')
   const [configText, setConfigText] = useState('')
   const [installDeps, setInstallDeps] = useState(false)
-  const [installAsApp, setInstallAsApp] = useState(false)
-  const [appSandbox, setAppSandbox] = useState<'none' | 'workspace'>('none')
-  const [setupText, setSetupText] = useState('')
-  const [startCommandText, setStartCommandText] = useState('')
-  const [skipBuild, setSkipBuild] = useState(false)
   const [installing, setInstalling] = useState(false)
   const [pending, setPending] = useState<PendingAction | undefined>()
   const [configPanel, setConfigPanel] = useState<ConfigPanelState | undefined>()
@@ -381,13 +192,6 @@ export function Panel(): JSX.Element {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
-    try {
-      const result = await api<ApiResult>('/apps')
-      setApps(result.apps ?? [])
-      setAppError(undefined)
-    } catch (caught) {
-      setAppError(caught instanceof Error ? caught.message : String(caught))
-    }
   }, [])
 
   const checkUpdates = useCallback(async (): Promise<void> => {
@@ -408,7 +212,7 @@ export function Panel(): JSX.Element {
     try {
       const endpoint = row.kind === 'mygo'
         ? '/updates/mygo'
-        : `/updates/${row.kind === 'plugin' ? 'plugins' : 'apps'}/${row.id}`
+        : `/updates/plugins/${row.id}`
       const result = await api<ApiResult>(endpoint, 'POST')
       setUpdatesMessage(result.message)
       await refresh()
@@ -460,7 +264,11 @@ export function Panel(): JSX.Element {
     setBusy(true)
     try {
       if (current.action === 'uninstall') {
-        const result = await api<ApiResult>(`/plugins/${current.id}/uninstall`, 'POST')
+        const result = await api<ApiResult>(`/plugins/${current.id}/uninstall`, {
+          method: 'POST',
+          // dsh-mygo 核心卸载需要 force（管理面中断确认；API 守卫配套）。
+          ...(current.id === 'dsh-mygo' ? { body: { force: true } } : {}),
+        })
         setNotice(result.message)
       } else if (current.action === 'disable') {
         const result = await api<ApiResult>(`/plugins/${current.id}/disable`, {
@@ -670,38 +478,6 @@ export function Panel(): JSX.Element {
     })()
   }, [helperOpen, startHelperPolling])
 
-  const appAct = useCallback(async (id: string, action: 'start' | 'stop'): Promise<void> => {
-    setAppBusy(true)
-    try {
-      const result = await api<ApiResult>(`/apps/${id}/${action}`, 'POST')
-      setAppNotice(result.message)
-      setAppError(undefined)
-      await refresh()
-    } catch (caught) {
-      setAppError(caught instanceof Error ? caught.message : String(caught))
-    } finally {
-      setAppBusy(false)
-    }
-  }, [refresh])
-
-  const appUninstall = useCallback(async (row: MygoAppRow): Promise<void> => {
-    const confirmed = window.confirm(
-      `卸载外部应用 ${row.id} 只删除安装文件，不会保证停止进程或清理数据。确定继续？`,
-    )
-    if (!confirmed) return
-    setAppBusy(true)
-    try {
-      const result = await api<ApiResult>(`/apps/${row.id}/uninstall`, 'POST')
-      setAppNotice(result.message)
-      setAppError(undefined)
-      await refresh()
-    } catch (caught) {
-      setAppError(caught instanceof Error ? caught.message : String(caught))
-    } finally {
-      setAppBusy(false)
-    }
-  }, [refresh])
-
   const install = useCallback(async (): Promise<void> => {
     setInstalling(true)
     try {
@@ -709,19 +485,12 @@ export function Panel(): JSX.Element {
       if (configText.trim() !== '') {
         config = JSON.parse(configText)
       }
-      const endpoint = installAsApp ? '/api/mygo/apps/install' : '/api/mygo/install'
-      const setup = setupText.split('&&').map(part => part.trim()).filter(part => part.length > 0)
-      const startCommand = startCommandText.trim() === '' ? undefined : startCommandText.trim()
-      const payload = installAsApp
-        ? method === 'github'
-          ? { method, url, ref, sandbox: appSandbox, setup, startCommand, skipBuild }
-          : { method, path, sandbox: appSandbox, setup, startCommand, skipBuild }
-        : method === 'github'
-          ? { method, url, ref, config, installDeps }
-          : method === 'bundle'
-            ? { method, spec }
-            : { method, path, config, installDeps }
-      if (!installAsApp && method === 'bundle') {
+      const payload = method === 'github'
+        ? { method, url, ref, config, installDeps }
+        : method === 'bundle'
+          ? { method, spec }
+          : { method, path, config, installDeps }
+      if (method === 'bundle') {
         const result = await api<ApiResult & { readonly hostConflicts?: readonly string[] }>('/bundles/install', {
           method: 'POST',
           body: payload,
@@ -745,7 +514,7 @@ export function Panel(): JSX.Element {
         await refresh()
         return
       }
-      if (!installAsApp) {
+      {
         const preview = await api<ApiResult>('/install-plan', {
           method: 'POST',
           body: payload,
@@ -777,51 +546,19 @@ export function Panel(): JSX.Element {
           setPath('')
           setConfigText('')
           setInstallDeps(false)
-          setSetupText('')
-          setStartCommandText('')
-          setSkipBuild(false)
           await refresh()
           return
         }
         setInstallPending({ id: preview.id ?? '', plan, payload: payload as Record<string, unknown> })
         return
       }
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const data = (await res.json()) as ApiResult & { readonly id?: string }
-      if (!data.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-      if (installAsApp) {
-        setAppNotice(data.message ?? '外部应用已安装')
-        setAppError(undefined)
-      } else {
-        setNotice(data.message ?? '插件已安装')
-        setError(undefined)
-      }
-      setUrl('')
-      setRef('')
-      setPath('')
-      setConfigText('')
-      setInstallDeps(false)
-      setInstallAsApp(false)
-      setSetupText('')
-      setStartCommandText('')
-      setSkipBuild(false)
-      await refresh()
     } catch (caught) {
-      if (installAsApp) {
-        setAppNotice(undefined)
-        setAppError(caught instanceof Error ? caught.message : String(caught))
-      } else {
-        setNotice(undefined)
-        setError(caught instanceof Error ? caught.message : String(caught))
-      }
+      setNotice(undefined)
+      setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
       setInstalling(false)
     }
-  }, [method, url, ref, path, configText, installDeps, installAsApp, appSandbox, setupText, startCommandText, skipBuild, refresh])
+  }, [method, url, ref, path, configText, installDeps, refresh])
 
   const confirmInstall = useCallback(async (): Promise<void> => {
     if (installPending === undefined) return
@@ -844,9 +581,6 @@ export function Panel(): JSX.Element {
       setPath('')
       setConfigText('')
       setInstallDeps(false)
-      setSetupText('')
-      setStartCommandText('')
-      setSkipBuild(false)
       await refresh()
     } catch (caught) {
       setNotice(undefined)
@@ -960,58 +694,6 @@ export function Panel(): JSX.Element {
           />
           <span>自动安装依赖并构建（npm install + npm run build）</span>
         </label>
-        <label className={css.depsRow}>
-          <input
-            type="checkbox"
-            checked={installAsApp}
-            disabled={installing}
-            onChange={event => setInstallAsApp(event.target.checked)}
-          />
-          <span>安装为外部应用（非 Cordis 插件，独立进程）</span>
-        </label>
-        {installAsApp && (
-          <>
-            <label className={css.depsRow}>
-              <input
-                type="checkbox"
-                checked={skipBuild}
-                disabled={installing}
-                onChange={event => setSkipBuild(event.target.checked)}
-              />
-              <span>跳过构建（构建不稳定或使用 dev 模式时勾选）</span>
-            </label>
-            <label className={css.depsRow}>
-              <span>沙箱：</span>
-              <select
-                className={css.input}
-                value={appSandbox}
-                disabled={installing}
-                onChange={event => setAppSandbox(event.target.value as 'none' | 'workspace')}
-              >
-                <option value="none">none（与手动运行一致）</option>
-                <option value="workspace">workspace（仅应用目录可写）</option>
-              </select>
-            </label>
-            <div className={css.row}>
-              <input
-                className={css.input}
-                placeholder="安装前准备命令（可选，&& 分隔），如 node scripts/build-db.ts"
-                value={setupText}
-                disabled={installing}
-                onChange={event => setSetupText(event.target.value)}
-              />
-            </div>
-            <div className={css.row}>
-              <input
-                className={css.input}
-                placeholder="启动命令（可选，默认 start/dev 脚本），如 python3 -m http.server 3000 --directory out"
-                value={startCommandText}
-                disabled={installing}
-                onChange={event => setStartCommandText(event.target.value)}
-              />
-            </div>
-          </>
-        )}
         <div className={css.row}>
           <button className={css.btn} disabled={installing} onClick={() => void (installPending === undefined ? install() : confirmInstall())}>
             {installing ? '安装中…' : installPending === undefined ? '安装' : '确认安装'}
@@ -1188,19 +870,21 @@ export function Panel(): JSX.Element {
                         助手
                       </button>
                     )}
-                    <button
-                      className={`${css.btn} ${css.btnDanger}`}
-                      disabled={busy}
-                      onClick={() => {
-                        if (pending?.id === plugin.id && pending.action === 'uninstall') {
-                          void confirmPending()
-                        } else {
-                          void act(plugin.id, 'uninstall')
-                        }
-                      }}
-                    >
-                      {pending?.id === plugin.id && pending.action === 'uninstall' ? '确认卸载' : '卸载'}
-                    </button>
+                    {plugin.id !== 'dsh-mygo-ext-panel' && (
+                      <button
+                        className={`${css.btn} ${css.btnDanger}`}
+                        disabled={busy}
+                        onClick={() => {
+                          if (pending?.id === plugin.id && pending.action === 'uninstall') {
+                            void confirmPending()
+                          } else {
+                            void act(plugin.id, 'uninstall')
+                          }
+                        }}
+                      >
+                        {pending?.id === plugin.id && pending.action === 'uninstall' ? '确认卸载' : '卸载'}
+                      </button>
+                    )}
                   </div>
                 </div>
                 {pending?.id === plugin.id && (
@@ -1302,44 +986,6 @@ export function Panel(): JSX.Element {
               </div>
             ))}
       <div className={css.head}>
-        <div className={css.title}>外部应用</div>
-        {appNotice !== undefined && <div className={css.status}>{appNotice}</div>}
-        {appError !== undefined && <div className={css.statusError}>{appError}</div>}
-      </div>
-      {apps === null
-        ? <div className={css.status}>加载中…</div>
-        : apps.length === 0
-          ? <div className={css.status}>暂无外部应用</div>
-          : apps.map((app) => (
-              <div key={app.id} className={css.item}>
-                <div className={css.itemBody}>
-                  <div className={css.itemId}>{app.id}</div>
-                  <div className={css.itemMeta}>
-                    外部应用 · {app.startCommand} · 沙箱 {app.sandbox} · 卸载不同步
-                  </div>
-                </div>
-                <div className={css.itemActions}>
-                  <span className={app.running ? `${css.pill} ${css.pillOn}` : css.pill}>
-                    {app.running ? '运行中' : '已停止'}
-                  </span>
-                  <button
-                    className={`${css.btn} ${css.btnGhost}`}
-                    disabled={appBusy}
-                    onClick={() => void appAct(app.id, app.running ? 'stop' : 'start')}
-                  >
-                    {app.running ? '停止' : '启动'}
-                  </button>
-                  <button
-                    className={`${css.btn} ${css.btnDanger}`}
-                    disabled={appBusy}
-                    onClick={() => void appUninstall(app)}
-                  >
-                    卸载
-                  </button>
-                </div>
-              </div>
-            ))}
-      <div className={css.head}>
         <div className={css.title}>远程更新</div>
         {updatesMessage !== undefined && <div className={css.status}>{updatesMessage}</div>}
       </div>
@@ -1351,7 +997,7 @@ export function Panel(): JSX.Element {
                 <div className={css.itemBody}>
                   <div className={css.itemId}>{row.id}</div>
                   <div className={css.itemMeta}>
-                    {row.kind === 'plugin' ? '插件' : row.kind === 'app' ? '外部应用' : 'mygo 自身'} · {row.currentCommit.slice(0, 8)}
+                    {row.kind === 'plugin' ? '插件' : 'mygo 自身'} · {row.currentCommit.slice(0, 8)}
                     {row.latestCommit !== undefined && ` → ${row.latestCommit.slice(0, 8)}`}
                   </div>
                 </div>

@@ -16,6 +16,7 @@ export default {
     alias: {
       '@r05en1cu/dsh-mygo': here('../../cordis/mygo/src/index.ts'),
       '@r05en1cu/dsh-mygo-api': here('../../core/mygo-api/src/index.ts'),
+      '@r05en1cu/dsh-mygo-loader-profile': here('../../loaders/mygo-loader-profile/src/index.ts'),
     },
   },
   test: {
