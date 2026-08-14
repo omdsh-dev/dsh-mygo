@@ -117,9 +117,9 @@ const ROW_MARKER_START = '# --- dsh-mygo-panel managed installs (generated; do n
 const ROW_MARKER_END = '# --- end dsh-mygo-panel managed installs ---'
 
 export const name = 'dsh-mygo-panel'
-export const inject = ['pluginManager', 'httpServer']
+export const inject = ['pluginManager', 'webServer']
 
-interface HttpServerLike {
+interface WebServerLike {
   register(route: {
     kind?: 'exact' | 'prefix'
     path: string
@@ -129,7 +129,7 @@ interface HttpServerLike {
 
 type PanelContext = Context & {
   readonly pluginManager: PluginManager
-  readonly httpServer: HttpServerLike
+  readonly webServer: WebServerLike
   readonly sandbox?: {
     confine(
       argv: readonly string[],
@@ -3161,7 +3161,7 @@ export function apply(ctx: PanelContext): void {
   })().catch((error: unknown) => {
     console.error('[dsh-mygo-panel] startup sync failed:', error)
   })
-  ctx.httpServer.register({
+  ctx.webServer.register({
     kind: 'prefix',
     path: '/api/mygo',
     handler: async (reqRaw: unknown, resRaw: unknown): Promise<void> => {

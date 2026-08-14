@@ -1,6 +1,6 @@
 {
   "name": "@r05en1cu/dsh-mygo-ext-panel",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0-rc.2",
   "description": "MyGO managed-plugin panel for the dsh web settings page (settings.section slot + /api/mygo/* routes)",
   "author": "r05En1cU",
   "maintainers": [

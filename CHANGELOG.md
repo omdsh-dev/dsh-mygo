@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0-rc.2（2026-08-14）— 面板 webServer 服务名适配
+
+- `@r05en1cu/dsh-mygo-ext-panel`：inject/上下文从 0811 时代的 `httpServer`
+  迁移到 rc6 宿主的 `webServer`（dsh-host-webserver 提供；register 路由形状
+  兼容），修复面板在公开版宿主 pending（waiting for service: httpServer）
+  导致整树启动失败。真实 web profile 冒烟：HTTP 200 + /api/mygo/plugins
+  返回治理视图。
+
 ## 0.2.0-rc.1（2026-08-14）— 面板 bundle 声明修复
 
 - `@r05en1cu/dsh-mygo-ext-panel` 补 `dsh.bundle.patch` 声明与同包

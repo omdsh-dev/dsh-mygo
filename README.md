@@ -4,7 +4,7 @@
 > 名字致敬《BanG Dream! It's MyGO!!!!!》——插件们各怀心思，但总有一个地方
 > 会把它们聚在一起。
 
-**版本：0.2.0-rc.1（next 线）** · 包名统一 `@r05en1cu/dsh-*` · author `r05En1cU` ·
+**版本：0.2.0-rc.2（next 线）** · 包名统一 `@r05en1cu/dsh-*` · author `r05En1cU` ·
 发布 tag `next`
 
 ## 这是什么
