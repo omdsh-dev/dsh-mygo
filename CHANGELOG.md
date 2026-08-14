@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased · next 分支 P7（2026-08-14）— 0812 机会面落地 + 遗留收口
+
+### 机会面五项
+
+- **pnpm 构建政策双门槛一键放行**（loader-profile）：runPnpm 输出捕获 +
+  拦截检测（ERR_PNPM_IGNORED_BUILDS / strictDepBuilds /
+  blockExoticSubdeps）→ `ensureProfilePnpmSettings` 一键写 profile
+  pnpm-workspace.yaml 白名单（覆盖 pnpm 占位值，幂等）→ 重试 + rebuild
+  实际执行构建脚本；回执 `allowedBuilds` 透出 CLI。e2e 用 strictDepBuilds
+  + tarball postinstall 离线确定性拦截坐实（含脚本实际执行断言）。
+- **`mygo config <id> [--set '<json>']`**：patch 层行 config 整行读取/
+  浅合并写回（文本级行定位保留注释与行序 + js-yaml 子块解析），消除
+  patch 不 deep-merge 的手工重述。
+- **bundle 解析预检**（governance `checkBundleResolution`）：服务 init
+  对 dependencies 内 bundle 行做 profile 目录解析预检，拼错/缺失响亮
+  报错点名（不等宿主晚期失败）。
+- **pack 离线分发链路用例**（pack-offline.spec）：导出 → 共享缓存 →
+  hardlink 导入 → 离线还原 → 事实对账 → 二次导入缓存命中。
+- **热重载状态保持**：评估结论「无需 host 缝」——cordis fiber.update
+  的 internal/update 瀑布是插件层接缝；落地为 mygo 核心 helper
+  `preserveStateAcrossUpdate`（模块级暂存槽 + 回滚回补），真实 cordis
+  用例坐实；不产出 host patch。
+
+### 遗留收口六项
+
+- fine-epoch 定论：保持独立模块（模块头 TODO 改写为定论）。
+- F1 语料切到 fabric/packages/cordis-fabric（根载包遗留 lib 废弃）。
+- enableFabric 去重互斥：层内已有不受管 fabric 载体行时拒绝。
+- blockExoticSubdeps 按需写入并入双门槛一键放行。
+- InstanceRegistry 加 mkdir 自旋锁（2s 等待 / 30s 陈旧接管 / 超时
+  fail-open），P4 last-writer-wins 限制收窄。
+- mygo-rdb 归属定论：维持 ignore 裁决（不提交不打包），定位与收口
+  条件登记于 DEV-GUIDE §16.2。
+
 ## Unreleased · next 分支 P6（2026-08-14）— fabric 安装层 extension 化 + host 补丁提案收编
 
 ### extension 登记表（mygo 核心）

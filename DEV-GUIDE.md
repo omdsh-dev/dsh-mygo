@@ -76,6 +76,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `pack-cache.ts` | 跨实例只读共享缓存（P4：内容寻址，§13.3） | `cachePack`、`importCachedPack` |
 | `loader-adapters.ts` | LoaderAdapter 注册表（P5，§14.1） | `LoaderAdapterRegistry`、`BUILTIN_LOADER_ADAPTERS` |
 | `extensions.ts` | extension 登记表（P6，§15.1） | `ExtensionRegistry`、`extensionViews` |
+| `update-state.ts` | 热重载状态保持（P7-A5，§16.1） | `preserveStateAcrossUpdate` |
 | `capabilities.ts` | 能力面与配额（fs/vars/llm/exec/http/fetch） | `createPluginFs` 等 |
 | `session-reader.ts` | jsonl/rdb/sqlite 会话读取 | `JsonlSessionReader` 等 |
 | `sqlite-store.ts` / `persistence.ts` / `store.ts` | 注册表持久化与 `RegistryStore` 契约 | `SqliteRegistryStore`、`RegistryStore` |
@@ -279,7 +280,9 @@ plugin-template@2da8230 资产生成骨架，写盘前过
 B1 + `checkTemplateAlignment` 双校验（含 7 skills + lockfile，
 `verify:self-contained` 硬性要求）。P4 新增多实例接管命令
 `instances|adopt|clone`（不依赖管理器挂载，见 §13.4）；P5 新增
-`hub search|info|install|collections`（dsh-hub 市场面，见 §14.3）。
+`hub search|info|install|collections`（dsh-hub 市场面，见 §14.3）；
+P7 新增 `config <id> [--set '<json>']`（patch 层行 config 整行读写，
+见 §16.1-2）。
 
 > 已知宿主限制（P3 实测）：web profile 的 web-startup 参数解析器为严格
 > 模式，`dsh --profile web mygo ...` 的内层参数目前到不了 cmdlineArgs
@@ -342,9 +345,9 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 - 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
   `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-14 P6 后）：全量 75 文件 / 701 用例（mygo-api 6/39 +
-  mygo 56/586 + mygo-cli 8/36 + mygo-loader-profile 1/6 +
-  mygo-loader-hub 3/25 + mygo-ext-fabric 1/9；含 mygo-rdb 本地未提交
+- 计数口径（2026-08-14 P7 后）：全量 79 文件 / 716 用例（mygo-api 6/39 +
+  mygo 58/591 + mygo-cli 9/41 + mygo-loader-profile 2/10 +
+  mygo-loader-hub 3/25 + mygo-ext-fabric 1/10；含 mygo-rdb 本地未提交
   修正，见 docs/next 备忘录）；EB 套件 11 文件 / 13 用例。
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
   间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
@@ -389,8 +392,10 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
   既有值）/ `listInstances` / `unregisterInstance` / `isInstanceRegistered`；
   服务 init 自动登记当前实例（失败不阻断启动）；`ctx.pluginManager.instances()`
   为只读面。
-- 写入 = staging → rename 原子发布；并发登记为 last-writer-wins（登记处
-  只承载发现面，丢一次 lastSeenAt 不构成事实损失——已知限制）。
+- 写入 = staging → rename 原子发布；读-改-写经 mkdir 自旋锁互斥
+  （P7-B10：等待上限 2s，陈旧锁 30s 接管，超时 fail-open——登记处只
+  承载发现面，不允许残留锁砖掉启动；fail-open 窗口内仍是
+  last-writer-wins）。
 - 跨版本不共享可写状态：`dshVersion` 只是治理事实记录面（治理视图
   `GovernanceView.dshVersion` 同步记录），可写状态全部落在各实例 HOME 内。
 
@@ -558,7 +563,56 @@ patches/README.md 说明。
 > 模块 import）；P6 验收口径 = 受管块写入正确 + 提案 apply --check
 > 干净 + fabric 包自身测试在 fabric 仓内绿。
 
-## 16. 常见任务速查
+## 16. P7：0812 机会面落地与遗留收口
+
+### 16.1 机会面五项
+
+1. **git 安装双门槛一键化**（loader-profile face.ts）：pnpm 输出捕获 +
+   政策检测（`detectIgnoredBuildKeys` / `isBuildPolicyBlock` /
+   `isExoticSubdepBlock`）→ 治理层一键写 profile pnpm-workspace.yaml
+   （`ensureProfilePnpmSettings`：allowBuilds 键置 true，覆盖 pnpm 自追加
+   的占位值；blockExoticSubdeps 按需追加）→ 重试一次 + `pnpm rebuild`
+   实际执行构建脚本。对齐官方 plugin.ts:150-155 的引导语义，落地为
+   mygo 治理操作。回执 `allowedBuilds` 透出到 CLI 输出。
+2. **`mygo config <id>`**（cli src/config.ts）：patch 不 deep-merge 的
+   补救——文本级行定位（保留注释/行序）+ js-yaml 子块解析，`--set
+   '<json>'` 浅合并后写回整行 config。
+3. **模块解析失败早期响亮化**（governance.ts `checkBundleResolution`）：
+   服务 init 预检「dependencies 内的 bundle 行」能否从 profile 目录解析
+   （覆盖 profiles/node_modules 回退链），拼错/缺失直接抛错点名；
+   模板自带未进 dependencies 的行不预检。
+4. **pack 离线分发链路**（tests/package/pack-offline.spec.ts）：pack 导出
+   → P4 共享缓存（内容寻址）→ 目标实例 hardlink 导入 → installPluginPack
+   离线还原 → 事实文件逐条对账 → 第二次导入缓存命中，全离线用例坐实
+   「git 安装的 pack 替代路径」。
+5. **热重载状态保持**（mygo `src/update-state.ts`）：评估结论——**无需
+   host 缝**。cordis `fiber.update()` 重启前先跑 `internal/update` 瀑布
+   （官方注释明示 update hooks 可否决/替换重启），插件层 capture →
+   next() → restore 即交接状态；helper
+   `preserveStateAcrossUpdate(ctx, {key, capture, restore})` 收敛该模式
+   （重启失败回滚时暂存槽回补）。真实 cordis 用例坐实。
+
+### 16.2 遗留收口六项
+
+- **B6 fine-epoch 定论**：保持独立模块不并入 requires-gate（消费方不止
+  政策闸，lifecycle 同时持有注册表所有权；requires-gate 是纯求值面）。
+  模块头 TODO 已改写为定论。
+- **B7 F1 语料**：e2e corpus F1 从 fabric 根载包遗留 lib 切到
+  `fabric/packages/cordis-fabric`（包内 lib + node_modules 自包含），
+  versionOverride 钉 0.0.2 保持语料契约。
+- **B8 fabric 去重**：enableFabric 写块前检测层内不受管的 fabric 载体行
+  （`findStrayFabricRow`），命中即拒绝（重复插行互斥）。
+- **B9 blockExoticSubdeps**：并入 16.1-1 的一键放行（git 子依赖拦截检测
+  + 按需写 `blockExoticSubdeps: false`）。
+- **B10 InstanceRegistry 并发**：mkdir 自旋锁（等待上限 2s / 陈旧 30s
+  接管 / 超时 fail-open——登记处只是发现面，不允许残留锁砖掉启动）。
+  P4 的 last-writer-wins 已知限制随之收窄为 fail-open 窗口。
+- **B11 mygo-rdb 归属定论**：extension/mygo-rdb 维持用户既有 ignore
+  裁决（三件套永不提交、不打包）；定位 = 外部存储扩展的本地演进线，
+  收口条件 = 用户决定是否纳入主线（进 packages/extensions 并补三件套）
+  或拆独立仓。当前不进发布面、不进计数口径说明之外的任何承诺。
+
+## 17. 常见任务速查
 
 ```sh
 # 仓内全量 gates（无网拦截）
