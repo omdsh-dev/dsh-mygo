@@ -2,6 +2,15 @@
 
 ## 0.2.0-rc.3（2026-08-14）— 面板桥接同步升级路径安全加固
 
+- **planState 双账去重（追加，实机报错修复）**：`@r05en1cu/dsh-mygo`
+  作为 bundle 成员时成员 id 恰为管理器 id（dsh-mygo），与
+  managerDeclaration 重叠；桥接记录与 bundle 成员同 id 同理——
+  plan.ts assertUniqueIds 在 plan/enable/disable 时抛
+  「plan input has duplicate plugin id」。planState 与
+  compatibilitySet 改为按 id 去重：bundle 真相源覆盖 records 同 id
+  记录，管理器 id 由自描述兜底（provides/版本以运行体为准）。
+  bundle-rail.spec 新增 2 例（修复前复现同一报错，已对照验证）。
+
 - **fail-soft（真实事故修复）**：老安装形态遗留的失效桥接（陈旧 scope
   包名错位 / profile 链接缺失）此前会被面板启动同步重建成 patch 行，
   指向不可解析包 → 整个 dsh boot fail-loud 挂掉。现在写桥接行前逐行

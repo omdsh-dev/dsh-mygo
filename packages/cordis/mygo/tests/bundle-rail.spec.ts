@@ -385,3 +385,78 @@ describe('bundle rail unified graph', () => {
     }
   })
 })
+
+describe('rc.3 planState 去重（重复 id 修复）', () => {
+  function plugin(id: string): PluginDefinition {
+    return {
+      id,
+      version: '1.0.0',
+      kinds: ['fixture'],
+      requires: [],
+      provides: [],
+      permissions: { observe: [], transform: [], intercept: [], position: 'derived', claims: [] },
+      stateful: false,
+      swapPolicy: 'immediate',
+      config: z.object({}),
+      hooks: { activate: () => {} },
+    }
+  }
+
+  function source(id: string): PluginSource {
+    return { type: 'inline', code: id }
+  }
+
+  function engine(f: Fixture, definitions: Map<string, PluginDefinition>): LifecycleEngine {
+    const ctx = new Context()
+    const machine = new DispatchMachine(ctx, { vocabulary: new Map() })
+    machine.start()
+    return new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store: new InMemoryRegistryStore(),
+      config: resolvePluginManagerConfig({ swapTimeoutMs: 40, historyKeep: 2 }),
+      resolveSource: (source: PluginSource) => {
+        const definition = definitions.get(source.type === 'inline' ? source.code : '')
+        if (definition === undefined) return Promise.reject(new Error('missing'))
+        return Promise.resolve(definition)
+      },
+      bundleRail: f.rail,
+    })
+  }
+
+  it('管理器包同为 bundle 成员（id=dsh-mygo）时 plan/disable 不再抛 duplicate', async () => {
+    const f = fixture()
+    // @r05en1cu/dsh-mygo 的成员 id 恰为 MYGO_MANAGER_ID——bundle 真相源
+    // 与管理器自描述重叠（事故复现面）。
+    writeBundle(f, '@r05en1cu/dsh-mygo')
+    declareInstalled(f, '@r05en1cu/dsh-mygo', true)
+    const definitions = new Map([['alpha', plugin('alpha')]])
+    const eng = engine(f, definitions)
+    await eng.install(source('alpha'))
+    // 修复前：planOperation 的 assertUniqueIds 抛 plan input has duplicate plugin id dsh-mygo
+    const plan = await eng.plan({ op: 'disable', id: 'alpha' })
+    expect(plan.accepted).toBe(true)
+    await eng.disable('alpha')
+    expect(eng.plugins().find(handle => handle.id === 'alpha')?.status).toBe('disabled')
+    rmSync(f.dshHome, { recursive: true, force: true })
+    rmSync(f.checkout, { recursive: true, force: true })
+  })
+
+  it('桥接记录与 bundle 成员同 id：去重后 plan 面正常（bundle 真相源优先）', async () => {
+    const f = fixture()
+    writeBundle(f, '@test/alpha')
+    declareInstalled(f, '@test/alpha', true)
+    const definitions = new Map([['alpha', plugin('alpha')]])
+    const eng = engine(f, definitions)
+    // alpha 既是 bundle 成员（id 推导为 alpha）又是桥接安装记录
+    await eng.install(source('alpha'))
+    const plan = await eng.plan({ op: 'disable', id: 'alpha' })
+    expect(plan.accepted).toBe(true)
+    // bundle 停用后 plan 仍正常工作（同一 id 只计一份）
+    await eng.bundleSetEnabled('alpha', false, true)
+    const again = await eng.plan({ op: 'enable', id: 'alpha' })
+    expect(again.error?.message ?? '').not.toContain('duplicate plugin id')
+    rmSync(f.dshHome, { recursive: true, force: true })
+    rmSync(f.checkout, { recursive: true, force: true })
+  })
+})

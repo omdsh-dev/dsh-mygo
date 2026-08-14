@@ -2413,9 +2413,20 @@ export class LifecycleEngine {
       provides: [MYGO_MANAGER_CAPABILITY],
       enabled: true,
     }
+    // rc.3：与 planState 同口径去重（bundle 真相源覆盖 records 同 id；
+    // 管理器 id 由自描述兜底）。
+    const installed = new Map<string, CompatibilityPlugin>()
+    for (const plugin of records) {
+      if (plugin.id !== MYGO_MANAGER_ID) installed.set(plugin.id, plugin)
+    }
+    for (const plugin of bundlePlugins) {
+      if (plugin.id !== MYGO_MANAGER_ID) installed.set(plugin.id, plugin)
+    }
+    installed.set(MYGO_MANAGER_ID, managerMember)
+    const all = [...installed.values()]
     return {
-      enabled: [...records.filter(plugin => plugin.enabled === true), ...bundlePlugins.filter(plugin => plugin.enabled), managerMember],
-      installed: [...records, ...bundlePlugins, managerMember],
+      enabled: all.filter(plugin => plugin.enabled === true),
+      installed: all,
     }
   }
 
@@ -4013,13 +4024,28 @@ export class LifecycleEngine {
       origin: 'static',
       rail: 'bridge',
     }
+    // rc.3 去重（旧形态双账本语义残留修复）：records（桥接轨账）与
+    // bundleDeclarations（profile 组合真相源）可能同 id——bundle 成员包名
+    // 推导的 id 恰为 MYGO_MANAGER_ID 时（@r05en1cu/dsh-mygo 是 bundle 成员），
+    // 与管理器自描述重叠。口径：bundle 真相源覆盖 records 同 id 记录；
+    // MYGO_MANAGER_ID 一律由管理器自描述兜底（provides service:mygo-core
+    // 与版本事实以运行体为准）。
+    const byId = new Map<string, PluginDeclarationInput>()
+    for (const record of this.records.values()) {
+      // Shadowed rows are part of the managed set with empty placeholder
+      // declarations; the derivation excludes them from orders (not enabled).
+      if (record.status !== 'enabled' && record.status !== 'disabled' && record.status !== 'shadowed') continue
+      const declaration = this.declarationOf(record)
+      if (declaration.id === MYGO_MANAGER_ID) continue
+      byId.set(declaration.id, declaration)
+    }
+    for (const declaration of bundleDeclarations) {
+      if (declaration.id === MYGO_MANAGER_ID) continue
+      byId.set(declaration.id, declaration)
+    }
+    byId.set(MYGO_MANAGER_ID, managerDeclaration)
     return {
-      plugins: [...this.records.values()]
-        // Shadowed rows are part of the managed set with empty placeholder
-        // declarations; the derivation excludes them from orders (not enabled).
-        .filter(record => record.status === 'enabled' || record.status === 'disabled' || record.status === 'shadowed')
-        .map(record => this.declarationOf(record))
-        .concat(bundleDeclarations, [managerDeclaration]),
+      plugins: [...byId.values()],
       slotKinds: this.slotKinds,
       packageVersions: this.installedVersions(),
     }
