@@ -399,6 +399,8 @@ export interface PackBuildOptions {
   readonly output: string
   /** 是否收割社区依赖声明（默认 true；B25）。 */
   readonly includeCommunityDeps?: boolean
+  /** 只打包指定插件 id 集（P4 clone 导出；缺省打包全部已还原插件）。 */
+  readonly plugins?: readonly string[]
 }
 
 export type PackBuildOutcome =
@@ -493,9 +495,14 @@ export async function buildPluginPack(
   ctx: PackContext,
   options: PackBuildOptions,
 ): Promise<PackBuildOutcome> {
-  const restored = await enumerateRestored(ctx.installRoot)
+  const filter = options.plugins === undefined ? undefined : new Set(options.plugins)
+  const restored = (await enumerateRestored(ctx.installRoot))
+    .filter(entry => filter === undefined || filter.has(entry.id))
   if (restored.length === 0) {
-    return { ok: false, report: packReport('没有可打包的已还原插件（installRoot 为空）', []) }
+    const summary = filter === undefined
+      ? '没有可打包的已还原插件（installRoot 为空）'
+      : `没有可打包的已还原插件（过滤集 ${[...filter].join(', ')} 在 installRoot 无匹配）`
+    return { ok: false, report: packReport(summary, []) }
   }
   const work = await mkdtemp(join(ctx.tmpDir, 'mygo-pack-'))
   const packageRoot = join(work, 'package')

@@ -43,8 +43,10 @@ import { EVENT_VOCABULARY } from './event-vocabulary.ts'
 import { EntrypointsTable } from './entrypoints.ts'
 import { LifecycleEngine, MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from './lifecycle.ts'
 import { RegistryPersistence } from './persistence.ts'
-import { extractPlugin, loadPluginEntry, PluginPackageManager, resolveCoreVersion, resolveMygoPaths } from './package/index.ts'
+import { extractPlugin, loadPluginEntry, PluginPackageManager, resolveCoreVersion, resolveDshHome, resolveMygoPaths } from './package/index.ts'
 import type { PluginManifestV2 } from './package/index.ts'
+import { listInstances, registerInstance } from './instances.ts'
+import type { InstanceRecord } from './instances.ts'
 import type { AuditClass } from './audit.ts'
 import type { RegistryStore } from './store.ts'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
@@ -96,6 +98,8 @@ export class PluginManagerService extends Service implements PluginManager {
   private engine: LifecycleEngine | undefined
   private persistence: RegistryPersistence | undefined
   private readonly packageManager: PluginPackageManager
+  /** 实例 dsh 版本（P4 治理事实；DSH_CORE_VERSION 可解析时非空）。 */
+  private readonly dshVersion: string | undefined
 
   /**
    * @param ctx - the plugin context (`storage` and `storageDomain` injected).
@@ -111,6 +115,7 @@ export class PluginManagerService extends Service implements PluginManager {
     this.resolved = resolvePluginManagerConfig(rest)
     const paths = resolveMygoPaths(this.profile)
     const coreVersion = resolveCoreVersion(process.env)
+    this.dshVersion = coreVersion
     this.packageManager = new PluginPackageManager({
       paths,
       profile: this.profile,
@@ -128,7 +133,14 @@ export class PluginManagerService extends Service implements PluginManager {
 
   /** 当前 profile 的治理视图（pnpm 安装状态实时重建；RegistryStore 为其运行时缓存）。 */
   governanceView(): GovernanceView {
-    return readGovernanceView(join(dshHomePath('profiles'), this.profile), this.profile)
+    const view = readGovernanceView(join(dshHomePath('profiles'), this.profile), this.profile)
+    // P4：治理视图记录实例 dsh 版本（跨版本不共享可写状态的事实面）。
+    return this.dshVersion === undefined ? view : { ...view, dshVersion: this.dshVersion }
+  }
+
+  /** P4 多实例：用户级实例登记处只读面（实例 = $DSH_HOME；不含插件账）。 */
+  instances(): readonly InstanceRecord[] {
+    return listInstances()
   }
 
   /** Open persistence, build the machine/engine, wire the two deferred sinks, and recover. */
@@ -154,6 +166,17 @@ export class PluginManagerService extends Service implements PluginManager {
       + `bundle 层 ${governance.bundles.length} 个，disabled 行 ${governance.disabledRows.length} 个`,
     )
     writeMygoSelfInstallation()
+    // P4：用户级实例登记（家目录 .dsh-mygo/instances.json，用户级目录非实例
+    // HOME，写它不算跨实例污染）——登记本实例 HOME + dsh 版本并刷新
+    // lastSeenAt；失败不阻断启动（发现面不构成硬事实）。
+    try {
+      registerInstance({
+        home: resolveDshHome(process.env),
+        ...(this.dshVersion === undefined ? {} : { dshVersion: this.dshVersion }),
+      })
+    } catch (error) {
+      ctx.logger.warn(`[dsh-mygo] 实例登记失败（不影响启动）：${String(error)}`)
+    }
     const holder: { engine?: LifecycleEngine } = {}
     const hostLlm = ctx.get('llm') as
       | { stream(options: unknown): AsyncIterable<unknown> }

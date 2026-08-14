@@ -55,7 +55,7 @@ export type {
 } from './pack.ts'
 export { restorePackage, readRestoredPackage } from './package-restore.ts'
 export type { RestoredPackage, RestorePackageOptions } from './package-restore.ts'
-export { resolveDshHome, resolveMygoPaths, packageDir, pluginConfigPath, resolveCoreVersion } from './paths.ts'
+export { resolveDshHome, resolveMygoPaths, packageDir, pluginConfigPath, resolveCoreVersion, assertInsideHome } from './paths.ts'
 export type { MygoPaths } from './paths.ts'
 export { fetchRegistryMetadata, downloadTarball, encodeRegistryName } from './registry-client.ts'
 export type { RegistryClientOptions, RegistryMetadata, RegistryVersionInfo } from './registry-client.ts'

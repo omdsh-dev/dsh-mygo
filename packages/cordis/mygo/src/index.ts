@@ -57,6 +57,19 @@ import { PluginManagerService } from './service.ts'
 export type { PluginManagerServiceConfigValue } from './service.ts'
 export { readGovernanceView, disabledRowsOf } from './governance.ts'
 export type { GovernanceView } from './governance.ts'
+export {
+  INSTANCES_FORMAT,
+  MYGO_USER_DIR_ENV,
+  instanceRegistryExists,
+  isInstanceRegistered,
+  listInstances,
+  registerInstance,
+  resolveMygoUserRoot,
+  unregisterInstance,
+} from './instances.ts'
+export type { InstanceRecord, InstanceRegistryOptions } from './instances.ts'
+export { cachePack, cachedPackPath, importCachedPack, packCacheDir } from './pack-cache.ts'
+export type { CachePackResult, ImportCachedPackResult } from './pack-cache.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'

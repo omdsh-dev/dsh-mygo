@@ -118,6 +118,11 @@ export interface PluginManager {
   bundleList(): readonly import('./bundle-rail.ts').BundleMember[]
   /** 当前 profile 的治理视图（P3：pnpm 安装状态为唯一真相源，实时重建）。 */
   governanceView(): import('./governance.ts').GovernanceView
+  /**
+   * P4 多实例：用户级实例登记处（家目录 .dsh-mygo/instances.json）只读面。
+   * 实例 = $DSH_HOME；每条记录仅 {home, dshVersion, lastSeenAt}，不含插件账。
+   */
+  instances(): readonly import('./instances.ts').InstanceRecord[]
   /** P4 BOM：导出当前统一依赖图为 `dsh.bom/v1`（JSON + Markdown，原子写）。 */
   bomExport(): Promise<{ readonly bom: import('./bom.ts').BomDocument; readonly jsonPath: string; readonly mdPath: string }>
   /**

@@ -21,6 +21,11 @@ export interface GovernanceView {
   readonly disabledRows: readonly string[]
   /** 用户 patch 层路径（缺失时视图各面为空集合）。 */
   readonly patchPath: string
+  /**
+   * 实例 dsh 版本（P4 多实例治理事实；跨版本不共享可写状态的记录面）。
+   * 由服务层按实例填充，纯文件重建路径（readGovernanceView）下缺省。
+   */
+  readonly dshVersion?: string
 }
 
 /** 从 patch 层文本提取 `disabled: true` 的行 id（文本级，容忍 !!js 等自定义标签）。 */

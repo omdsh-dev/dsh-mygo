@@ -7,7 +7,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 
 /** All mygo-allocated paths for one profile. */
 export interface MygoPaths {
@@ -50,6 +50,22 @@ export function resolveMygoPaths(
 /** Restored package dir for one plugin id+version. */
 export function packageDir(paths: MygoPaths, id: string, version: string): string {
   return join(paths.packagesRoot, id, version)
+}
+
+/**
+ * HOME 隔离闸（P4 多实例）：目标路径必须落在指定实例 HOME（$DSH_HOME）
+ * 内，否则拒绝写入——跨 HOME 写被拒绝。resolve 后做前缀判定，与
+ * package-restore.ts 的 assertInside（B10 包内防逃逸）同模式；唯一合法
+ * 的 HOME 外写面是用户级登记处与共享缓存（家目录 .dsh-mygo/，非实例 HOME）。
+ * @returns 归一后的目标绝对路径。
+ */
+export function assertInsideHome(home: string, target: string): string {
+  const resolvedHome = resolve(home)
+  const resolved = resolve(target)
+  if (resolved !== resolvedHome && !resolved.startsWith(`${resolvedHome}${sep}`)) {
+    throw new Error(`目标路径逃出实例 HOME：${target}（实例 HOME=${resolvedHome}）`)
+  }
+  return resolved
 }
 
 /** Plugin config file path. */

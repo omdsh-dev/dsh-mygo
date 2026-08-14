@@ -6,6 +6,8 @@
  * node_modules lib 产物）。
  */
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 const here = (path: string): string => fileURLToPath(new URL(path, import.meta.url))
@@ -27,5 +29,10 @@ export default defineConfig({
     exclude: ['tests/extension-mygo-rdb.spec.ts'],
     environment: 'node',
     pool: 'forks',
+    // P4：服务 init 会写用户级实例登记处（~/.dsh-mygo）；测试统一把
+    // MYGO_USER_DIR 重定向到临时目录，严禁碰真实用户级目录。
+    env: {
+      MYGO_USER_DIR: join(tmpdir(), 'mygo-vitest-user-dir'),
+    },
   },
 })
