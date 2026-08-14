@@ -67,14 +67,21 @@ export type CliCommand =
     readonly insecureNoVerify: boolean
     readonly json: boolean
   }
+  | {
+    readonly kind: 'config'
+    readonly id: string
+    /** 浅合并进整行 config 的 JSON 对象（缺省 = 只读展示）。 */
+    readonly set?: string
+    readonly json: boolean
+  }
 
 /** 解析结果：一条命令 / 帮助请求 / 用法错误。 */
 export type CliParse =
   | { readonly kind: 'command'; readonly command: CliCommand }
-  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' }
+  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' }
   | { readonly kind: 'usage-error'; readonly message: string }
 
-const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone', 'hub'])
+const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone', 'hub', 'config'])
 
 /** npm 包名最小校验（手写；task 允许）：小写、URL 安全、非空段。 */
 export function isValidNpmName(name: string): boolean {
@@ -117,9 +124,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (head === undefined) return { kind: 'help' }
   if (head === '-h' || head === '--help') return { kind: 'help' }
   if (!COMMANDS.has(head)) {
-    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone / hub）` }
+    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone / hub / config）` }
   }
-  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub'
+  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config'
   const positional: string[] = []
   let json = false
   let output = ''
@@ -131,6 +138,7 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   let from: string | undefined
   let to: string | undefined
   let snapshot: string | undefined
+  let set: string | undefined
   let insecureNoVerify = false
   let index = 0
   let flagsEnded = false
@@ -221,6 +229,13 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
       index = taken.next
       continue
     }
+    if (command === 'config' && flag === '--set') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--set 需要一个值` }
+      set = taken.value
+      index = taken.next
+      continue
+    }
     if (command === 'hub' && flag === '--snapshot') {
       const taken = takeValue(rest, index, inline)
       if (!taken.ok) return { kind: 'usage-error', message: `--snapshot 需要一个值` }
@@ -257,6 +272,29 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         json,
       },
     }
+  }
+  if (command === 'config') {
+    const target = positional.shift()
+    if (target === undefined || target === '') {
+      return { kind: 'usage-error', message: 'config 需要一个插件 id' }
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(target)) {
+      return { kind: 'usage-error', message: `非法插件 id（须匹配 /^[a-z][a-z0-9-]*$/）：${JSON.stringify(target)}` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `config 只接受一个插件 id：${positional.join(' ')}` }
+    }
+    if (set !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(set)
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          return { kind: 'usage-error', message: '--set 必须是 JSON 对象' }
+        }
+      } catch {
+        return { kind: 'usage-error', message: '--set 不是合法 JSON' }
+      }
+    }
+    return { kind: 'command', command: { kind: 'config', id: target, ...(set === undefined ? {} : { set }), json } }
   }
   if (command === 'instances') {
     if (positional.length > 0) {

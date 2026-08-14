@@ -6,6 +6,10 @@
  */
 
 export {
+  detectIgnoredBuildKeys,
+  ensureProfilePnpmSettings,
+  isBuildPolicyBlock,
+  isExoticSubdepBlock,
   profileInstall,
   profileSetEnabled,
   profileUninstall,

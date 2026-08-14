@@ -31,6 +31,8 @@ export interface ProfileExecOptions {
   readonly home?: string
   /** pnpm 命令的调用目录（相对路径 spec 的锚点；缺省 process.cwd()）。 */
   readonly cwd?: string
+  /** 构建政策拦截时自动写白名单并重试一次（P7-A1；缺省 true）。 */
+  readonly autoFixPnpmPolicies?: boolean
 }
 
 export interface ProfileExecResult {
@@ -38,6 +40,8 @@ export interface ProfileExecResult {
   readonly profile: string
   /** 对账后的 dsh.profile.bundles 列表（install/uninstall）。 */
   readonly bundles?: readonly string[]
+  /** 本次自动放行的构建脚本键（P7-A1；写入 profile pnpm-workspace.yaml）。 */
+  readonly allowedBuilds?: readonly string[]
   readonly error?: string | undefined
 }
 
@@ -97,19 +101,97 @@ function anchorPathSpec(argument: string, cwd: string): string {
   return `${match.groups.prefix ?? ''}${resolve(cwd, match.groups.path)}`
 }
 
-function runPnpm(profileDir: string, args: readonly string[], cwd: string): { readonly ok: boolean; readonly error?: string } {
+function runPnpm(profileDir: string, args: readonly string[], cwd: string): { readonly ok: boolean; readonly error?: string; readonly output: string } {
   const result = spawnSync('pnpm', args.map(argument => anchorPathSpec(argument, cwd)), {
     cwd: profileDir,
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
+    encoding: 'utf8',
   })
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+  // 透传保持终端可见性（原 stdio: inherit 语义），捕获供政策检测。
+  if (typeof result.stdout === 'string' && result.stdout !== '') process.stdout.write(result.stdout)
+  if (typeof result.stderr === 'string' && result.stderr !== '') process.stderr.write(result.stderr)
   if (result.error !== undefined) {
     const code = (result.error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'pnpm 不在 PATH 上' }
-    return { ok: false, error: String(result.error) }
+    if (code === 'ENOENT') return { ok: false, error: 'pnpm 不在 PATH 上', output }
+    return { ok: false, error: String(result.error), output }
   }
-  if (result.status !== 0) return { ok: false, error: `pnpm 退出码 ${result.status ?? 1}（profile 目录 ${profileDir}）` }
-  return { ok: true }
+  if (result.status !== 0) return { ok: false, error: `pnpm 退出码 ${result.status ?? 1}（profile 目录 ${profileDir}）`, output }
+  return { ok: true, output }
+}
+
+// ---------------------------------------------------------------------------
+// P7-A1：pnpm 构建政策双门槛（allowBuilds / blockExoticSubdeps）检测与
+// 治理层一键放行（对齐官方 plugin.ts:150-155 的引导语义，落地为 mygo
+// 治理操作而非用户手工）。
+// ---------------------------------------------------------------------------
+
+/** 从 pnpm 输出解析被拦截构建脚本的精确键（"Ignored build scripts: k1, k2"）。 */
+export function detectIgnoredBuildKeys(output: string): readonly string[] {
+  const match = /Ignored build scripts:\s*([^\n]+(?:\n(?!\S)[^\n]+)*)/.exec(output)
+  if (match?.[1] === undefined) return []
+  return match[1]
+    .split(/[,\s]+/)
+    .map(entry => entry.trim())
+    .filter(entry => entry !== '' && !entry.startsWith('Run '))
+}
+
+/** 检测 pnpm 是否因构建政策拦截而失败（allowBuilds 门槛）。 */
+export function isBuildPolicyBlock(output: string): boolean {
+  return /ERR_PNPM_IGNORED_BUILDS|ERR_PNPM_STRICT_DEP_BUILDS/.test(output)
+}
+
+/** 检测 git 子依赖拦截（blockExoticSubdeps 门槛；P6 遗留 #4）。 */
+export function isExoticSubdepBlock(output: string): boolean {
+  return /blockExoticSubdeps|exotic subdep/i.test(output)
+}
+
+/** allowBuilds 键（name@spec）→ 包名（scope 感知的最后一个 @ 切分）。 */
+function packageNameOfBuildKey(key: string): string {
+  const at = key.startsWith('@') ? key.indexOf('@', 1) : key.indexOf('@')
+  return at === -1 ? key : key.slice(0, at)
+}
+
+/**
+ * 一键写 profile pnpm-workspace.yaml 白名单：allowBuilds 键置 true
+ * （覆盖 pnpm 自追加的占位值 `set this to true or false`，缺块则建块），
+ * 可选 blockExoticSubdeps: false。幂等；返回是否改动。
+ */
+export function ensureProfilePnpmSettings(
+  profileDir: string,
+  settings: { readonly allowBuilds?: readonly string[]; readonly blockExoticSubdeps?: boolean },
+): { readonly changed: boolean; readonly path: string } {
+  const path = join(profileDir, 'pnpm-workspace.yaml')
+  let text = existsSync(path) ? readFileSync(path, 'utf8') : ''
+  let changed = false
+  const keys = settings.allowBuilds ?? []
+  if (keys.length > 0) {
+    if (!/^allowBuilds:/m.test(text)) {
+      text = `${text.trimEnd()}\nallowBuilds:\n`
+      changed = true
+    }
+    for (const key of keys) {
+      const quoted = `'${key.replaceAll("'", "''")}'`
+      const entry = new RegExp(`^(\\s+)${escapeRegExp(quoted)}:.*$`, 'm')
+      if (entry.test(text)) {
+        const next = text.replace(entry, `$1${quoted}: true`)
+        if (next !== text) {
+          text = next
+          changed = true
+        }
+      } else {
+        text = text.replace(/^allowBuilds:\n/m, `allowBuilds:\n  ${quoted}: true\n`)
+        changed = true
+      }
+    }
+  }
+  if (settings.blockExoticSubdeps === true && !/^blockExoticSubdeps:/m.test(text)) {
+    text = `${text.trimEnd()}\n# mygo 治理层放行：git 子依赖（扩展经 git spec 安装时需要）\nblockExoticSubdeps: false\n`
+    changed = true
+  }
+  if (changed) writeFileSync(path, text, 'utf8')
+  return { changed, path }
 }
 
 /** 确保 profile 目录已初始化（官方模板规则）；P4 隔离闸：目录必须在目标实例 HOME 内。 */
@@ -126,11 +208,38 @@ function ensureProfile(options: ProfileExecOptions): string {
 export function profileInstall(spec: string, options: ProfileExecOptions): ProfileExecResult {
   const dir = ensureProfile(options)
   const before = readProfileManifest('mygo', dir)
-  const run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd())
+  let run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd())
+  let allowedBuilds: readonly string[] | undefined
+  if (!run.ok && options.autoFixPnpmPolicies !== false) {
+    // P7-A1：构建政策双门槛一键放行——检测拦截 → 写白名单 → 重试一次
+    // → rebuild 实际执行被放行的构建脚本。
+    const keys = detectIgnoredBuildKeys(run.output)
+    const exotic = isExoticSubdepBlock(run.output)
+    if ((isBuildPolicyBlock(run.output) && keys.length > 0) || exotic) {
+      ensureProfilePnpmSettings(dir, {
+        allowBuilds: keys,
+        ...(exotic ? { blockExoticSubdeps: true } : {}),
+      })
+      run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd())
+      if (run.ok && keys.length > 0) {
+        const names = [...new Set(keys.map(packageNameOfBuildKey))]
+        const rebuild = runPnpm(dir, ['rebuild', ...names], options.cwd ?? process.cwd())
+        if (!rebuild.ok) {
+          return { ok: false, profile: options.profile, error: `白名单已写入但 rebuild 失败：${rebuild.error ?? ''}` }
+        }
+        allowedBuilds = keys
+      }
+    }
+  }
   if (!run.ok) return { ok: false, profile: options.profile, error: run.error }
   reconcilePlugins(before, dir)
   const after = readProfileManifest('mygo', dir)
-  return { ok: true, profile: options.profile, bundles: after.dsh?.profile?.bundles ?? [] }
+  return {
+    ok: true,
+    profile: options.profile,
+    bundles: after.dsh?.profile?.bundles ?? [],
+    ...(allowedBuilds === undefined ? {} : { allowedBuilds }),
+  }
 }
 
 /** profile 卸载：profile 目录 pnpm remove + bundle 对账。 */

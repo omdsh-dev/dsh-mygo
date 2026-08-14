@@ -29,6 +29,7 @@ import {
   renderInstances,
   renderPackSuccess,
   renderReportHuman,
+  renderConfigShow,
   renderRestoreSuccess,
   renderSetEnabledSuccess,
   renderUsage,
@@ -36,6 +37,7 @@ import {
 } from './render.ts'
 import { adoptInstance, clonePlugin } from './install.ts'
 import { runHubCommand } from './hub.ts'
+import { readRowConfig, writeRowConfig } from './config.ts'
 
 /** 治理面上带 loader 注册面的管理器最小结构（P5）。 */
 interface LoaderRegistryHost {
@@ -165,7 +167,34 @@ async function runCommand(ctx: CliHost, command: CliCommand): Promise<number> {
     case 'adopt': return runAdopt(command)
     case 'clone': return runClone(command)
     case 'hub': return runHub(ctx, command)
+    case 'config': return runConfig(ctx, command)
   }
+}
+
+/** config 命令（P7-A2）：整行 config 读/浅合并写回（patch 不 deep-merge 的补救）。 */
+function runConfig(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'config' }>): number {
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('config', 'no-profile', current.reason, command.json)
+  const home = resolveDshHome(process.env)
+  if (command.set === undefined) {
+    const outcome = readRowConfig(home, current.profile, command.id)
+    if (!outcome.ok) return errorEnvelope('config', 'config-read-failed', outcome.error ?? '读取失败', command.json)
+    if (command.json) {
+      internals.stdout.write(jsonOutput('config', { ok: true, profile: current.profile, id: command.id, config: outcome.config }))
+    } else {
+      internals.stdout.write(renderConfigShow(current.profile, command.id, outcome.config ?? {}))
+    }
+    return 0
+  }
+  const patch = JSON.parse(command.set) as Record<string, unknown>
+  const outcome = writeRowConfig(home, current.profile, command.id, patch)
+  if (!outcome.ok) return errorEnvelope('config', 'config-write-failed', outcome.error ?? '写入失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput('config', { ok: true, profile: current.profile, id: command.id, config: outcome.config }))
+  } else {
+    internals.stdout.write(renderConfigShow(current.profile, command.id, outcome.config ?? {}))
+  }
+  return 0
 }
 
 /** hub 命令面（P5）：检索/详情不依赖管理器；install 需要当前 profile。 */
@@ -255,8 +284,16 @@ async function runInstall(
   }
   const receipt = await adapter.install(intent, { home: resolveDshHome(process.env), profile: current.profile })
   if (!receipt.ok) return errorEnvelope('install', 'install-failed', receipt.error?.message ?? 'pnpm 失败', command.json)
+  if ((receipt.allowedBuilds?.length ?? 0) > 0 && !command.json) {
+    internals.stdout.write(`  已放行构建脚本（写入 profile pnpm-workspace.yaml 白名单）：${(receipt.allowedBuilds ?? []).join(', ')}\n`)
+  }
   if (command.json) {
-    internals.stdout.write(jsonOutput('install', { ok: true, profile: receipt.profile, bundles: receipt.bundles }))
+    internals.stdout.write(jsonOutput('install', {
+      ok: true,
+      profile: receipt.profile,
+      bundles: receipt.bundles,
+      ...(receipt.allowedBuilds === undefined ? {} : { allowedBuilds: receipt.allowedBuilds }),
+    }))
   } else {
     internals.stdout.write(renderInstallSuccess('install', receipt.profile ?? current.profile, receipt.bundles ?? []))
   }

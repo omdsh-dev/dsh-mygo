@@ -50,7 +50,8 @@
     "@r05en1cu/dsh-mygo": "workspace:^",
     "@r05en1cu/dsh-mygo-loader-profile": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "^0.1.0-rc.2",
-    "@r05en1cu/dsh-mygo-loader-hub": "workspace:^"
+    "@r05en1cu/dsh-mygo-loader-hub": "workspace:^",
+    "js-yaml": "^4.2.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
@@ -73,7 +74,8 @@
     "@deepseek-ai/dsh-system-prompt": "^0.0.1-rc.1",
     "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
     "@deepseek-ai/schemastery": "3.18.1-rc.1",
-    "@r05en1cu/dsh-mygo-loader-hub": "workspace:^"
+    "@r05en1cu/dsh-mygo-loader-hub": "workspace:^",
+    "@types/js-yaml": "^4.0.9"
   },
   "dsh": {
     "mygo": {

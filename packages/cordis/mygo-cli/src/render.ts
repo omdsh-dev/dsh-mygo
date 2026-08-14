@@ -144,10 +144,17 @@ export function renderCloneSuccess(
   return lines.join('\n') + '\n'
 }
 
+/** config 读/写后的人类可读输出（整行最新值）。 */
+export function renderConfigShow(profile: string, id: string, config: Record<string, unknown>): string {
+  const lines = [`${id}（profile ${profile}）当前 config：`]
+  lines.push(JSON.stringify(config, null, 2))
+  return lines.join('\n') + '\n'
+}
+
 /** 用法文本（mygo 总览 + 可选子命令详情）。 */
-export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub'): string {
+export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config'): string {
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
-  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub', string> = {
+  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config', string> = {
     pack: [
       '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--no-community-deps] [--json]',
       '',
@@ -229,6 +236,13 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
       '  --insecure-no-verify 跳过摘要/验签（仅本地快照生效）',
       common,
     ].join('\n'),
+    config: [
+      '用法：dsh --profile <profile> mygo config <id> [--set \'<json>\'] [--json]',
+      '',
+      '  <id>                 插件 id（patch 层行的整行 config 读取）',
+      '  --set \'<json>\'       浅合并进整行 config 并写回（JSON 对象）',
+      common,
+    ].join('\n'),
   }
   if (topic !== undefined) return topics[topic]
   return [
@@ -246,6 +260,7 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
     '  adopt      登记另一个实例 HOME 并首次对账（不写对端插件状态）',
     '  clone      跨实例克隆插件（pack → 共享缓存 → 目标实例还原安装）',
     '  hub        dsh-hub 市场（search / info / install / collections）',
+    '  config     读/改插件行 config（整行写回，免手工重述全字段）',
     '',
     '全局：--json 机器可读；-h/--help 查看子命令用法。',
     '',

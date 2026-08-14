@@ -23,6 +23,8 @@ export interface ProfileInstallReceipt extends InstallReceipt {
   readonly profile?: string
   /** 对账后的 dsh.profile.bundles 列表。 */
   readonly bundles?: readonly string[]
+  /** 本次自动放行的构建脚本键（P7-A1 一键写白名单）。 */
+  readonly allowedBuilds?: readonly string[]
 }
 
 /**
@@ -85,7 +87,12 @@ export function createProfileLoaderAdapter(): ProfileLoaderAdapter {
           profile: outcome.profile,
         })
       }
-      return Promise.resolve({ ok: true, profile: outcome.profile, bundles: outcome.bundles ?? [] })
+      return Promise.resolve({
+        ok: true,
+        profile: outcome.profile,
+        bundles: outcome.bundles ?? [],
+        ...(outcome.allowedBuilds === undefined ? {} : { allowedBuilds: outcome.allowedBuilds }),
+      })
     },
     uninstall(name: string, target: InstallTarget): ProfileExecResult {
       return profileUninstall(name, { profile: target.profile, home: target.home })
