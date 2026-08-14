@@ -100,10 +100,54 @@ export function renderSetEnabledSuccess(verb: 'enable' | 'disable', id: string, 
   return `✓ ${action} ${id}（profile ${profile} 的 cordis.patch.yml 已更新）\n`
 }
 
+/** instances 列表的人类可读输出（当前实例 HOME 标注 *）。 */
+export function renderInstances(
+  instances: readonly { readonly home: string; readonly dshVersion?: string; readonly lastSeenAt: string }[],
+  currentHome: string,
+): string {
+  if (instances.length === 0) {
+    return '没有已登记的实例（mygo adopt --home <path> 登记；服务启动也会自动登记当前实例）\n'
+  }
+  const lines = [`已登记实例 ${instances.length} 个（* = 当前实例）：`]
+  for (const record of instances) {
+    const marker = record.home === currentHome ? '*' : ' '
+    lines.push(`${marker} ${record.home}`)
+    lines.push(`    dsh ${record.dshVersion ?? '未知'} · lastSeenAt ${record.lastSeenAt}`)
+  }
+  return lines.join('\n') + '\n'
+}
+
+/** adopt 成功的人类可读输出（首次对账摘要）。 */
+export function renderAdoptSuccess(
+  home: string,
+  profiles: readonly string[],
+  mygoVersion: string | undefined,
+  dshVersion: string | undefined,
+): string {
+  const lines = [`✓ 已登记实例 → ${home}`]
+  lines.push(`  对账：profile ${profiles.length === 0 ? '（无）' : profiles.join(', ')}`)
+  lines.push(`  mygo ${mygoVersion ?? '未安装'} · dsh ${dshVersion ?? '未知'}`)
+  return lines.join('\n') + '\n'
+}
+
+/** clone 成功的人类可读输出。 */
+export function renderCloneSuccess(
+  id: string,
+  version: string,
+  to: string,
+  sha512: string,
+  cacheHit: boolean,
+  via: 'hardlink' | 'copy',
+): string {
+  const lines = [`✓ 已克隆 ${id}@${version} → ${to}`]
+  lines.push(`  共享缓存 ${sha512.slice(0, 12)}…（${cacheHit ? '命中，零写盘' : '新发布'}；导入经 ${via}）`)
+  return lines.join('\n') + '\n'
+}
+
 /** 用法文本（mygo 总览 + 可选子命令详情）。 */
-export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable'): string {
+export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone'): string {
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
-  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable', string> = {
+  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone', string> = {
     pack: [
       '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--no-community-deps] [--json]',
       '',
@@ -151,6 +195,27 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
       '  <id>                 插件 id（向 profile patch 层写入 disabled 块）',
       common,
     ].join('\n'),
+    instances: [
+      '用法：dsh --profile <profile> mygo instances [--json]',
+      '',
+      '  列出用户级实例登记处（家目录 .dsh-mygo/instances.json）的全部实例',
+      '  （实例 = $DSH_HOME；每条仅 home / dshVersion / lastSeenAt）',
+      common,
+    ].join('\n'),
+    adopt: [
+      '用法：dsh --profile <profile> mygo adopt --home <path> [--json]',
+      '',
+      '  --home <path>        目标实例的 $DSH_HOME（登记 + 首次对账；不写对端插件状态）',
+      common,
+    ].join('\n'),
+    clone: [
+      '用法：dsh --profile <profile> mygo clone --from <homeA> --to <homeB> <plugin> [--json]',
+      '',
+      '  --from <homeA>       源实例的 $DSH_HOME（须已登记）',
+      '  --to <homeB>         目标实例的 $DSH_HOME（须已登记）',
+      '  <plugin>             插件 id（A 侧 pack 导出 → 共享缓存 → B 侧还原安装）',
+      common,
+    ].join('\n'),
   }
   if (topic !== undefined) return topics[topic]
   return [
@@ -164,6 +229,9 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
     '  uninstall  从当前 profile 卸载插件',
     '  enable     启用插件（移除 profile patch 层 disabled 块）',
     '  disable    停用插件（写入 profile patch 层 disabled 块）',
+    '  instances  列出已登记实例（用户级实例登记处）',
+    '  adopt      登记另一个实例 HOME 并首次对账（不写对端插件状态）',
+    '  clone      跨实例克隆插件（pack → 共享缓存 → 目标实例还原安装）',
     '',
     '全局：--json 机器可读；-h/--help 查看子命令用法。',
     '',

@@ -40,14 +40,30 @@ export type CliCommand =
     readonly id: string
     readonly json: boolean
   }
+  | {
+    readonly kind: 'instances'
+    readonly json: boolean
+  }
+  | {
+    readonly kind: 'adopt'
+    readonly home: string
+    readonly json: boolean
+  }
+  | {
+    readonly kind: 'clone'
+    readonly from: string
+    readonly to: string
+    readonly plugin: string
+    readonly json: boolean
+  }
 
 /** 解析结果：一条命令 / 帮助请求 / 用法错误。 */
 export type CliParse =
   | { readonly kind: 'command'; readonly command: CliCommand }
-  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' }
+  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' }
   | { readonly kind: 'usage-error'; readonly message: string }
 
-const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable'])
+const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone'])
 
 /** npm 包名最小校验（手写；task 允许）：小写、URL 安全、非空段。 */
 export function isValidNpmName(name: string): boolean {
@@ -90,9 +106,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (head === undefined) return { kind: 'help' }
   if (head === '-h' || head === '--help') return { kind: 'help' }
   if (!COMMANDS.has(head)) {
-    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable）` }
+    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone）` }
   }
-  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable'
+  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone'
   const positional: string[] = []
   let json = false
   let output = ''
@@ -100,6 +116,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   let targetProfile: string | undefined
   let id: string | undefined
   let dir: string | undefined
+  let home: string | undefined
+  let from: string | undefined
+  let to: string | undefined
   let index = 0
   let flagsEnded = false
   while (index < rest.length) {
@@ -160,9 +179,64 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
       index = taken.next
       continue
     }
+    if (command === 'adopt' && flag === '--home') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--home 需要一个值` }
+      home = taken.value
+      index = taken.next
+      continue
+    }
+    if (command === 'clone' && flag === '--from') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--from 需要一个值` }
+      from = taken.value
+      index = taken.next
+      continue
+    }
+    if (command === 'clone' && flag === '--to') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--to 需要一个值` }
+      to = taken.value
+      index = taken.next
+      continue
+    }
     return { kind: 'usage-error', message: `${command} 不支持参数 ${JSON.stringify(token)}` }
   }
 
+  if (command === 'instances') {
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `instances 不接受位置参数：${positional.join(' ')}` }
+    }
+    return { kind: 'command', command: { kind: 'instances', json } }
+  }
+  if (command === 'adopt') {
+    if (home === undefined || home === '') {
+      return { kind: 'usage-error', message: 'adopt 需要 --home <path>（目标实例的 $DSH_HOME）' }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `adopt 不接受位置参数：${positional.join(' ')}` }
+    }
+    return { kind: 'command', command: { kind: 'adopt', home, json } }
+  }
+  if (command === 'clone') {
+    if (from === undefined || from === '') {
+      return { kind: 'usage-error', message: 'clone 需要 --from <home>（源实例的 $DSH_HOME）' }
+    }
+    if (to === undefined || to === '') {
+      return { kind: 'usage-error', message: 'clone 需要 --to <home>（目标实例的 $DSH_HOME）' }
+    }
+    const plugin = positional.shift()
+    if (plugin === undefined || plugin === '') {
+      return { kind: 'usage-error', message: 'clone 需要一个插件 id 位置参数' }
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(plugin)) {
+      return { kind: 'usage-error', message: `非法插件 id（须匹配 /^[a-z][a-z0-9-]*$/）：${JSON.stringify(plugin)}` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `clone 只接受一个插件 id：${positional.join(' ')}` }
+    }
+    return { kind: 'command', command: { kind: 'clone', from, to, plugin, json } }
+  }
   if (command === 'pack') {
     if (positional.length > 0) {
       return { kind: 'usage-error', message: `pack 不接受位置参数：${positional.join(' ')}` }

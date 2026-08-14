@@ -11,7 +11,9 @@
 import {
   MYGO_MANAGER_VERSION,
   PluginPackageManager,
+  listInstances,
   resolveCoreVersion,
+  resolveDshHome,
   resolveMygoPaths,
 } from '@r05en1cu/dsh-mygo'
 import { resolve } from 'node:path'
@@ -19,8 +21,11 @@ import { parseCliArgs, type CliCommand } from './args.ts'
 import { InitError, generatePluginSkeleton } from './init.ts'
 import {
   jsonOutput,
+  renderAdoptSuccess,
+  renderCloneSuccess,
   renderInitSuccess,
   renderInstallSuccess,
+  renderInstances,
   renderPackSuccess,
   renderReportHuman,
   renderRestoreSuccess,
@@ -28,7 +33,7 @@ import {
   renderUsage,
   renderUsageError,
 } from './render.ts'
-import { profileInstall, profileSetEnabled, profileUninstall } from './install.ts'
+import { adoptInstance, clonePlugin, profileInstall, profileSetEnabled, profileUninstall } from './install.ts'
 
 /** Cordis 插件名（稳定；manifest id 同源）。 */
 export const name = 'dsh-mygo-cli'
@@ -129,7 +134,72 @@ async function runCommand(ctx: CliHost, command: CliCommand): Promise<number> {
     case 'uninstall': return runUninstall(ctx, command)
     case 'enable':
     case 'disable': return runSetEnabled(ctx, command)
+    case 'instances': return runInstances(command)
+    case 'adopt': return runAdopt(command)
+    case 'clone': return runClone(command)
   }
+}
+
+// ---------------------------------------------------------------------------
+// P4 多实例接管命令面（实例 = $DSH_HOME；不依赖管理器挂载）
+// ---------------------------------------------------------------------------
+
+function runInstances(command: Extract<CliCommand, { readonly kind: 'instances' }>): number {
+  const records = listInstances()
+  const currentHome = resolve(resolveDshHome(process.env))
+  if (command.json) {
+    internals.stdout.write(jsonOutput('instances', { ok: true, currentHome, instances: records }))
+  } else {
+    internals.stdout.write(renderInstances(records, currentHome))
+  }
+  return 0
+}
+
+function runAdopt(command: Extract<CliCommand, { readonly kind: 'adopt' }>): number {
+  const outcome = adoptInstance(command.home)
+  if (!outcome.ok) return errorEnvelope('adopt', 'adopt-failed', outcome.error ?? '登记失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput('adopt', {
+      ok: true,
+      home: outcome.home,
+      record: outcome.record,
+      profiles: outcome.profiles ?? [],
+      ...(outcome.mygoVersion === undefined ? {} : { mygoVersion: outcome.mygoVersion }),
+    }))
+  } else {
+    internals.stdout.write(renderAdoptSuccess(
+      outcome.home,
+      outcome.profiles ?? [],
+      outcome.mygoVersion,
+      outcome.record?.dshVersion,
+    ))
+  }
+  return 0
+}
+
+async function runClone(command: Extract<CliCommand, { readonly kind: 'clone' }>): Promise<number> {
+  const outcome = await clonePlugin(command.from, command.to, command.plugin)
+  if (!outcome.ok) return errorEnvelope('clone', 'clone-failed', outcome.error ?? '克隆失败', command.json)
+  if (command.json) {
+    internals.stdout.write(jsonOutput('clone', {
+      ok: true,
+      id: outcome.id,
+      version: outcome.version,
+      sha512: outcome.sha512,
+      cacheHit: outcome.cacheHit,
+      via: outcome.via,
+    }))
+  } else {
+    internals.stdout.write(renderCloneSuccess(
+      outcome.id,
+      outcome.version ?? '',
+      resolve(command.to),
+      outcome.sha512 ?? '',
+      outcome.cacheHit ?? false,
+      outcome.via ?? 'copy',
+    ))
+  }
+  return 0
 }
 
 /** 安装执行面（P3 原生形态）：目标 profile 目录 pnpm + dsh.bundle 对账。 */
