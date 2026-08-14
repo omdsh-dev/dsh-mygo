@@ -1695,6 +1695,59 @@ async function writeMygoSelfState(state: MygoSelfState): Promise<void> {
   await writeFile(SELF_STATE, JSON.stringify(state, null, 2))
 }
 
+/** BOM 落盘状态（概览端点用；无 BOM / 格式不符 → exists: false，fail-soft）。 */
+async function readBomStatus(): Promise<{
+  readonly exists: boolean
+  readonly generatedAt?: string
+  readonly members?: number
+  readonly commit?: string
+}> {
+  try {
+    const parsed = JSON.parse(await readFile(
+      join(HOME_ROOT, 'mygo-boms', panelProfile(), 'dsh.bom.json'),
+      'utf8',
+    )) as {
+      readonly format?: unknown
+      readonly generated?: { readonly at?: unknown; readonly commit?: unknown }
+      readonly lock?: { readonly members?: unknown }
+    }
+    if (parsed.format !== 'dsh.bom/v1') return { exists: false }
+    return {
+      exists: true,
+      ...(typeof parsed.generated?.at === 'string' ? { generatedAt: parsed.generated.at } : {}),
+      ...(typeof parsed.generated?.commit === 'string' ? { commit: parsed.generated.commit } : {}),
+      ...(Array.isArray(parsed.lock?.members) ? { members: parsed.lock.members.length } : {}),
+    }
+  } catch {
+    return { exists: false }
+  }
+}
+
+/** 枚举 manifest 带远程来源（remote）的已安装插件（id 排序稳定）。 */
+async function remoteInstallEntries(): Promise<Array<{
+  readonly id: string
+  readonly kind: 'plugin'
+  readonly remote: RemoteRef
+}>> {
+  const entries: Array<{ readonly id: string; readonly kind: 'plugin'; readonly remote: RemoteRef }> = []
+  try {
+    for (const dirName of (await readdir(INSTALL_DIR, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)) {
+      if (dirName.endsWith('-mygo')) continue
+      try {
+        const manifest = JSON.parse(await readFile(join(INSTALL_DIR, dirName, MANIFEST), 'utf8')) as InstallManifest
+        if (manifest.remote !== undefined) entries.push({ id: manifest.id, kind: 'plugin', remote: manifest.remote })
+      } catch {
+        // unreadable manifest: skip
+      }
+    }
+  } catch {
+    // no plugin installs yet
+  }
+  return entries.sort((a, b) => a.id.localeCompare(b.id))
+}
+
 /**
  * Scan every installed plugin/app whose manifest carries remote provenance
  * and compare the installed commit against the remote ref. Folder/archive
@@ -1726,23 +1779,8 @@ async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
       })
     }
   }
-  const entries: Array<{ readonly id: string; readonly kind: 'plugin'; readonly remote: RemoteRef }> = []
-  try {
-    for (const dirName of (await readdir(INSTALL_DIR, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)) {
-      if (dirName.endsWith('-mygo')) continue
-      try {
-        const manifest = JSON.parse(await readFile(join(INSTALL_DIR, dirName, MANIFEST), 'utf8')) as InstallManifest
-        if (manifest.remote !== undefined) entries.push({ id: manifest.id, kind: 'plugin', remote: manifest.remote })
-      } catch {
-        // unreadable manifest: skip
-      }
-    }
-  } catch {
-    // no plugin installs yet
-  }
-  for (const { id, kind, remote } of entries.sort((a, b) => a.id.localeCompare(b.id))) {
+  const entries = await remoteInstallEntries()
+  for (const { id, kind, remote } of entries) {
     try {
       const latestCommit = await remoteLatest(remote.url, remote.ref)
       results.push({
@@ -2819,6 +2857,8 @@ export function apply(ctx: PanelContext): void {
             rail: 'bridge',
             ...(plugin.entrypoints === undefined ? {} : { entrypoints: plugin.entrypoints }),
             ...(plugin.compatibility === undefined ? {} : { compatibility: plugin.compatibility }),
+            ...(plugin.policyStatus === undefined ? {} : { policyStatus: plugin.policyStatus }),
+            ...(plugin.reason === undefined ? {} : { reason: plugin.reason }),
           }))
           const bundlePlugins = ctx.pluginManager.bundleList().map(member => ({
             id: member.id,
@@ -2831,6 +2871,46 @@ export function apply(ctx: PanelContext): void {
             ...(member.hostConflicts.length === 0 ? {} : { hostConflicts: member.hostConflicts }),
           }))
           json(200, { ok: true, plugins: [...bridgePlugins, ...bundlePlugins] })
+          return
+        }
+        if (method === 'GET' && path === '/api/mygo/status') {
+          // 概览端点（面板头部）：mygo 自身版本/自更新 commit + 插件状态
+          // 计数 + BOM 落盘状态。全部本地读取，无网络请求。
+          const bridge = ctx.pluginManager.plugins()
+          const bundles = ctx.pluginManager.bundleList()
+          const countOf = (status: string): number =>
+            bridge.filter(plugin => plugin.status === status).length
+            + bundles.filter(member => (member.enabled ? 'enabled' : 'disabled') === status).length
+          let version = 'unknown'
+          try {
+            const pkg = createRequire(import.meta.url)('@r05en1cu/dsh-mygo/package.json') as {
+              readonly version?: unknown
+            }
+            if (typeof pkg.version === 'string' && pkg.version !== '') version = pkg.version
+          } catch {
+            // workspace/打包布局解析失败：保持 unknown
+          }
+          const self = await readMygoSelfState()
+          const bom = await readBomStatus()
+          json(200, {
+            ok: true,
+            mygo: {
+              version,
+              ...(self === undefined
+                ? {}
+                : { selfCommit: self.commit, ref: self.ref, url: self.url }),
+            },
+            plugins: {
+              total: bridge.length + bundles.length,
+              bridge: bridge.length,
+              bundle: bundles.length,
+              enabled: countOf('enabled'),
+              disabled: countOf('disabled'),
+              quarantined: countOf('quarantined'),
+              shadowed: countOf('shadowed'),
+            },
+            bom,
+          })
           return
         }
         if (method === 'POST' && path === '/api/mygo/bundles/install') {
@@ -3160,6 +3240,45 @@ export function apply(ctx: PanelContext): void {
         }
         if (method === 'GET' && (path === '/api/mygo/updates' || path === '/api/mygo/updates/')) {
           json(200, { ok: true, updates: await listUpdates() })
+          return
+        }
+        if (method === 'POST' && path === '/api/mygo/updates/plugins') {
+          // 批量更新（面板「全部更新」）：顺序执行，单条失败不中断；
+          // body.ids 缺省 = 更新全部带远程来源的插件。
+          const body = JSON.parse(await readBody(req)) as { readonly ids?: unknown }
+          const wanted = new Set(
+            Array.isArray(body.ids)
+              ? body.ids.filter((entry): entry is string => typeof entry === 'string')
+              : [],
+          )
+          const results: Array<{
+            readonly id: string
+            readonly ok: boolean
+            readonly updated?: boolean
+            readonly message?: string
+            readonly error?: string
+          }> = []
+          for (const entry of await remoteInstallEntries()) {
+            if (wanted.size > 0 && !wanted.has(entry.id)) continue
+            try {
+              const outcome = await updatePluginFromRemote(ctx, entry.id)
+              results.push(outcome)
+            } catch (error) {
+              results.push({
+                id: entry.id,
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            }
+          }
+          const failed = results.filter(result => !result.ok).length
+          json(200, {
+            ok: true,
+            results,
+            message: results.length === 0
+              ? '没有可更新的远程插件'
+              : '批量更新完成：成功 ' + (results.length - failed) + '，失败 ' + failed,
+          })
           return
         }
         const updateMatch = /^\/api\/mygo\/updates\/(plugins|mygo)(?:\/([^/]+))?$/.exec(path)

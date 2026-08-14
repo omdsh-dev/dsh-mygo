@@ -687,6 +687,24 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
   （pnpm remove + reconcile，官方同路径）；守卫 = 面板自身拒绝、
   dsh-mygo 需 force、plan 预览前置；桥接轨维持引擎 uninstall。
 
+### 17.4 面板 UI 重做（r7）与 API 增强
+
+- **client 组件化**：Panel.tsx 拆为壳层 + 四标签页（插件/安装/更新/助手）
+  与共享组件（ConfigEditor 抽屉、ConfirmDialog 弹窗、api.ts 类型化客户端、
+  ConfigFields 共享字段编辑器）；现代卡片风样式，全部基于 --dsw-alias-*
+  设计变量（color-mix 着色，深浅主题自动适配）。
+- **/plugins 增强**：bridge 轨行新增 policyStatus / reason（政策状态展示）。
+- **GET /api/mygo/status**（新增）：概览端点——mygo 自身版本
+  （@r05en1cu/dsh-mygo package.json）与自更新 commit/ref、插件状态计数
+  （total/bridge/bundle/enabled/disabled/quarantined/shadowed）、BOM 落盘
+  状态（$DSH_HOME/mygo-boms/<profile>/dsh.bom.json，fail-soft，无网络）。
+- **POST /api/mygo/updates/plugins**（新增）：批量更新——body.ids 可选，
+  缺省 = 全部带远程来源的插件；顺序执行单条失败不中断，返回
+  {results: [{id, ok, updated?, message?, error?}], message}。
+  枚举逻辑抽取为 remoteInstallEntries() 与 listUpdates 共用。
+- 面板头部：mygo 版本 chip、启用/停用/隔离/遮蔽/bridge/bundle/BOM 统计
+  chips、可更新数角标（更新标签页）、刷新/检查更新/导出 BOM 全局按钮。
+
 ## 18. 常见任务速查
 
 ```sh
