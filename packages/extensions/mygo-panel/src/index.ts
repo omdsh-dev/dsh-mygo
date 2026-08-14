@@ -70,9 +70,38 @@ const SELF_STATE = join(HOME_ROOT, 'mygo-self.json')
 /** User skill root scanned by dsh-skill-local (flat `name.md` skills). */
 const SKILLS_ROOT = join(HOME_ROOT, 'skills')
 
-/** Web profile patch row file (loader rows the web boot composes). */
-const PROFILE = process.env.DSH_PROFILE ?? 'web'
-const PROFILE_PATCH = join(HOME_ROOT, 'profiles', PROFILE, 'cordis.patch.yml')
+/**
+ * 生效 profile 名（P4 收口）：模块级常量改为运行时推导，与 mygo
+ * service.ts 的 resolveProfileName 同源——显式 DSH_PROFILE env 优先，
+ * 缺省从 loader baseUrl（profile 目录 URL，app-boot 挂载前设置）取目录名；
+ * apply 尚未运行就访问 → fail loud。
+ */
+let runtimeProfile: string | undefined
+
+function resolvePanelProfile(ctx: PanelContext): string {
+  const fromEnv = process.env.DSH_PROFILE
+  if (typeof fromEnv === 'string' && fromEnv !== '') return fromEnv
+  const baseUrl = (ctx as { readonly baseUrl?: unknown }).baseUrl
+  if (typeof baseUrl === 'string' && baseUrl.startsWith('file:')) {
+    const pathname = decodeURIComponent(new URL(baseUrl).pathname).replace(/\/+$/, '')
+    const name = pathname.split('/').pop()
+    if (name !== undefined && name !== '') return name
+  }
+  throw new Error('dsh-mygo-panel: 无法推导 profile 名（DSH_PROFILE 未设置且 loader baseUrl 不可用）')
+}
+
+/** 当前 profile 名（仅 apply 之后可用）。 */
+function panelProfile(): string {
+  if (runtimeProfile === undefined) {
+    throw new Error('dsh-mygo-panel: apply 尚未运行，profile 名未解析')
+  }
+  return runtimeProfile
+}
+
+/** Profile patch row file (loader rows the boot composes). */
+function profilePatchPath(): string {
+  return join(HOME_ROOT, 'profiles', panelProfile(), 'cordis.patch.yml')
+}
 
 /** Per-plugin manifest file inside each installed directory. */
 const MANIFEST = '.mygo-install.json'
@@ -1383,7 +1412,7 @@ export function apply(ctx: { readonly pluginManager: PluginManager }, config: un
     await rm(link, { force: true, recursive: false })
     await symlink(bridgeDir, link, 'dir')
   }
-  const profileScope = join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@r05en1cu')
+  const profileScope = join(HOME_ROOT, 'profiles', panelProfile(), 'node_modules', '@r05en1cu')
   await mkdir(profileScope, { recursive: true })
   const profileLink = join(profileScope, `${manifest.id}-mygo`)
   await rm(profileLink, { force: true, recursive: false })
@@ -1396,7 +1425,7 @@ async function removeProjectedBridge(id: string): Promise<void> {
   if (CHECKOUT !== undefined) {
     await rm(join(CHECKOUT, 'node_modules', '@r05en1cu', `${id}-mygo`), { force: true, recursive: false })
   }
-  await rm(join(HOME_ROOT, 'profiles', PROFILE, 'node_modules', '@r05en1cu', `${id}-mygo`), {
+  await rm(join(HOME_ROOT, 'profiles', panelProfile(), 'node_modules', '@r05en1cu', `${id}-mygo`), {
     force: true,
     recursive: false,
   })
@@ -1411,7 +1440,7 @@ async function removeProjectedBridge(id: string): Promise<void> {
 async function removeStoreProviderRows(): Promise<void> {
   let text = ''
   try {
-    text = await readFile(PROFILE_PATCH, 'utf8')
+    text = await readFile(profilePatchPath(), 'utf8')
   } catch {
     return
   }
@@ -1432,7 +1461,7 @@ async function removeStoreProviderRows(): Promise<void> {
     out.push(line)
   }
   const next = out.join('\n')
-  if (next !== text) await writeFile(PROFILE_PATCH, next)
+  if (next !== text) await writeFile(profilePatchPath(), next)
 }
 
 /** One profile bridge row plus the ordering facts needed for dependency-first layout. */
@@ -1530,7 +1559,7 @@ async function syncBridgeRows(
   const rows = await collectBridgeRows(liveConfigs)
   let existing = ''
   try {
-    existing = await readFile(PROFILE_PATCH, 'utf8')
+    existing = await readFile(profilePatchPath(), 'utf8')
   } catch {
     existing = ''
   }
@@ -1564,8 +1593,8 @@ async function syncBridgeRows(
     block += `${ROW_MARKER_END}\n`
   }
   const next = `${head}\n${block}${tailMarker.replace(/^\s+/, '')}`
-  await mkdir(dirname(PROFILE_PATCH), { recursive: true })
-  await writeFile(PROFILE_PATCH, next)
+  await mkdir(dirname(profilePatchPath()), { recursive: true })
+  await writeFile(profilePatchPath(), next)
 }
 
 /**
@@ -3119,6 +3148,10 @@ async function cleanupHelperDebugSessions(
 }
 
 export function apply(ctx: PanelContext): void {
+  // P4：profile 名运行时推导（DSH_PROFILE env → loader baseUrl 目录名），
+  // 与 mygo service.ts 的 resolveProfileName 同源；后续 patch/桥接投影
+  // 全部经 panelProfile()/profilePatchPath() 取生效值。
+  runtimeProfile = resolvePanelProfile(ctx)
   void (async () => {
     await syncBridgeRows()
     await regenerateBridges()

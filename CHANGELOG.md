@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased · next 分支 P4（2026-08-13）— 多实例接管与 HOME 隔离
+
+### 多实例（实例 = $DSH_HOME）
+
+- 用户级实例登记处（mygo `src/instances.ts`）：`~/.dsh-mygo/instances.json`
+  （`dsh.mygo-instances/v1`，用户级目录非实例 HOME），每实例仅存
+  `{home, dshVersion, lastSeenAt}`，不存插件账；API
+  `registerInstance/listInstances/unregisterInstance/isInstanceRegistered`，
+  staging → rename 原子发布；服务 init 自动登记并刷新 lastSeenAt；
+  `ctx.pluginManager.instances()` 只读面（`PluginManager` 接口同步）。
+  测试/验证经 `MYGO_USER_DIR` 环境变量重定向用户级根目录。
+- HOME 隔离红线：`assertInsideHome`（package/paths.ts，B10 assertInside
+  同模式）——写操作前 assert 目标在目标 HOME 内，跨 HOME 写被拒绝；
+  落闸点 = mygo-cli install.ts `ensureProfile`（profile 目录）与
+  `clonePlugin`（B 侧还原根/tmpDir）、共享缓存寻址键格式校验。写路径
+  审计结论与例外面（用户级登记处/共享缓存）登记于 DEV-GUIDE §13.2。
+- 治理视图记录实例 dsh 版本（`GovernanceView.dshVersion`，跨版本不共享
+  可写状态的事实记录面）。
+- 跨实例只读共享缓存（mygo `src/pack-cache.ts`）：
+  `~/.dsh-mygo/cache/packs/` 内容寻址（整 pack sha512 文件名），只存不可变
+  mygo-pack；发布前复用 pack.ts 校验（清单自校验 + vendored 成员哈希），
+  staging → rename 原子发布，第二次发布命中零写盘；导入 hardlink 优先
+  copy 兜底。
+- `buildPluginPack` 新增 `plugins` 过滤项（单插件导出，clone 用）。
+
+### CLI 接管命令（mygo-cli）
+
+- `mygo instances`（登记处列表 + 当前实例标注）、`mygo adopt --home
+  <path>`（登记 + 首次对账，只读扫描对端，不写对端插件状态）、
+  `mygo clone --from <homeA> --to <homeB> <plugin>`（A 侧 pack 导出 →
+  共享缓存 → B 侧还原安装；两侧须已登记，from = to 拒绝）；三命令
+  不依赖管理器挂载；args/index/render 全链路 + `--json` 信封。
+
+### 面板收口（P3 遗留）
+
+- mygo-panel 的 `process.env.DSH_PROFILE ?? 'web'` 模块级常量改为运行时
+  推导（apply 时解析：DSH_PROFILE env → loader baseUrl 目录名，与 mygo
+  service.ts 的 resolveProfileName 同源；未解析即访问 fail loud）。
+
+### 验证
+
+- 新增用例：mygo +11（instances 6 + pack-cache 5，含「跨 HOME 写被拒绝」）、
+  mygo-cli +5（instances-face：args 解析 / adopt 对账零写入 / clone 全链路
+  + 缓存二次命中 / 拒绝面 / invokeCli --json 信封）。
+- 双 HOME e2e 实录：双临时 DSH_HOME 各经 P3 冒烟形态（pnpm pack tarball +
+  profile pnpm-workspace.yaml overrides file:）装 mygo/mygo-cli，adopt /
+  instances / clone 全链路 + 隔离与缓存命中复核（脚本与 transcript 留
+  /tmp/mygo-p4-e2e，不进仓库）。
+
 ## Unreleased · next 分支 P3（2026-08-13）— 自包含 workspace + 安装执行面切原生
 
 ### 自包含 workspace 化

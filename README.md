@@ -145,8 +145,9 @@ AGENTS.md                      仓库级规则补充（npm SDK / 包级规范 / 
 
 ## 测试与纪律
 
-- 全量回归 62 文件 / 623 用例（无网 fetch 拦截；含 CLI 19 项 T44-T51；
-  mygo-rdb 关联用例依赖本地未提交修正——见备忘录）；
+- 全量回归 66 文件 / 643 用例（2026-08-13 P4 口径：mygo-api 6 文件 39 +
+  mygo 54 文件 577 + mygo-cli 6 文件 27；无网 fetch 拦截；mygo-rdb 关联
+  用例依赖本地未提交修正——见备忘录）；
   EB 假设套件 13/13；typecheck 三包通过。
 - 确定性断言字节级；故障按 impl-bug / design-gap / fixture-issue 三分类；
   vendor 零补丁（PATCHES.md 登记制度随 install.sh 一并退役，2026-08-13）。

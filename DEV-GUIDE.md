@@ -69,6 +69,8 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `service.ts` | Cordis 服务面（ctx.pluginManager） | `PluginManagerService` |
 | `bom.ts` | `dsh.bom/v1` 导出/对账（P4） | `buildBom`、`checkBom` |
 | `governance.ts` | 治理视图（P3：pnpm 安装状态实时重建） | `readGovernanceView` |
+| `instances.ts` | 用户级实例登记处（P4：实例 = $DSH_HOME，§13.1） | `registerInstance`、`listInstances`、`unregisterInstance` |
+| `pack-cache.ts` | 跨实例只读共享缓存（P4：内容寻址，§13.3） | `cachePack`、`importCachedPack` |
 | `capabilities.ts` | 能力面与配额（fs/vars/llm/exec/http/fetch） | `createPluginFs` 等 |
 | `session-reader.ts` | jsonl/rdb/sqlite 会话读取 | `JsonlSessionReader` 等 |
 | `sqlite-store.ts` / `persistence.ts` / `store.ts` | 注册表持久化与 `RegistryStore` 契约 | `SqliteRegistryStore`、`RegistryStore` |
@@ -270,7 +272,8 @@ dsh.bundle 对账 dsh.profile.bundles」（复用 @deepseek-ai/dsh-app-boot 的
 profile API）；enable/disable 写 profile cordis.patch.yml 的 id 定向
 disabled 块。`init` 以 plugin-template@2da8230 资产生成骨架，写盘前过
 B1 + `checkTemplateAlignment` 双校验（含 7 skills + lockfile，
-`verify:self-contained` 硬性要求）。
+`verify:self-contained` 硬性要求）。P4 新增多实例接管命令
+`instances|adopt|clone`（不依赖管理器挂载，见 §13.4）。
 
 > 已知宿主限制（P3 实测）：web profile 的 web-startup 参数解析器为严格
 > 模式，`dsh --profile web mygo ...` 的内层参数目前到不了 cmdlineArgs
@@ -333,8 +336,12 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 - 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
   `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-13 P1 后）：全量 62 文件 / 623 用例（含 mygo-rdb 本地
-  未提交修正，见 docs/next 备忘录）；EB 套件 11 文件 / 13 用例。
+- 计数口径（2026-08-13 P4 后）：全量 66 文件 / 643 用例（mygo-api 6/39 +
+  mygo 54/577 + mygo-cli 6/27；含 mygo-rdb 本地未提交修正，见 docs/next
+  备忘录）；EB 套件 11 文件 / 13 用例。
+- 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
+  间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
+  负载稳定全绿。串行分包纪律不变，包内可加 `--pool=threads`。
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
 - 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。
@@ -359,7 +366,79 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
   install.sh 已退役（2026-08-13）；开发验证全部在仓库内进行，不再同步
   任何 checkout。
 
-## 13. 常见任务速查
+## 13. 多实例接管与 HOME 隔离（P4）
+
+**实例 = $DSH_HOME。** mygo 数据根 `$DSH_HOME/mygo/`（paths.ts）。P4 落地
+多实例发现/接管面与隔离红线：
+
+### 13.1 用户级实例登记处（`src/instances.ts`）
+
+- 位置 `~/.dsh-mygo/instances.json`（**用户级目录，非任何实例 HOME**，写它
+  不算跨实例污染；测试经 `MYGO_USER_DIR` 环境变量重定向）。
+- 每条记录仅 `{home, dshVersion, lastSeenAt}`（`dsh.mygo-instances/v1`，
+  按 home 字典序），**不存插件账**（插件账 = pnpm 安装状态，唯一真相源在
+  各实例 HOME 内）。
+- API：`registerInstance`（upsert，刷新 lastSeenAt；dshVersion 缺省保留
+  既有值）/ `listInstances` / `unregisterInstance` / `isInstanceRegistered`；
+  服务 init 自动登记当前实例（失败不阻断启动）；`ctx.pluginManager.instances()`
+  为只读面。
+- 写入 = staging → rename 原子发布；并发登记为 last-writer-wins（登记处
+  只承载发现面，丢一次 lastSeenAt 不构成事实损失——已知限制）。
+- 跨版本不共享可写状态：`dshVersion` 只是治理事实记录面（治理视图
+  `GovernanceView.dshVersion` 同步记录），可写状态全部落在各实例 HOME 内。
+
+### 13.2 HOME 隔离红线
+
+写路径审计结论（P4）：现有写面全部落在 `$DSH_HOME` 内——还原根
+（`$DSH_HOME/mygo/packages/`）、mygo-self.json、快照/审计（stateRoot /
+dshHomePath）、BOM 导出（dshHomePath('mygo-boms')）、profile 目录
+（profiles/<p>，pnpm + patch 层）。**HOME 外写面仅两个用户级例外**：
+实例登记处与共享缓存（`~/.dsh-mygo/`）。CLI `init` 写用户显式 `--dir`
+（工作区语义）、`pack -o` 写用户显式产物路径，均为调用方指定的输出，
+不属实例数据。
+
+隔离闸：`assertInsideHome(home, target)`（paths.ts，与 package-restore.ts
+的 B10 assertInside 同模式）——写操作前 assert 目标在目标 HOME 内，
+**跨 HOME 写被拒绝**（抛出「目标路径逃出实例 HOME」）。落闸点：
+install.ts `ensureProfile`（profile 目录必须在目标 HOME 内）、
+`clonePlugin`（B 侧 packagesRoot/tmpDir 全部过闸）、共享缓存寻址键格式
+校验（`cachedPackPath` 拒绝非 128 位 hex，防路径逃逸）。防污染测试：
+`tests/instances.spec.ts`（跨 HOME 写被拒绝用例）。
+
+### 13.3 跨实例只读共享缓存（`src/pack-cache.ts`）
+
+- 位置 `~/.dsh-mygo/cache/packs/`；内容寻址（整个 pack 文件的 sha512 hex
+  作文件名），只存不可变 mygo-pack。
+- 发布（`cachePack`）：先复用 pack.ts 现有校验（清单自校验
+  manifestSha256 + vendored 成员 sha512/fileSize 逐条复核），不合法拒绝
+  入缓存；staging → rename 原子发布；同内容第二次发布命中
+  （`cached: true`，零写盘）。
+- 导入（`importCachedPack`）：hardlink 优先、copy 兜底（跨设备 EXDEV 等）；
+  目标已存在同内容文件直接复用。
+
+### 13.4 CLI 接管命令（mygo-cli）
+
+- `mygo instances`：列出登记处全部实例（当前实例 HOME 标注 `*`）。
+- `mygo adopt --home <path>`：登记另一个实例 + 首次对账（只读扫描
+  profiles / mygo-self.json / dsh 版本），**不写对端插件状态**。
+- `mygo clone --from <homeA> --to <homeB> <plugin>`：A 侧把指定插件确定性
+  重打包（buildPluginPack `plugins` 过滤项）→ 发布共享缓存 → B 侧 tmp
+  导入（hardlink/copy）→ installPluginPack 还原安装进 B 的还原根。
+  两侧 HOME 都必须已登记；from = to 拒绝；B 侧落盘全过隔离闸。
+- 三命令不依赖管理器挂载（操作对象是 HOME 与用户级登记处）。
+
+### 13.5 双 HOME e2e 实录（2026-08-13）
+
+脚本留 `/tmp/mygo-p4-e2e/run.mjs`（产物不进仓库）：mktemp 两个临时
+DSH_HOME + 临时 MYGO_USER_DIR；两侧各经 P3 冒烟形态装 mygo/mygo-cli
+（pnpm pack tarball + profile pnpm-workspace.yaml overrides file: 姿态）；
+随后 adopt 双登记 → instances 列表 → A 侧 restorePackage 装 demo 插件
+（B 侧 packagesRoot 不存在，隔离前提成立）→ clone A→B（首次缓存新发布，
+hardlink 导入，B 还原成功）→ 第二次 clone 缓存命中零写盘 → 红线复核
+（未登记 HOME 拒绝 / 同一 HOME 拒绝 / assertInsideHome 跨 HOME 写拒绝）。
+逐行实录见该目录 transcript.txt。
+
+## 14. 常见任务速查
 
 ```sh
 # 仓内全量 gates（无网拦截）
