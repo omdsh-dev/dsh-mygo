@@ -1,6 +1,6 @@
 {
   "name": "@r05en1cu/dsh-mygo-ext-panel",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "description": "MyGO managed-plugin panel for the dsh web settings page (settings.section slot + /api/mygo/* routes)",
   "author": "r05En1cU",
   "maintainers": [
@@ -66,7 +66,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown --config tsdown.config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
-    "test": "node -e \"console.log('mygo-panel: 无包级测试（E2E 由 mygo-cli webui-spike 覆盖）')\"",
+    "test": "../../../node_modules/.pnpm/node_modules/.bin/vitest run",
     "verify:self-contained": "node scripts/verify-self-contained.mjs",
     "prepare": "tsc -p tsconfig.json && tsdown --config tsdown.config.mjs",
     "prepack": "node -e \"const fs=require('fs'); if(!fs.existsSync('lib/index.js')||!fs.existsSync('lib/client.js')||!fs.existsSync('lib/types/index.d.ts')){console.error('lib 缺失：请先 pnpm run build'); process.exit(1)}\""

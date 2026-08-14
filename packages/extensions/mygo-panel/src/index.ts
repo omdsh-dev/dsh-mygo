@@ -112,9 +112,8 @@ const APP_MANIFEST = '.mygo-app.json'
 /** Append-only operation log for external apps (best-effort records). */
 const APP_AUDIT = join(APPS_DIR, 'audit.jsonl')
 
-/** Marker comments around the generated bridge rows in the profile patch. */
-const ROW_MARKER_START = '# --- dsh-mygo-panel managed installs (generated; do not edit) ---'
-const ROW_MARKER_END = '# --- end dsh-mygo-panel managed installs ---'
+// rc.3：桥接行装配/可解析性校验收敛进 bridge-rows.ts（纯函数可测面）。
+import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
 
 export const name = 'dsh-mygo-panel'
 export const inject = ['pluginManager', 'webServer']
@@ -1559,44 +1558,37 @@ async function syncBridgeRows(
   liveConfigs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const rows = await collectBridgeRows(liveConfigs)
+  const profileDir = join(HOME_ROOT, 'profiles', panelProfile())
+  // rc.3 升级路径安全加固：不可解析的桥接行（陈旧安装物/失效 scope/链接
+  // 缺失）跳过 + 一次性告警，绝不写出会让 boot fail-loud 的行。
+  const kept = filterResolvableRows(
+    rows,
+    name => isBridgeRowResolvable(profileDir, HOME_ROOT, name),
+    row => warnStaleOnce(
+      row.id,
+      `[dsh-mygo-panel] 桥接包 ${row.name} 在 profile ${panelProfile()} 不可解析（陈旧安装物），`
+      + `已跳过该桥接行（boot 安全）；清理建议：检查 ${INSTALL_DIR} 下对应目录，`
+      + '确认废弃后可删除该目录与桥接目录',
+    ),
+  )
   let existing = ''
   try {
     existing = await readFile(profilePatchPath(), 'utf8')
   } catch {
     existing = ''
   }
-  const start = existing.indexOf(ROW_MARKER_START)
-  const endMarker = ROW_MARKER_END
-  // Drop the standalone empty-array placeholder when we are adding real rows,
-  // and cut any previous generated block out of the user-owned head/tail.
-  const rawHead = start === -1 ? existing : existing.slice(0, start)
-  const cleaned = rawHead.replace(/^\[\]\s*$/m, '')
-  const head = cleaned.replace(/\s+$/, '')
-  const hasHeadEntries = head.split('\n')
-    .map(line => line.trim())
-    .some(line => line !== '' && !line.startsWith('#'))
-  const tailMarker = start === -1 ? '' : (() => {
-    const end = existing.indexOf(endMarker, start)
-    return end === -1 ? '' : existing.slice(end + endMarker.length)
-  })()
-  let block: string
-  if (rows.length === 0) {
-    // Empty managed set: keep a valid single-document YAML file. When the
-    // user layer already carries entries, contribute comments only so the
-    // document stays one list; when it is empty, emit the empty-array body.
-    block = !hasHeadEntries
-      ? `${ROW_MARKER_START}\n[]\n${ROW_MARKER_END}\n`
-      : `${ROW_MARKER_START}\n${ROW_MARKER_END}\n`
-  } else {
-    block = `${ROW_MARKER_START}\n- insert:\n`
-    for (const row of rows) {
-      block += `    - id: ${row.id}\n      name: '${row.name}'\n      config: ${JSON.stringify(row.config)}\n`
-    }
-    block += `${ROW_MARKER_END}\n`
-  }
-  const next = `${head}\n${block}${tailMarker.replace(/^\s+/, '')}`
+  const next = buildProfilePatchText(existing, kept)
+  if (next === existing) return
   await mkdir(dirname(profilePatchPath()), { recursive: true })
   await writeFile(profilePatchPath(), next)
+}
+
+/** 陈旧条目一次性告警（同进程同 id 只报一次）。 */
+const warnedStale = new Set<string>()
+function warnStaleOnce(id: string, message: string): void {
+  if (warnedStale.has(id)) return
+  warnedStale.add(id)
+  console.warn(message)
 }
 
 /**
