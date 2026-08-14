@@ -2202,9 +2202,9 @@ async function updatePluginFromRemote(
           ignoreScripts: true,
           buildTarget: relative(root, entry),
         })
-        return await importEntry(entry)
+        return await importEntry(entry, true)
       })()
-      : await importEntry(entry)
+      : await importEntry(entry, true)
     const declarative = await readDeclarativeManifest(root)
     const declaration = toDeclaration(declarative)
     // 顺序原子性（HMR 体验 R2）：把最易失败的步骤前置到 staging——

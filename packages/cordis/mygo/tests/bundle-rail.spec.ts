@@ -155,6 +155,22 @@ describe('bundle rail primitives', () => {
     expect(f.rail.members()[0]?.enabled).toBe(true)
   })
 
+  it('占位 [] 文档：disable 追加块时摘除 []，enable 摘除块后回落 []', () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/test-bundle')
+    declareInstalled(f, '@dsh-external/test-bundle', true)
+    const patchFile = join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml')
+    writeFileSync(patchFile, '# 用户层注释\n[]\n', 'utf8')
+    f.rail.disable('test-bundle')
+    const afterDisable = readFileSync(patchFile, 'utf8')
+    expect(afterDisable).toContain('- id: test-bundle-row\n  disabled: true')
+    expect(afterDisable.trim().startsWith('[]')).toBe(false)
+    f.rail.enable('test-bundle')
+    const afterEnable = readFileSync(patchFile, 'utf8')
+    expect(afterEnable).not.toContain('mygo bundle disable block')
+    expect(afterEnable.trimEnd().endsWith('[]')).toBe(true)
+  })
+
   it('forwards install/uninstall through the official CLI', () => {
     const f = fixture()
     writeBundle(f, '@dsh-external/test-bundle')

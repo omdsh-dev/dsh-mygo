@@ -422,7 +422,10 @@ export class BundleRail {
   /** Write one companion block into the profile user patch layer (atomic). */
   private writeBlock(start: string, end: string, lines: readonly string[]): void {
     const path = this.patchPath()
-    const text = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    let text = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    // 顶层 `[]` 是空数组占位文档（rc.4 口径），追加块前必须摘除——否则
+    // `[]` 后跟块内容构成非法 YAML（实机事故形态）。
+    if (text.trim() === '[]') text = ''
     const block = [start, ...lines, end].join('\n')
     const next = text.includes(start)
       ? text.replace(
@@ -440,10 +443,17 @@ export class BundleRail {
     if (!existsSync(path)) return
     const text = readFileSync(path, 'utf8')
     if (!text.includes(start)) return
-    const next = text.replace(
+    const removed = text.replace(
       new RegExp(`${start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?\\n`),
       '',
     )
+    // 摘除后无 YAML 内容行时回落 `[]` 占位——host 要求顶层数组（仅注释
+    // 会解析为 null）。
+    const hasContent = removed.split('\n').some(line => {
+      const trimmed = line.trim()
+      return trimmed !== '' && !trimmed.startsWith('#')
+    })
+    const next = hasContent ? removed : `${removed.replace(/\s+$/, '')}\n[]\n`
     const tmp = `${path}.${process.pid}.tmp`
     writeFileSync(tmp, next, 'utf8')
     renameSync(tmp, path)
