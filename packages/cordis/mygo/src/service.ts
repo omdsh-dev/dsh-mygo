@@ -60,7 +60,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync } from 'node:fs'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { readGovernanceView, type GovernanceView } from './governance.ts'
+import { readGovernanceView, checkBundleResolution, type GovernanceView } from './governance.ts'
 import { writeMygoSelfInstallation } from './self.ts'
 import type {
   PluginManager,
@@ -207,6 +207,14 @@ export class PluginManagerService extends Service implements PluginManager {
       `[dsh-mygo] 治理视图：profile ${governance.profile}，依赖 ${Object.keys(governance.dependencies).length} 项，`
       + `bundle 层 ${governance.bundles.length} 个，disabled 行 ${governance.disabledRows.length} 个`,
     )
+    // P7-A3：bundle 解析预检——拼错/缺失在治理面响亮报错（不等宿主晚期失败）。
+    const resolutionProblems = checkBundleResolution(governance)
+    if (resolutionProblems.length > 0) {
+      throw new Error(
+        `[dsh-mygo] profile ${governance.profile} 的 bundle 解析预检失败：`
+        + resolutionProblems.map(problem => problem.reason).join('；'),
+      )
+    }
     writeMygoSelfInstallation()
     // P4：用户级实例登记（家目录 .dsh-mygo/instances.json，用户级目录非实例
     // HOME，写它不算跨实例污染）——登记本实例 HOME + dsh 版本并刷新

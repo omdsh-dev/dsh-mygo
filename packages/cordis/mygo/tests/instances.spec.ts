@@ -73,6 +73,23 @@ describe('InstanceRegistry（用户级实例登记处）', () => {
     const { readdir } = await import('node:fs/promises')
     expect((await readdir(root)).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
+
+  it('锁语义（P7-B10）：正常路径持锁落锁；残留锁超时 fail-open；陈旧锁接管', async () => {
+    const { mkdir, utimes, readdir } = await import('node:fs/promises')
+    const lockDir = join(root, '.instances.lock')
+    // 正常路径：锁目录用后即释
+    registerInstance({ home: join(root, 'home-a') }, { root })
+    expect((await readdir(root)).filter(name => name.includes('.lock'))).toEqual([])
+    // 残留新鲜锁：超时 fail-open，写入仍完成
+    await mkdir(lockDir)
+    registerInstance({ home: join(root, 'home-b') }, { root, lockWaitMs: 50 })
+    expect(isInstanceRegistered(join(root, 'home-b'), { root })).toBe(true)
+    // 陈旧锁（holder 崩溃残留）：立即接管
+    await utimes(lockDir, new Date('2020-01-01'), new Date('2020-01-01'))
+    registerInstance({ home: join(root, 'home-c') }, { root, lockStaleMs: 1000 })
+    expect(isInstanceRegistered(join(root, 'home-c'), { root })).toBe(true)
+    expect(listInstances({ root })).toHaveLength(3)
+  })
 })
 
 describe('assertInsideHome（HOME 隔离闸）', () => {

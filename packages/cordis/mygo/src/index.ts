@@ -55,8 +55,8 @@ export { MYGO_MANAGER_CAPABILITY, MYGO_MANAGER_ID, MYGO_MANAGER_VERSION } from '
 export { PluginManagerService, PluginManagerServiceConfig } from './service.ts'
 import { PluginManagerService } from './service.ts'
 export type { PluginManagerServiceConfigValue } from './service.ts'
-export { readGovernanceView, disabledRowsOf } from './governance.ts'
-export type { GovernanceView } from './governance.ts'
+export { readGovernanceView, disabledRowsOf, checkBundleResolution } from './governance.ts'
+export type { GovernanceView, BundleResolutionProblem } from './governance.ts'
 export {
   INSTANCES_FORMAT,
   MYGO_USER_DIR_ENV,
@@ -74,6 +74,8 @@ export { BUILTIN_LOADER_ADAPTERS, LoaderAdapterRegistry } from './loader-adapter
 export type { LoaderAdapterResolution } from './loader-adapters.ts'
 export { ExtensionRegistry, extensionViews } from './extensions.ts'
 export type { ExtensionRegistration, ExtensionView } from './extensions.ts'
+export { preserveStateAcrossUpdate } from './update-state.ts'
+export type { UpdateStateHooks, UpdateStateHost } from './update-state.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'

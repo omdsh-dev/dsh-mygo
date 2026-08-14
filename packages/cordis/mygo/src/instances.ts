@@ -13,7 +13,7 @@
  * @module @r05en1cu/dsh-mygo/src/instances
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
@@ -41,6 +41,10 @@ export interface InstanceRegistryOptions {
   readonly root?: string
   /** 时钟覆盖（确定性测试）。 */
   readonly now?: () => Date
+  /** 锁等待上限（ms；P7-B10，缺省 2000；超时 fail-open，见锁注释）。 */
+  readonly lockWaitMs?: number
+  /** 锁陈旧判定（ms；超过即视为崩溃残留，直接接管）。 */
+  readonly lockStaleMs?: number
 }
 
 /** 解析用户级 mygo 根目录：MYGO_USER_DIR 覆盖优先，缺省为家目录 `.dsh-mygo`。 */
@@ -92,6 +96,53 @@ function writeRegistry(root: string, instances: readonly InstanceRecord[]): void
   renameSync(tmp, path)
 }
 
+// ---------------------------------------------------------------------------
+// P7-B10：读-改-写的跨进程互斥（mkdir 锁）。
+// ---------------------------------------------------------------------------
+
+/** 同步睡眠（Node 主线程允许 Atomics.wait；锁自旋专用，上限毫秒级）。 */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * mkdir 自旋锁：等待上限内拿到锁；陈旧锁（holder 崩溃残留，超
+ * lockStaleMs）直接接管；超时 **fail-open**（放行本写）——登记处只承载
+ * 发现面，宁可接受 last-writer-wins 也不能让一把残留锁砖掉服务启动。
+ */
+function withRegistryLock<T>(root: string, options: InstanceRegistryOptions, fn: () => T): T {
+  const lockDir = join(root, '.instances.lock')
+  const waitMs = options.lockWaitMs ?? 2000
+  const staleMs = options.lockStaleMs ?? 30_000
+  const deadline = Date.now() + waitMs
+  mkdirSync(root, { recursive: true })
+  let held = false
+  for (;;) {
+    try {
+      mkdirSync(lockDir)
+      held = true
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lockDir).mtimeMs > staleMs) {
+          rmSync(lockDir, { recursive: true, force: true })
+          continue
+        }
+      } catch {
+        continue // 锁刚好被释放/接管：重试
+      }
+      if (Date.now() >= deadline) break // fail-open
+      sleepSync(10)
+    }
+  }
+  try {
+    return fn()
+  } finally {
+    if (held) rmSync(lockDir, { recursive: true, force: true })
+  }
+}
+
 /**
  * 登记/更新一个实例（upsert by resolved home）：刷新 lastSeenAt；
  * dshVersion 给出时更新，缺省保留既有值。返回登记后的记录。
@@ -103,30 +154,34 @@ export function registerInstance(
   const root = options.root ?? resolveMygoUserRoot()
   const home = resolve(input.home)
   const now = (options.now?.() ?? new Date()).toISOString()
-  const existing = listInstances({ root })
-  const previous = existing.find(record => record.home === home)
-  const record: InstanceRecord = {
-    home,
-    ...(input.dshVersion !== undefined && input.dshVersion !== ''
-      ? { dshVersion: input.dshVersion }
-      : previous?.dshVersion === undefined ? {} : { dshVersion: previous.dshVersion }),
-    lastSeenAt: now,
-  }
-  const next = [...existing.filter(item => item.home !== home), record]
-    .sort((a, b) => (a.home < b.home ? -1 : a.home > b.home ? 1 : 0))
-  writeRegistry(root, next)
-  return record
+  return withRegistryLock(root, options, () => {
+    const existing = listInstances({ root })
+    const previous = existing.find(record => record.home === home)
+    const record: InstanceRecord = {
+      home,
+      ...(input.dshVersion !== undefined && input.dshVersion !== ''
+        ? { dshVersion: input.dshVersion }
+        : previous?.dshVersion === undefined ? {} : { dshVersion: previous.dshVersion }),
+      lastSeenAt: now,
+    }
+    const next = [...existing.filter(item => item.home !== home), record]
+      .sort((a, b) => (a.home < b.home ? -1 : a.home > b.home ? 1 : 0))
+    writeRegistry(root, next)
+    return record
+  })
 }
 
 /** 注销一个实例；返回是否有记录被移除。 */
 export function unregisterInstance(home: string, options: InstanceRegistryOptions = {}): boolean {
   const root = options.root ?? resolveMygoUserRoot()
   const resolved = resolve(home)
-  const existing = listInstances({ root })
-  const next = existing.filter(record => record.home !== resolved)
-  if (next.length === existing.length) return false
-  writeRegistry(root, next)
-  return true
+  return withRegistryLock(root, options, () => {
+    const existing = listInstances({ root })
+    const next = existing.filter(record => record.home !== resolved)
+    if (next.length === existing.length) return false
+    writeRegistry(root, next)
+    return true
+  })
 }
 
 /** 登记处是否已含指定实例 HOME。 */

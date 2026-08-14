@@ -57,22 +57,14 @@ export const CORPUS: readonly CorpusPlugin[] = [
     category: 'F1',
     id: 'dsh-cordis-fabric',
     name: '@deepseek-ai/dsh-cordis-fabric',
-    dir: `${devRoot()}/fabric`,
+    // P7-B7：从根载包（三包拆分前的遗留 lib 构建，依赖 node_modules 遗留
+    // 提升链接解析，脆弱）切到 cordis-fabric 包自身——包内 lib 与
+    // node_modules 自包含，解析不依赖仓根状态。
+    dir: `${devRoot()}/fabric/packages/cordis-fabric`,
     entry: 'lib/index.js',
-    // KF-1 裁决（design-r4 §9）后 src 可全量打包：自身子路径 import 与已声明
-    // peers 不再误伤；保持 lib 入口不变（T31 mixin 路径回归）。
-    packParts: ['package.json', 'lib', 'src', 'cordis.patch.yml'],
-    // 根载包依赖为本地 monorepo workspace:^（非发布形态）；打包期归一为 semver
-    // 占位，避免 communityDeps 区间校验把 pack 判无效。
-    packageJsonOverlay: {
-      dependencies: {
-        'cordis-fabric': '*',
-        'cordis-fabric-api': '*',
-        'cordis-fabric-dsh': '*',
-      },
-    },
-    // fixture 修正（2026-08-12）：fabric 仓库当日拆为三包后，根载包 package.json
-    // 不再声明 main/dsh.mygo；按语料机制注入 overlay（不改仓库；id 保持语料契约）。
+    packParts: ['package.json', 'lib', 'src'],
+    // 语料契约版本钉 0.0.2（包自身 0.0.1-rc.1 漂移不影响 registry 身份）。
+    versionOverride: '0.0.2',
     manifestOverlay: {
       id: 'dsh-cordis-fabric',
       version: '0.0.2',
@@ -81,7 +73,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
       requires: {},
     },
     trust: 'trusted',
-    reviewNote: '朋友的 fabric/mixin 插件仓库（lib 产物 + node_modules 齐备）；trusted 直接运行；2026-08-12 拆包后根载包缺 manifest，注入 overlay',
+    reviewNote: '朋友的 fabric/mixin 插件仓库（cordis-fabric 包：lib 产物 + node_modules 齐备）；trusted 直接运行；P7 起语料指到包自身（根载包遗留 lib 废弃）',
   },
   {
     category: 'F2',

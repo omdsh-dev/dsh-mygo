@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 
 /** 一份 profile 的治理视图。 */
 export interface GovernanceView {
@@ -62,5 +63,49 @@ export function readGovernanceView(profileDir: string, profile?: string): Govern
     bundles,
     disabledRows: disabledRowsOf(patchText),
     patchPath,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// P7-A3：bundle 解析预检（模块解析失败早期响亮化）
+// ---------------------------------------------------------------------------
+
+/** 一条 bundle 解析问题。 */
+export interface BundleResolutionProblem {
+  readonly name: string
+  readonly reason: string
+}
+
+/**
+ * 预检治理视图中「已装进 profile dependencies」的 bundle 是否可解析
+ * （拼错包名/缺失在治理面响亮报错，不等 assertEntriesActivated 的晚期
+ * 失败）。解析口径 = 从 profile 目录向上的 Node 解析链（覆盖 profile
+ * node_modules 与 profiles/node_modules 回退链接）；模板自带但未进
+ * dependencies 的 bundle 行不预检（由宿主锚点解析）。
+ */
+export function checkBundleResolution(
+  view: GovernanceView,
+  options: { readonly resolve?: (name: string) => boolean } = {},
+): readonly BundleResolutionProblem[] {
+  const resolve = options.resolve ?? defaultBundleResolver(view.profileDir)
+  const problems: BundleResolutionProblem[] = []
+  for (const name of view.bundles) {
+    if (view.dependencies[name] === undefined) continue
+    if (!resolve(name)) {
+      problems.push({ name, reason: `bundle ${name} 声明在 dependencies 但无法从 profile 目录解析（拼写错误或未安装）` })
+    }
+  }
+  return problems
+}
+
+function defaultBundleResolver(profileDir: string): (name: string) => boolean {
+  const require = createRequire(join(profileDir, 'package.json'))
+  return (name: string) => {
+    try {
+      require.resolve(name)
+      return true
+    } catch {
+      return false
+    }
   }
 }
