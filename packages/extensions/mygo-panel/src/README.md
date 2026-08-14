@@ -9,8 +9,10 @@
 - `Panel.tsx` — 主壳：头部概览（版本/统计/BOM/导入导出）+ 标签页导航 + 通知条 + 配置抽屉
 - `PluginList.tsx` / `InstallPanel.tsx` / `UpdatesPanel.tsx` /
   `ConfigHelper.tsx` — 四个标签页
+- `InstallPanel.tsx` — 插件安装（r7.3 收敛：npm bundle 默认 / 单个 tar 包）
+- `PackInstallCard.tsx` — 整合包安装卡片（预留位，走 CLI）
 - `PluginConfigCard.tsx` — 受管插件配置卡片（settings.plugin.item；
-  r7.2 起外壳对齐官方 PluginCard 折叠形态 + mygo 小标，保存走核心 API）
+  外壳对齐官方 PluginCard 折叠形态 + mygo 小标，保存走核心 API）
 - `ConfigTransfer.tsx` — 整 profile 配置导入/导出（面板头部）
 - `ConfigEditor.tsx` — 抽屉形态配置编辑器（表单/JSON、重置模板、复制 JSON）
 - `ConfirmDialog.tsx` — 危险操作/计划警告统一确认弹窗

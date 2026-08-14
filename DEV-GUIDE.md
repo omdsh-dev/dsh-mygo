@@ -681,7 +681,8 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
 ### 17.3 面板功能面定型与 bundle 卸载路由
 
 - 定型三区：bundle 插件安装（npm/git/hub/pack 引用式）、整合包导入
-  导出、配套配置导入导出；版本获取/更新/自更新保留。
+  导出、配套配置导入导出；版本获取/更新/自更新保留。面板安装面收敛见
+  §17.6（npm bundle 默认 / 单个 tar 包；整合包安装预留卡片）。
 - 已退役：外部应用管理全部面（API/函数/类型/UI）。
 - 卸载路由（routeBundleUninstall）：bundle 轨 → profileUninstall
   （pnpm remove + reconcile，官方同路径）；守卫 = 面板自身拒绝、
@@ -725,6 +726,18 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
 - **配套**：整 profile 配置导入/导出从聚合卡片迁入 mygo 面板头部
   （ConfigTransfer：导出下载 /api/mygo/config-export，导入弹窗
   PUT /api/mygo/config-import）；ConfigCards.tsx 移除。
+
+### 17.6 安装面收敛与整合包预留（r7.3）
+
+- **插件安装收敛为两方式**：npm bundle（默认，引用式安装，spec 如
+  @pkg/name@^1.0.0 / github:owner/repo#ref，POST /bundles/install）与
+  单个 tar 包（.tgz / .tar.gz，method archive 解压安装，经 install-plan
+  + /install）；GitHub URL / 文件夹 / 压缩包(zip) 方式从面板移除
+  （后端 /install 的 github/folder 分支保留，CLI 与既有安装物不受影响）。
+- **整合包安装独立卡片（预留）**：PackInstallCard 与插件安装并列但独立
+  ——说明 mygo-pack 格式与 CLI 路径（dsh mygo pack / restore），输入与
+  按钮为禁用预留态；功能在后续版本接入（届时走 mygo restore 等价面）。
+- 面板安装面的配置 JSON / 自动构建依赖 / plan 预览确认 / 进度指示不变。
 
 ## 18. 常见任务速查
 
