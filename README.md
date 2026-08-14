@@ -17,6 +17,8 @@ web 面板、loader、存储都是扩展。
 
 ### 整合包（mygo-pack/v1）—— 主推
 
+> 格式与用法详见 [`mygo-pack.md`](mygo-pack.md)。
+
 把一组插件打成一个**确定性、可审计、可离线还原**的整合包：
 
 - GNU tar 确定性打包（`--sort=name --mtime=@0`），成员级 sha512 + fileSize
