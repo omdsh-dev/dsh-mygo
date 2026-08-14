@@ -19,6 +19,7 @@ export {
   enableFabric,
   fabricExtensionRegistration,
   fabricManagedBlock,
+  findStrayFabricRow,
   removeManagedExtensionBlock,
 } from './fabric.ts'
 export type { FabricTarget, FabricToggleResult } from './fabric.ts'

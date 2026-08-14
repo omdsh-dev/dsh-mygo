@@ -91,6 +91,15 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 检测不受管的 fabric 载体行（`- id: cordis-fabric[-dsh]`，在受管块之外）。 */
+export function findStrayFabricRow(patchText: string): string | undefined {
+  const unmanaged = removeManagedExtensionBlock(patchText, FABRIC_EXTENSION_ID)
+  for (const id of FABRIC_PACKAGES) {
+    if (new RegExp(`^\\s*-\\s+id:\\s*['"]?${id}['"]?\\s*$`, 'm').test(unmanaged)) return id
+  }
+  return undefined
+}
+
 function profilePatchPath(target: FabricTarget): string {
   // profile 名硬校验：任何分隔符/点段直接拒绝（拼接归一会把 ../x 吸进
   // HOME 内，仅靠前缀闸无法识别，必须在拼接前拒绝）。
@@ -116,7 +125,8 @@ function readProfileDeps(target: FabricTarget): Readonly<Record<string, string>>
 /**
  * 启用 fabric extension：安装 fabric 两包（profile 执行面；specs 缺省
  * git 子目录 spec 白名单）+ 写受管块。幂等：两包已在 dependencies 且
- * 块已存在时零写入。
+ * 块已存在时零写入。P7-B8：写块前检测层内既有 fabric 载体行（不受管
+ * 的 `- id: cordis-fabric[-dsh]` 行），命中即拒绝（重复插行互斥）。
  */
 export function enableFabric(
   target: FabricTarget,
@@ -132,6 +142,17 @@ export function enableFabric(
   const installed = FABRIC_PACKAGES.every(name => deps[name] !== undefined)
   const blockPresent = text.includes(FABRIC_BLOCK_BEGIN)
   if (installed && blockPresent) return { ok: true, enabled: true, profile: target.profile }
+  if (!blockPresent) {
+    const stray = findStrayFabricRow(text)
+    if (stray !== undefined) {
+      return {
+        ok: false,
+        enabled: false,
+        profile: target.profile,
+        error: `profile patch 层已存在不受管的 fabric 载体行（${stray}）：与 mygo 受管块重复插行互斥；请先移除该行再启用`,
+      }
+    }
+  }
   if (!installed) {
     for (const [index, spec] of specs.entries()) {
       if (deps[FABRIC_PACKAGES[index] ?? ''] !== undefined) continue

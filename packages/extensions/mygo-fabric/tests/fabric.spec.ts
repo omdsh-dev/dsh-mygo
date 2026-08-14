@@ -117,6 +117,25 @@ describe('fabric 受管块（启用/停用/幂等）', () => {
     expect(removeManagedExtensionBlock('- insert: []\n', 'fabric')).toBe('- insert: []\n')
   })
 
+  it('去重互斥（P7-B8）：层内已有不受管 fabric 载体行时 enable 拒绝', async () => {
+    const stubA = await writeStubPackage('cordis-fabric')
+    const stubB = await writeStubPackage('cordis-fabric-dsh')
+    await mkdir(join(home, 'profiles', 'web'), { recursive: true })
+    await writeFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), [
+      '# 既有载体行（如旧安装形态残留）',
+      '- insert:',
+      '    - id: cordis-fabric',
+      "      name: 'cordis-fabric'",
+      '',
+    ].join('\n'))
+    const result = enableFabric({ home, profile: 'web' }, { specs: [stubA, stubB] })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('重复插行互斥')
+    expect(result.error).toContain('cordis-fabric')
+    // 未写受管块
+    expect(await readFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).not.toContain(FABRIC_BLOCK_BEGIN)
+  })
+
   it('默认 spec 为 git 子目录 spec 白名单形态', () => {
     expect(FABRIC_DEFAULT_SPECS[0]).toBe('github:dsh-external/fabric#main&path:/packages/cordis-fabric')
     expect(FABRIC_DEFAULT_SPECS[1]).toContain('&path:/packages/cordis-fabric-dsh')
