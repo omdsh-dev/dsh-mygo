@@ -20,7 +20,7 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
-import { listPatchRowIds, readProfilePatchText, readRowConfig, upsertRowConfig } from '@r05en1cu/dsh-mygo'
+import { listPatchRowIds, readProfilePatchText, readRowConfig, removePatchRows, upsertRowConfig } from '@r05en1cu/dsh-mygo'
 import { profileUninstall } from '@r05en1cu/dsh-mygo-loader-profile'
 import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from './workspace-packages.js'
 import type {
@@ -130,6 +130,9 @@ export interface BundleUninstallOutcome {
  * reconcile，与官方 dsh plugin remove 同路径），带守卫——面板自身
  * （dsh-mygo-ext-panel）拒绝经自身卸载；dsh-mygo 核心需 force 确认
  * （管理面中断警告）；卸载前跑 plan 预览（dependent-exists 等拒绝）。
+ * 成功后清理该成员在用户 patch 层的 config 覆盖行与受管 disable 块
+ * （rc.6 残留 bugfix；rowId 先于卸载推导）。运行中实例的已组合树不随
+ * package.json 重组（host 语义，与官方 remove 一致）——重启后完全生效。
  * 桥接轨成员不经此路由（维持引擎 uninstall 语义）。
  */
 export async function routeBundleUninstall(
@@ -155,15 +158,25 @@ export async function routeBundleUninstall(
     return { ok: false, error: plan.error?.message ?? '卸载预览被拒绝' }
   }
   const member = ctx.pluginManager.bundleList().find(candidate => candidate.id === id)
+  // rc.6 残留 bugfix：rowId 必须在卸载前推导（bundle 包目录随 pnpm remove 消失，
+  // 之后 bundleRowIdOf 无从读 bundle patch，只能回退成员 id 而清错目标）。
+  const rowId = await rowIdOfBundleMember(id, member?.packageName, profile)
   const outcome = profileUninstall(member?.packageName ?? id, { profile, home: HOME_ROOT })
   if (!outcome.ok) {
     return { ok: false, error: outcome.error ?? 'pnpm remove 失败' }
   }
+  // 清理 r6 upsert 写入的 config 覆盖行与受管 disable 块（残留行会让卡片
+  // 数据源/配置导出带出已卸载插件；清理失败不翻转卸载结果，降级为 warning）。
+  const cleanup = removePatchRows(HOME_ROOT, profile, rowId === id ? [id] : [rowId, id])
+  const warnings = [
+    ...(id === 'dsh-mygo' ? ['mygo 管理面已随核心卸载中断'] : []),
+    ...(cleanup.ok ? [] : [`配置行清理失败（请手工检查 profile cordis.patch.yml）：${cleanup.error ?? ''}`]),
+  ]
   return {
     ok: true,
     id,
-    message: `插件 ${id} 已卸载（profile bundle 层已对账）`,
-    ...(id === 'dsh-mygo' ? { warning: 'mygo 管理面已随核心卸载中断' } : {}),
+    message: `插件 ${id} 已卸载（profile bundle 层已对账，配置行已清理；重启实例后完全生效）`,
+    ...(warnings.length > 0 ? { warning: warnings.join('；') } : {}),
   }
 }
 
@@ -772,9 +785,9 @@ async function readPluginConfig(ctx: PanelContext, id: string, kind: string, row
 }
 
 /** bundle 行 id 推导（写路径）：bundle patch 首个 insert 行，回退成员 id。 */
-async function rowIdOfBundleMember(id: string, packageName?: string): Promise<string> {
+async function rowIdOfBundleMember(id: string, packageName?: string, profile: string = panelProfile()): Promise<string> {
   const dir = await firstExisting([
-    join(HOME_ROOT, 'profiles', panelProfile(), 'node_modules', packageName ?? id),
+    join(HOME_ROOT, 'profiles', profile, 'node_modules', packageName ?? id),
     join(HOME_ROOT, 'profiles', 'node_modules', packageName ?? id),
   ])
   if (dir !== undefined) {

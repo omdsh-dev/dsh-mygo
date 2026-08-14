@@ -12,6 +12,7 @@ import {
   listPatchRowIds,
   readProfilePatchText,
   readRowConfig,
+  removePatchRows,
   upsertRowConfig,
   writeRowConfig,
 } from '../src/row-config.ts'
@@ -94,5 +95,129 @@ describe('row-config（整行读写 + upsert）', () => {
     await seed()
     expect(upsertRowConfig(home, 'web', 'alpha', { step: 9 }).ok).toBe(true)
     expect(readRowConfig(home, 'web', 'alpha').config).toEqual({ step: 9 })
+  })
+})
+
+describe('removePatchRows（卸载清理，rc.6）', () => {
+  let home: string
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'mygo-row-remove-'))
+    await mkdir(join(home, 'profiles', 'web'), { recursive: true })
+  })
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true })
+  })
+
+  async function seed(text: string): Promise<void> {
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), text)
+  }
+
+  async function text(): Promise<string> {
+    return readFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
+  }
+
+  it('移除目标 config 行，其余行与注释逐字保留', async () => {
+    await seed([
+      '# 用户层注释',
+      '- id: beta',
+      '  config:',
+      '    keep: true',
+      '',
+      '- id: advisor',
+      '  config:',
+      "    model: ''",
+      '    immuneTurns: 3',
+      '',
+    ].join('\n'))
+    const result = removePatchRows(home, 'web', ['advisor'])
+    expect(result).toEqual({ ok: true, removed: ['advisor'] })
+    const next = await text()
+    expect(next).not.toContain('advisor')
+    expect(next).toContain('# 用户层注释')
+    expect(next).toContain('- id: beta')
+    expect(next).toContain('keep: true')
+    const yaml = await import('js-yaml')
+    const parsed = yaml.load(next) as unknown
+    expect(Array.isArray(parsed)).toBe(true)
+    expect((parsed as { id: string }[])[0]?.id).toBe('beta')
+  })
+
+  it('受管 disable 块整块剥除（不留不成对标记）', async () => {
+    await seed([
+      '- id: beta',
+      '  config:',
+      '    keep: 1',
+      '',
+      '# --- mygo managed disable (id:advisor) ---',
+      '- id: advisor',
+      '  disabled: true',
+      '# --- end mygo managed disable ---',
+      '',
+    ].join('\n'))
+    const result = removePatchRows(home, 'web', ['advisor'])
+    expect(result.ok).toBe(true)
+    expect(result.removed).toEqual(['advisor'])
+    const next = await text()
+    expect(next).not.toContain('advisor')
+    expect(next).not.toContain('mygo managed disable')
+    expect(next).toContain('- id: beta')
+  })
+
+  it('最后一行移除后回落 []（仅注释也落顶层数组，合法 YAML）', async () => {
+    await seed('# 头部注释\n- id: advisor\n  config:\n    model: x\n')
+    expect(removePatchRows(home, 'web', ['advisor']).ok).toBe(true)
+    const next = await text()
+    expect(next).toContain('# 头部注释')
+    const yaml = await import('js-yaml')
+    expect(yaml.load(next)).toEqual([])
+    // 无注释时同样落 []
+    await seed('- id: advisor\n  config:\n    model: x\n')
+    expect(removePatchRows(home, 'web', ['advisor']).ok).toBe(true)
+    expect(await text()).toBe('[]\n')
+  })
+
+  it('文件缺失与幂等：无行可移除时不改写文件', async () => {
+    expect(removePatchRows(home, 'web', ['advisor'])).toEqual({ ok: true, removed: [] })
+    await seed('- id: advisor\n  config:\n    model: x\n')
+    expect(removePatchRows(home, 'web', ['advisor']).removed).toEqual(['advisor'])
+    const before = await text()
+    expect(removePatchRows(home, 'web', ['advisor'])).toEqual({ ok: true, removed: [] })
+    expect(await text()).toBe(before)
+  })
+
+  it('多 id 一次清理（rowId 与成员 id 双候选）', async () => {
+    await seed('- id: advisor\n  config:\n    model: x\n- id: dsh-advisor\n  disabled: true\n- id: beta\n  config:\n    keep: 1\n')
+    const result = removePatchRows(home, 'web', ['advisor', 'dsh-advisor'])
+    expect(result.removed).toEqual(['advisor', 'dsh-advisor'])
+    const next = await text()
+    expect(listPatchRowIds(next)).toEqual(['beta'])
+  })
+
+  it('bundle-rail companion 块整块剥除（成员 id 定向，块内多 rowId 不留孤儿）', async () => {
+    await seed([
+      '- id: beta',
+      '  config:',
+      '    keep: 1',
+      '',
+      '# >>> mygo bundle disable block: community-nine',
+      '- id: row-one',
+      '  disabled: true',
+      '- id: row-two',
+      '  disabled: true',
+      '# <<< mygo bundle disable block: community-nine',
+      '',
+    ].join('\n'))
+    const result = removePatchRows(home, 'web', ['community-nine'])
+    expect(result).toEqual({ ok: true, removed: ['community-nine'] })
+    const next = await text()
+    expect(next).not.toContain('community-nine')
+    expect(next).not.toContain('row-one')
+    expect(next).not.toContain('row-two')
+    expect(listPatchRowIds(next)).toEqual(['beta'])
+    const yaml = await import('js-yaml')
+    expect(Array.isArray(yaml.load(next))).toBe(true)
   })
 })

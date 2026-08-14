@@ -12,6 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { assertInsideHome } from './package/paths.ts'
+import { COMPANION_BLOCK_MARKERS } from './bundle-rail.ts'
 
 export interface ConfigRowResult {
   readonly ok: boolean
@@ -105,6 +106,10 @@ export function listPatchRowIds(text: string): readonly string[] {
   }
   return ids
 }
+
+/** mygo 受管 disable 块标记（profileSetEnabled 写入、removePatchRows 清理共用）。 */
+export const DISABLE_BLOCK_BEGIN = '# --- mygo managed disable'
+export const DISABLE_BLOCK_END = '# --- end mygo managed disable ---'
 
 /** 读 profile patch 层文本（缺失按空文档计）。 */
 export function readProfilePatchText(home: string, profile: string): string {
@@ -206,4 +211,73 @@ export function upsertRowConfig(home: string, profile: string, id: string, patch
       })()
   writeFileSync(path, next, 'utf8')
   return { ok: true, config: patch }
+}
+
+export interface RemovePatchRowsResult {
+  readonly ok: boolean
+  /** 实际被移除的行 id（存在才计，按入参序去重）。 */
+  readonly removed: readonly string[]
+  readonly error?: string | undefined
+}
+
+/** 判断一段文本是否含 YAML 内容行（非空非注释；与 bridge-rows 同口径）。 */
+function hasYamlContent(text: string): boolean {
+  return text.split('\n').some(line => {
+    const trimmed = line.trim()
+    return trimmed !== '' && !trimmed.startsWith('#')
+  })
+}
+
+/**
+ * 卸载清理（rc.6 残留 bugfix）：移除 patch 层内指定 id 的定向行（r6
+ * upsert 写入的 config 覆盖行）、mygo 受管 disable 块与 bundle-rail
+ * companion 块（disable/enable/host，块内 rowId 可能不止一个，整块剥
+ * 才不留孤儿行），其余用户内容不动；移除后无内容行时回落 `[]`——host
+ * 要求顶层合法 YAML 数组，仅注释/空白的文件解析为 null 会 fail-loud
+ * （rc.3 同形态）。幂等；文件缺失按无行计。
+ */
+export function removePatchRows(home: string, profile: string, ids: readonly string[]): RemovePatchRowsResult {
+  let path: string
+  try {
+    path = profilePatchPath(home, profile)
+  } catch (error) {
+    return { ok: false, removed: [], error: error instanceof Error ? error.message : String(error) }
+  }
+  if (!existsSync(path)) return { ok: true, removed: [] }
+  let text = readFileSync(path, 'utf8')
+  const removed: string[] = []
+  const mark = (id: string): void => {
+    if (!removed.includes(id)) removed.push(id)
+  }
+  for (const id of ids) {
+    // 受管块先整块剥（块内含 - id 行，单剥行会留下不成对的标记）。
+    const begin = `${DISABLE_BLOCK_BEGIN} (id:${id}) ---`
+    const pattern = new RegExp(`\\n?${escapeRegExp(begin)}\\n(?:.*\\n)*?${escapeRegExp(DISABLE_BLOCK_END)}\\n?`)
+    const stripped = text.replace(pattern, '\n')
+    if (stripped !== text) {
+      text = stripped
+      mark(id)
+    }
+    for (const [start, end] of COMPANION_BLOCK_MARKERS(id)) {
+      const blockPattern = new RegExp(`\\n?${escapeRegExp(start)}\\n[\\s\\S]*?${escapeRegExp(end)}\\n?`)
+      const without = text.replace(blockPattern, '\n')
+      if (without !== text) {
+        text = without
+        mark(id)
+      }
+    }
+    // 定向行（findRow 取首个匹配，循环剥净同名行）。
+    for (;;) {
+      const lines = text.split('\n')
+      const row = findRow(lines, id)
+      if (row === undefined) break
+      text = [...lines.slice(0, row.start), ...lines.slice(row.end)].join('\n')
+      mark(id)
+    }
+  }
+  if (removed.length === 0) return { ok: true, removed }
+  const body = text.replace(/\n{3,}/g, '\n\n').trimEnd()
+  const next = hasYamlContent(body) ? `${body}\n` : body === '' ? '[]\n' : `${body}\n[]\n`
+  writeFileSync(path, next, 'utf8')
+  return { ok: true, removed }
 }

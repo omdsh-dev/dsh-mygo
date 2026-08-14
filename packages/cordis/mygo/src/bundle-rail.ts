@@ -80,6 +80,16 @@ const COMPANION_HOST_START = (id: string): string => `# >>> mygo bundle host blo
 const COMPANION_HOST_END = (id: string): string => `# <<< mygo bundle host block: ${id}`
 
 /**
+ * 成员 id 定向的 companion 块标记对（disable/enable/host 三种），供
+ * row-config.removePatchRows 在卸载清理时整块剥除（同包单一事实源）。
+ */
+export const COMPANION_BLOCK_MARKERS = (id: string): readonly (readonly [string, string])[] => [
+  [COMPANION_DISABLE_START(id), COMPANION_DISABLE_END(id)],
+  [COMPANION_ENABLE_START(id), COMPANION_ENABLE_END(id)],
+  [COMPANION_HOST_START(id), COMPANION_HOST_END(id)],
+]
+
+/**
  * Known host-row replacements by inserted row id. A bundle whose patch
  * inserts one of these rows disables the listed host rows while active
  * (e.g. session-persistence-rdb replaces the built-in jsonl backend).

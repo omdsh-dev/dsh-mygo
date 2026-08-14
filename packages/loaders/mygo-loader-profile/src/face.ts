@@ -22,7 +22,7 @@ import {
   writeProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
 import type { ProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import { assertInsideHome, resolveDshHome } from '@r05en1cu/dsh-mygo'
+import { assertInsideHome, DISABLE_BLOCK_BEGIN, DISABLE_BLOCK_END, resolveDshHome } from '@r05en1cu/dsh-mygo'
 
 export interface ProfileExecOptions {
   /** 目标 profile 名。 */
@@ -252,9 +252,6 @@ export function profileUninstall(name: string, options: ProfileExecOptions): Pro
   const after = readProfileManifest('mygo', dir)
   return { ok: true, profile: options.profile, bundles: after.dsh?.profile?.bundles ?? [] }
 }
-
-const DISABLE_BLOCK_BEGIN = '# --- mygo managed disable'
-const DISABLE_BLOCK_END = '# --- end mygo managed disable ---'
 
 /** 读 profile 用户 patch 层文本（缺省为空文档）。 */
 function readPatchText(dir: string): string {

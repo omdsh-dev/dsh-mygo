@@ -52,7 +52,7 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-async function writeBundleFixture(name: string): Promise<string> {
+async function writeBundleFixture(name: string, patchText = '- insert: []\n'): Promise<string> {
   const dir = join(home, `fixture-${name.replace('/', '_')}`)
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, 'package.json'), JSON.stringify({
@@ -60,7 +60,7 @@ async function writeBundleFixture(name: string): Promise<string> {
     version: '1.0.0',
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }, null, 2))
-  await writeFile(join(dir, 'cordis.patch.yml'), '- insert: []\n')
+  await writeFile(join(dir, 'cordis.patch.yml'), patchText)
   return dir
 }
 
@@ -126,5 +126,65 @@ describe('routeBundleUninstall（bundle 轨卸载路由）', () => {
     expect(outcome.ok).toBe(false)
     expect(outcome.error).toContain('存在依赖者')
     expect(Object.keys((await profileManifest()).dependencies ?? {})).toContain('@test/community-two')
+  }, 120_000)
+
+  it('卸载成功路径清理 patch 残留行（rowId 先于 pnpm remove 推导；文件仍合法 YAML）', async () => {
+    // bundle patch 首个 insert 行 id = advisor-x（rowId 与成员 id 不同形态）
+    const bundleDir = await writeBundleFixture(
+      '@test/community-three',
+      "- insert:\n    - id: advisor-x\n      name: '@test/community-three'\n",
+    )
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    // 模拟 r6 配置写入 + 受管 disable 块 + 其他用户行
+    const patchPath = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    await writeFile(patchPath, [
+      '# 用户层注释',
+      '- id: other-plugin',
+      '  config:',
+      '    keep: true',
+      '',
+      '# --- mygo managed disable (id:advisor-x) ---',
+      '- id: advisor-x',
+      '  disabled: true',
+      '# --- end mygo managed disable ---',
+      '',
+      '- id: advisor-x',
+      '  config:',
+      "    model: ''",
+      '    immuneTurns: 3',
+      '',
+    ].join('\n'))
+    const outcome = await routeBundleUninstall(
+      mockCtx([memberOf('community-three', '@test/community-three')]),
+      'community-three',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(true)
+    expect(Object.keys((await profileManifest()).dependencies ?? {})).not.toContain('@test/community-three')
+    const text = await readFile(patchPath, 'utf8')
+    expect(text).not.toContain('advisor-x')
+    expect(text).not.toContain('mygo managed disable')
+    expect(text).toContain('# 用户层注释')
+    expect(text).toContain('- id: other-plugin')
+    // 合法 YAML 且顶层数组只剩 other-plugin 行（经核心 js-yaml 展开校验）
+    const { expandBundlePatch } = await import('@r05en1cu/dsh-mygo')
+    expect(expandBundlePatch(text).map(row => row.id)).toEqual(['other-plugin'])
+  }, 120_000)
+
+  it('卸载后无残留行的 profile：patch 层回落合法空数组', async () => {
+    const bundleDir = await writeBundleFixture('@test/community-four')
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    const patchPath = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    await writeFile(patchPath, '- id: community-four\n  config:\n    model: x\n')
+    const outcome = await routeBundleUninstall(
+      mockCtx([memberOf('community-four', '@test/community-four')]),
+      'community-four',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(true)
+    const text = await readFile(patchPath, 'utf8')
+    expect(text.trim()).toBe('[]')
   }, 120_000)
 })

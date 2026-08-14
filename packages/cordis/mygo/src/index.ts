@@ -77,13 +77,16 @@ export type { ExtensionRegistration, ExtensionView } from './extensions.ts'
 export { preserveStateAcrossUpdate } from './update-state.ts'
 export type { UpdateStateHooks, UpdateStateHost } from './update-state.ts'
 export {
+  DISABLE_BLOCK_BEGIN,
+  DISABLE_BLOCK_END,
   listPatchRowIds,
   readProfilePatchText,
   readRowConfig,
+  removePatchRows,
   upsertRowConfig,
   writeRowConfig,
 } from './row-config.ts'
-export type { ConfigRowResult } from './row-config.ts'
+export type { ConfigRowResult, RemovePatchRowsResult } from './row-config.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'
