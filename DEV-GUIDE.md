@@ -84,6 +84,10 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `plan.ts` / `order.ts` | 操作计划（纯求值预览）/ 派发顺序推导 | `planOperation`、`deriveOrders` |
 | `event-vocabulary.ts` | 托管事件词汇（模式/分支） | `EVENT_VOCABULARY` |
 | `config.ts` | 管理器配置默认值 | `resolvePluginManagerConfig` |
+| `bundle-rail.ts` | bundle 轨（官方 CLI 转发 + companion 块 + 成员图） | `BundleRail`、`patchFactsFromText` |
+| `row-config.ts` | patch 层行 config 整行读写与卸载清理 | `upsertRowConfig`、`removePatchRows` |
+| `patch-io.ts` | patch 层统一写盘通道（r7：串行 + 原子写 + 空回落 `[]`） | `mutatePatchFile` |
+| `live-rail.ts` | live 轨运行期装卸（r7；docs/live-rail.md） | `liveInstall`、`liveUninstall`、`verifyEntryState` |
 
 ## 2. 插件契约（manifest v3）
 

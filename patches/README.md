@@ -74,3 +74,44 @@ regenerate（手动步骤，复用价值低故不写脚本）：
 
 对 vendored 内容的**已落地**本地修改仍先登记 vendor/PATCHES.md（当前
 vendor 零补丁）再动工；两轨分开：patches/ = 提案，vendor/PATCHES.md = 落地。
+
+## client-hmr-graph-host.patch（r7 P7，2026-08-15）
+
+client-hmr 浏览器半 graph 帧处理提案。动机：r7 live rail 运行期装卸后
+（host watchUserPatches 重放 profile patch 层），node 半的 client 模块
+图已随 onGraphChanged 更新，但 `/plugins/events` SSE 通道只在连接时推
+一次 graph 帧、浏览器半对 graph 帧显式 no-op——已打开的页面要刷新才能
+看到 live 安装的新插件行。本提案让 graph 帧端到端携带成员变化：
+
+- node 半（packages/client/hmr/src/index.ts，+8 行）：onGraphChanged 时
+  向全部 SSE 连接广播新 graph（连接时的基线推送不变）。
+- 浏览器半（packages/client/hmr/src/client/index.ts，+52/-4 行）：graph
+  帧按成员 diff 应用——新增行复用 boot 路径动词（prefetch 注册工厂 +
+  `loader.create({ name })`），消失行复用 reload() 的拆卸动词
+  （registry-first 避免被标 disabled、drain inertia、清 fiber、撤
+  `<style data-plugin>`）后从树中移除。shell 自有条目（modules wrapper、
+  app-shell）从不出现在 graph 中；首帧建立基线集合，diff 只触碰 graph
+  出现过的行。与 rebuilt 帧共存语义：rebuilt 管内容变化（同 id 新
+  rev）、graph 管成员变化（id 增减），共用同一串行队列。
+
+**固定 host 快照**：deepseek-harness-public @ `47f9438`（dsh 0.1.0-rc.6
+公开 npm 线）。`git apply --check` 在 47f9438 干净通过（2026-08-15 实测，
+只 check 不 apply）。
+
+apply（host 维护者）：
+
+```sh
+cd <dsh checkout 47f9438> && git apply /path/to/patches/client-hmr-graph-host.patch
+```
+
+regenerate（手动步骤）：
+
+1. 固定快照取出 `packages/client/hmr/src/index.ts` 与
+   `packages/client/hmr/src/client/index.ts` 两份原文件；
+2. 按 patches/README 本节描述应用两类改动（node 半广播 + 浏览器半
+   applyGraph diff）；
+3. `git diff --no-index` 生成 diff，路径前缀规整为 `a/packages/...` /
+   `b/packages/...`，前置 Subject 说明段；
+4. 在目标 host checkout 内 `git apply --check` 验证（只 check）。
+
+挂账：EXT-4（docs/EXT-CD-index.md）。
