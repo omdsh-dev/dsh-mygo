@@ -1947,11 +1947,11 @@ export class LifecycleEngine {
 
   /**
    * r7 live rail：实例在跑（host loader 可达）时把新装 bundle 切到 live
-   * 轨——离线组合预检 id 撞车 → 移出 dsh.profile.bundles（单轨规则：同 id
-   * 双 insert 对 boot 是 exit=1 致命错误；先于写块做，崩于此窗口只丢激活
-   * 不毁 boot）→ 写受管 live 块 → 轮询验证激活。任一步失败回滚（剥块 /
-   * 回 bundles / bundleRail.uninstall）并抛错。loader 不可达（CLI 等
-   * 实例外形态）保持 boot 轨，下次 boot 物化。
+   * 轨——先移出 dsh.profile.bundles（单轨规则：同 id 双 insert 对 boot 是
+   * exit=1 致命错误；且必须先于预检，否则离线组合树已含新 bundle 的行，
+   * 预检会自撞假阳性）→ 离线组合预检 id 撞车 → 写受管 live 块 → 轮询
+   * 验证激活。任一步失败回滚（剥块 / 回 bundles / bundleRail.uninstall）
+   * 并抛错。loader 不可达（CLI 等实例外形态）保持 boot 轨，下次 boot 物化。
    */
   private async activateLiveRail(member: BundleMember): Promise<'live' | 'pending-restart'> {
     if (this.bundleRail === undefined) return 'pending-restart'
@@ -1960,23 +1960,24 @@ export class LifecycleEngine {
     const profile = this.bundleRail.profileName()
     const dir = this.bundleRail.resolveBundleDir(member.packageName)
     if (dir === undefined) return 'pending-restart'
-    const rollback = (restoreBundles: boolean): void => {
+    const rollback = (): void => {
       try {
         liveUninstall(home, profile, member.packageName)
       } catch {
         // 剥块尽力而为；下面整包回滚后由 removePatchRows 口径兜底
       }
-      if (restoreBundles) this.restoreBootRail(member.packageName)
+      this.restoreBootRail(member.packageName)
       try {
         this.bundleRail?.uninstall(member.id)
       } catch {
         // rollback is best-effort; the rejection below names the cause
       }
     }
+    this.removeFromBootRail(member.packageName)
     const pre = await precheckLiveInstall(home, profile, dir)
     for (const warning of pre.warnings) this.logger.warn(`live rail: ${warning}`)
     if (!pre.ok) {
-      rollback(false)
+      rollback()
       throw new PluginError(
         'compatibility-conflict',
         pre.error ?? 'live rail 预检未通过',
@@ -1984,10 +1985,9 @@ export class LifecycleEngine {
         member.id,
       )
     }
-    this.removeFromBootRail(member.packageName)
     const written = writeLiveBlock(home, profile, member.packageName, dir)
     if (!written.ok) {
-      rollback(true)
+      rollback()
       throw new PluginError(
         'bundle-invalid',
         written.error ?? 'live 块写入失败',
@@ -1997,7 +1997,7 @@ export class LifecycleEngine {
     }
     const mounted = await verifyEntryState((name: string) => this.ctx.get(name), written.rowIds, 'active')
     if (!mounted) {
-      rollback(true)
+      rollback()
       throw new PluginError(
         'swap-timeout',
         `live 重放验证超时（行 ${written.rowIds.join('、') || '(无 insert 行)'} 未激活；已回滚，bundle 未安装）`,

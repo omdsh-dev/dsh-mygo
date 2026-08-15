@@ -3,9 +3,10 @@
  * `dsh plugin` forwarding through a fake CLI, and cross-rail solving.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -417,6 +418,94 @@ describe('bundle rail unified graph', () => {
         code: 'compatibility-conflict',
       })
       expect(f.rail.members().some(entry => entry.id === 'bad-bundle')).toBe(false)
+    } finally {
+      process.env = env
+      rmSync(f.dshHome, { recursive: true, force: true })
+      rmSync(f.checkout, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * r7 e2e 抓出的自撞假阳性回归：预检必须先移出 bundles 再离线组合，
+   * 否则组合树已含新 bundle 自己的行，任何安装都被误判撞车拒绝。
+   */
+  function healAppBoot(f: Fixture): void {
+    const anchor = new URL('../../loaders/mygo-loader-profile/package.json', import.meta.url)
+    const appBootDir = dirname(createRequire(anchor).resolve('@deepseek-ai/dsh-app-boot/package.json'))
+    const scopeDir = join(f.dshHome, 'profiles', 'node_modules', '@deepseek-ai')
+    mkdirSync(scopeDir, { recursive: true })
+    symlinkSync(appBootDir, join(scopeDir, 'dsh-app-boot'))
+  }
+
+  function liveEngine(f: Fixture): LifecycleEngine {
+    const ctx = new Context()
+    // loader 桩：live 块一写入即视为已挂载（verifyEntryState 首轮即过）。
+    ctx.provide('loader', {
+      *entries() {
+        yield { id: 'include:live-ok-row', fiber: {} }
+      },
+    })
+    const machine = new DispatchMachine(ctx, { vocabulary: new Map() })
+    machine.start()
+    return new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store: new InMemoryRegistryStore(),
+      config: resolvePluginManagerConfig({ swapTimeoutMs: 40, historyKeep: 2 }),
+      bundleRail: f.rail,
+    })
+  }
+
+  it('live rail 安装：预检在单轨切换后跑（不自撞），成功切 live 轨', async () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/live-ok')
+    writeFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), '[]\n', 'utf8')
+    healAppBoot(f)
+    const env = process.env
+    process.env = { ...env, MYGO_DSH_HOME: f.dshHome, MYGO_PROFILE: f.profile, MYGO_CLI_CALLS: '[]' }
+    const engine = liveEngine(f)
+    try {
+      const result = await engine.bundleInstall('@dsh-external/live-ok@1.0.0')
+      expect(result.activated).toBe('live')
+      // 单轨：包退出 bundles，live 受管块接管物化
+      const manifest = JSON.parse(readFileSync(join(f.dshHome, 'profiles', 'web', 'package.json'), 'utf8')) as {
+        readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
+      }
+      expect(manifest.dsh?.profile?.bundles ?? []).not.toContain('@dsh-external/live-ok')
+      expect(readFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8'))
+        .toContain('# >>> mygo live block: @dsh-external/live-ok')
+    } finally {
+      process.env = env
+      rmSync(f.dshHome, { recursive: true, force: true })
+      rmSync(f.checkout, { recursive: true, force: true })
+    }
+  })
+
+  it('live rail 预检拒绝：与既有 bundle 行撞 id → 回滚干净（deps/bundles/块全无）', async () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/existing', {
+      patch: "- insert:\n    - id: same-row\n      name: 'existing-plugin'\n",
+    })
+    declareInstalled(f, '@dsh-external/existing', true)
+    writeBundle(f, '@dsh-external/challenger', {
+      patch: "- insert:\n    - id: same-row\n      name: 'challenger-plugin'\n",
+    })
+    writeFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), '[]\n', 'utf8')
+    healAppBoot(f)
+    const env = process.env
+    process.env = { ...env, MYGO_DSH_HOME: f.dshHome, MYGO_PROFILE: f.profile, MYGO_CLI_CALLS: '[]' }
+    const engine = liveEngine(f)
+    try {
+      await expect(engine.bundleInstall('@dsh-external/challenger@1.0.0')).rejects.toMatchObject({
+        code: 'compatibility-conflict',
+      })
+      const manifest = JSON.parse(readFileSync(join(f.dshHome, 'profiles', 'web', 'package.json'), 'utf8')) as {
+        readonly dependencies?: Record<string, string>
+        readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
+      }
+      expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@dsh-external/challenger')
+      expect(manifest.dsh?.profile?.bundles ?? []).not.toContain('@dsh-external/challenger')
+      expect(readFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).not.toContain('challenger')
     } finally {
       process.env = env
       rmSync(f.dshHome, { recursive: true, force: true })

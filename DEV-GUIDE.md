@@ -373,8 +373,8 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 
 - 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
   `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-15 r7 live rail P4-P5 后）：全量 82 文件 / 762 用例
-  （mygo-api 6/39 + mygo 61/631 + mygo-cli 9/45 + mygo-loader-profile
+- 计数口径（2026-08-15 r7 live rail P4-P6 后）：全量 82 文件 / 764 用例
+  （mygo-api 6/39 + mygo 61/633 + mygo-cli 9/45 + mygo-loader-profile
   2/12 + mygo-loader-hub 3/25 + mygo-ext-fabric 1/10；含 mygo-rdb 本地
   未提交修正，见 docs/next 备忘录）；EB 套件 11 文件 / 13 用例。
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
