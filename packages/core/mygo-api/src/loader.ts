@@ -29,6 +29,11 @@ export interface InstallReceipt {
   /** 安装产物的插件 id（成功时）。 */
   readonly id?: string
   readonly version?: string
+  /**
+   * 激活态（r7 live rail）：live = 运行期已激活（host patch 重放）；
+   * pending-restart = 下次 boot 物化。缺省 = 实现方未判定。
+   */
+  readonly activated?: 'live' | 'pending-restart'
   /** 非阻断告警（社区依赖、双存在等）。 */
   readonly warnings?: readonly string[]
   /** 失败时的结构化错误（code 取自 PluginError 闭表）。 */

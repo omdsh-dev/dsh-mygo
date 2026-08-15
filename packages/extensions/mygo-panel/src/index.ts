@@ -21,6 +21,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
 import { listPatchRowIds, readProfilePatchText, readRowConfig, removePatchRows, upsertRowConfig } from '@r05en1cu/dsh-mygo'
+import { hasLiveBlock, liveUninstall, loaderEntrySnapshot, verifyEntryState, writeLiveBlock } from '@r05en1cu/dsh-mygo'
 import { profileUninstall } from '@r05en1cu/dsh-mygo-loader-profile'
 import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from './workspace-packages.js'
 import type {
@@ -126,14 +127,16 @@ export interface BundleUninstallOutcome {
 }
 
 /**
- * bundle 轨成员的卸载（r6 路由修正）：profile 执行面（pnpm remove +
- * reconcile，与官方 dsh plugin remove 同路径），带守卫——面板自身
- * （dsh-mygo-ext-panel）拒绝经自身卸载；dsh-mygo 核心需 force 确认
+ * bundle 轨成员的卸载（r6 路由修正；r7 live rail 重排）：profile 执行面
+ * （pnpm remove + reconcile，与官方 dsh plugin remove 同路径），带守卫——
+ * 面板自身（dsh-mygo-ext-panel）拒绝经自身卸载；dsh-mygo 核心需 force 确认
  * （管理面中断警告）；卸载前跑 plan 预览（dependent-exists 等拒绝）。
- * 成功后清理该成员在用户 patch 层的 config 覆盖行与受管 disable 块
- * （rc.6 残留 bugfix；rowId 先于卸载推导）。运行中实例的已组合树不随
- * package.json 重组（host 语义，与官方 remove 一致）——重启后完全生效。
- * 桥接轨成员不经此路由（维持引擎 uninstall 语义）。
+ * r7 运行期顺序（spike 硬约束「先删行后 pnpm」）：live rail 包先剥受管
+ * live 块 + 验证 dispose 再 pnpm remove；boot rail 包且实例在跑先写受管
+ * disable 块 live 摘 fiber + 验证再走现流程。最后清理该成员在用户 patch
+ * 层的 config 覆盖行与受管块（rc.6 残留 bugfix；rowId 先于卸载推导；
+ * removePatchRows 兼作 live 块崩溃残留兜底）。桥接轨成员不经此路由
+ * （维持引擎 uninstall 语义）。
  */
 export async function routeBundleUninstall(
   ctx: PanelContext,
@@ -161,12 +164,55 @@ export async function routeBundleUninstall(
   // rc.6 残留 bugfix：rowId 必须在卸载前推导（bundle 包目录随 pnpm remove 消失，
   // 之后 bundleRowIdOf 无从读 bundle patch，只能回退成员 id 而清错目标）。
   const rowId = await rowIdOfBundleMember(id, member?.packageName, profile)
-  const outcome = profileUninstall(member?.packageName ?? id, { profile, home: HOME_ROOT })
+  const packageName = member?.packageName ?? id
+  const getService = (name: string): unknown => ctx.get(name)
+  const loaderReachable = loaderEntrySnapshot(getService) !== undefined
+  // liveEffective = 运行期已 dispose/摘取（文案据此区分刷新生效/重启生效）。
+  let liveEffective = false
+  if (hasLiveBlock(HOME_ROOT, profile, packageName)) {
+    // live rail 包：先剥块活卸、验证 dispose，再 pnpm remove（反了残留行
+    // 会在下次重放/重启 import 失败连坐整次重放）。
+    const removal = liveUninstall(HOME_ROOT, profile, packageName)
+    if (!removal.ok) {
+      return { ok: false, error: `live 块剥除失败：${removal.error ?? ''}` }
+    }
+    if (removal.rowIds.length === 0) {
+      liveEffective = true
+    } else if (loaderReachable) {
+      const disposed = await verifyEntryState(getService, removal.rowIds, 'inactive')
+      if (!disposed) {
+        // 验证超时：包文件尚在，重写 live 块恢复原状，不执行 pnpm remove。
+        const dir = resolveProfilePackageDir(packageName, profile)
+        if (dir !== undefined) writeLiveBlock(HOME_ROOT, profile, packageName, dir)
+        return {
+          ok: false,
+          error: `live 卸载验证超时：行 ${removal.rowIds.join('、')} 未 dispose（live 块已恢复，未执行 pnpm remove）`,
+        }
+      }
+      liveEffective = true
+    }
+  } else if (loaderReachable && member !== undefined) {
+    // boot rail 包且实例在跑：先写受管 disable 块 live 摘 fiber（companion
+    // 块口径，removePatchRows 会后置清理），验证通过再走现流程；摘取失败
+    // 降级现流程（重启后完全生效）。
+    try {
+      await ctx.pluginManager.bundleSetEnabled(id, false)
+      const insertIds = member.patchFacts
+        .filter(fact => fact.kind === 'insert')
+        .map(fact => fact.rowId)
+      liveEffective = insertIds.length === 0
+        || await verifyEntryState(getService, insertIds, 'inactive')
+    } catch {
+      // 纯 config 覆盖行等不可行级停用形态：维持现流程
+    }
+  }
+  const outcome = profileUninstall(packageName, { profile, home: HOME_ROOT })
   if (!outcome.ok) {
     return { ok: false, error: outcome.error ?? 'pnpm remove 失败' }
   }
-  // 清理 r6 upsert 写入的 config 覆盖行与受管 disable 块（残留行会让卡片
-  // 数据源/配置导出带出已卸载插件；清理失败不翻转卸载结果，降级为 warning）。
+  // 清理 r6 upsert 写入的 config 覆盖行与受管 disable/companion/live 块
+  // （残留行会让卡片数据源/配置导出带出已卸载插件；清理失败不翻转卸载
+  // 结果，降级为 warning）。
   const cleanup = removePatchRows(HOME_ROOT, profile, rowId === id ? [id] : [rowId, id])
   const warnings = [
     ...(id === 'dsh-mygo' ? ['mygo 管理面已随核心卸载中断'] : []),
@@ -175,8 +221,20 @@ export async function routeBundleUninstall(
   return {
     ok: true,
     id,
-    message: `插件 ${id} 已卸载（profile bundle 层已对账，配置行已清理；重启实例后完全生效）`,
+    message: liveEffective
+      ? `插件 ${id} 已卸载，刷新页面后生效`
+      : `插件 ${id} 已卸载（profile bundle 层已对账，配置行已清理；重启实例后完全生效）`,
     ...(warnings.length > 0 ? { warning: warnings.join('；') } : {}),
+  }
+}
+
+/** 解析 profile 内已安装包目录（live 卸载验证超时回滚写块用）。 */
+function resolveProfilePackageDir(packageName: string, profile: string): string | undefined {
+  try {
+    const req = createRequire(join(HOME_ROOT, 'profiles', profile, 'noop.js'))
+    return dirname(req.resolve(`${packageName}/package.json`))
+  } catch {
+    return undefined
   }
 }
 
@@ -2934,7 +2992,10 @@ export function apply(ctx: PanelContext): void {
           json(200, {
             ok: true,
             id: result.member.id,
-            message: `bundle ${result.member.id} 已安装`,
+            message: result.activated === 'live'
+              ? `bundle ${result.member.id} 已安装并激活（刷新页面后界面可见）`
+              : `bundle ${result.member.id} 已安装（重启实例后生效）`,
+            activated: result.activated ?? 'pending-restart',
             plan: {
               accepted: result.plan.accepted,
               ...(result.plan.error === undefined ? {} : { error: result.plan.error }),

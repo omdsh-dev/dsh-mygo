@@ -59,6 +59,8 @@ export interface BundleInstallResult {
   readonly member: BundleMember
   /** Pre-apply plan preview; rejected means the install was rolled back. */
   readonly plan: PluginOperationPlan
+  /** r7 live rail：live = 运行期已激活；pending-restart = 下次 boot 物化。 */
+  readonly activated?: 'live' | 'pending-restart'
 }
 
 export interface BundleRailOptions {
@@ -105,6 +107,43 @@ const JsExpr = new yaml.Type('tag:yaml.org,2002:js', {
 })
 const PATCH_SCHEMA = yaml.JSON_SCHEMA.extend(JsExpr)
 
+/** Parse patch file text into row-level facts (pure; live rail 复用同口径). */
+export function patchFactsFromText(text: string): BundlePatchFact[] {
+  let parsed: unknown
+  try {
+    parsed = yaml.load(text, { schema: PATCH_SCHEMA })
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const facts: BundlePatchFact[] = []
+  for (const entry of parsed) {
+    if (entry === null || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    if (Array.isArray(record.insert)) {
+      for (const row of record.insert) {
+        if (row !== null && typeof row === 'object') {
+          const rowRecord = row as { readonly id?: unknown; readonly disabled?: unknown }
+          if (typeof rowRecord.id === 'string') {
+            facts.push({
+              rowId: rowRecord.id,
+              kind: 'insert',
+              ...(rowRecord.disabled === true ? { disabled: true } : {}),
+            })
+          }
+        }
+      }
+      continue
+    }
+    if (typeof record.id !== 'string') continue
+    facts.push({
+      rowId: record.id,
+      kind: record.disabled === true ? 'disable' : 'override',
+    })
+  }
+  return facts
+}
+
 /**
  * The official bundle rail: profile manifest + `dsh plugin` forwarding +
  * companion patch blocks. All writes are atomic with snapshots.
@@ -114,6 +153,16 @@ export class BundleRail {
 
   profileDir(): string {
     return join(this.options.dshHome, 'profiles', this.options.profile)
+  }
+
+  /** 实例 HOME（r7 live rail 写盘锚点）。 */
+  homeDir(): string {
+    return this.options.dshHome
+  }
+
+  /** 目标 profile 名（r7 live rail 写盘锚点）。 */
+  profileName(): string {
+    return this.options.profile
   }
 
   manifestPath(): string {
@@ -187,39 +236,7 @@ export class BundleRail {
     if (typeof patchRel !== 'string') return []
     const patchPath = join(bundleDir, patchRel)
     if (!existsSync(patchPath)) return []
-    let parsed: unknown
-    try {
-      parsed = yaml.load(readFileSync(patchPath, 'utf8'), { schema: PATCH_SCHEMA })
-    } catch {
-      return []
-    }
-    if (!Array.isArray(parsed)) return []
-    const facts: BundlePatchFact[] = []
-    for (const entry of parsed) {
-      if (entry === null || typeof entry !== 'object') continue
-      const record = entry as Record<string, unknown>
-      if (Array.isArray(record.insert)) {
-        for (const row of record.insert) {
-          if (row !== null && typeof row === 'object') {
-            const rowRecord = row as { readonly id?: unknown; readonly disabled?: unknown }
-            if (typeof rowRecord.id === 'string') {
-              facts.push({
-                rowId: rowRecord.id,
-                kind: 'insert',
-                ...(rowRecord.disabled === true ? { disabled: true } : {}),
-              })
-            }
-          }
-        }
-        continue
-      }
-      if (typeof record.id !== 'string') continue
-      facts.push({
-        rowId: record.id,
-        kind: record.disabled === true ? 'disable' : 'override',
-      })
-    }
-    return facts
+    return patchFactsFromText(readFileSync(patchPath, 'utf8'))
   }
 
   /** Build one bundle member from disk state. */

@@ -13,8 +13,28 @@ export { evaluateConflicts } from './conflicts.ts'
 export { buildScopeGraph, deriveOrders, deriveScopeOrder, scopeMembers } from './order.ts'
 export type { ScopeEdge, ScopeGraph } from './order.ts'
 export { planOperation } from './plan.ts'
-export { BundleRail } from './bundle-rail.ts'
+export { BundleRail, patchFactsFromText } from './bundle-rail.ts'
 export type { BundleInstallResult, BundleMember, BundlePatchFact, BundleRailOptions } from './bundle-rail.ts'
+export { hasYamlContent, mutatePatchFile, readPatchText, resolvePatchPath } from './patch-io.ts'
+export {
+  LIVE_BLOCK_BEGIN,
+  LIVE_BLOCK_END,
+  LIVE_BLOCK_PATTERN,
+  hasLiveBlock,
+  liveBlockPackages,
+  liveInstall,
+  liveUninstall,
+  loaderEntrySnapshot,
+  precheckLiveInstall,
+  verifyEntryState,
+  writeLiveBlock,
+} from './live-rail.ts'
+export type {
+  LiveBlockRemoval,
+  LiveBlockWrite,
+  LiveInstallResult,
+  LivePrecheckResult,
+} from './live-rail.ts'
 export {
   JsonlSessionReader,
   RdbSessionReader,

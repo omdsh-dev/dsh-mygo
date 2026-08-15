@@ -4,15 +4,15 @@
  * 合并修改后写回整行；行定位与块切分为文本级（保留注释与行序），config
  * 子块经 js-yaml 解析/重排。`upsertRowConfig` 覆盖「行不存在则追加
  * id 定向覆盖行」（bundle 行在 bundle patch 层声明，用户层首次覆盖时
- * 无既有行）。
+ * 无既有行）。r7 起全部写盘走 patch-io（进程内串行 + tmp+rename 原子写）。
  * @module @r05en1cu/dsh-mygo/src/row-config
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import yaml from 'js-yaml'
-import { assertInsideHome } from './package/paths.ts'
 import { COMPANION_BLOCK_MARKERS } from './bundle-rail.ts'
+import { LIVE_BLOCK_PATTERN } from './live-rail.ts'
+import { hasYamlContent, mutatePatchFile, readPatchText, resolvePatchPath } from './patch-io.ts'
 
 export interface ConfigRowResult {
   readonly ok: boolean
@@ -86,13 +86,6 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function profilePatchPath(home: string, profile: string): string {
-  if (!/^[a-z0-9][a-z0-9._-]*$/.test(profile)) {
-    throw new Error(`目标路径逃出实例 HOME：非法 profile 名 ${JSON.stringify(profile)}（实例 HOME=${home}）`)
-  }
-  return assertInsideHome(home, join(home, 'profiles', profile, 'cordis.patch.yml'))
-}
-
 /** 枚举 patch 层全部行 id（出现序去重；r6 配置导出用）。 */
 export function listPatchRowIds(text: string): readonly string[] {
   const ids: string[] = []
@@ -113,29 +106,21 @@ export const DISABLE_BLOCK_END = '# --- end mygo managed disable ---'
 
 /** 读 profile patch 层文本（缺失按空文档计）。 */
 export function readProfilePatchText(home: string, profile: string): string {
-  const path = profilePatchPath(home, profile)
-  return existsSync(path) ? readFileSync(path, 'utf8') : ''
+  return readPatchText(home, profile)
 }
 
-/** 读目标插件行的整行 config（无行 → 报错；无 config → {}）。 */
-export function readRowConfig(home: string, profile: string, id: string): ConfigRowResult {
-  let path: string
-  try {
-    path = profilePatchPath(home, profile)
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-  if (!existsSync(path)) return { ok: false, error: `profile patch 层不存在：${path}` }
-  const lines = readFileSync(path, 'utf8').split('\n')
+/** 文本级整行 config 解析（无行 → 报错；无 config → {}）。 */
+function rowConfigOfText(text: string, id: string): ConfigRowResult {
+  const lines = text.split('\n')
   const row = findRow(lines, id)
   if (row === undefined) return { ok: false, error: `patch 层没有 ${id} 行` }
   const rowLines = lines.slice(row.start, row.end)
   const block = findConfigBlock(rowLines, row.indent)
   if (block === undefined) return { ok: true, config: {} }
-  const text = block.inline !== undefined
+  const text0 = block.inline !== undefined
     ? block.inline
     : rowLines.slice(block.start + 1, block.end).map(line => line.slice(block.indent.length + 2)).join('\n')
-  const parsed = yaml.load(text) as unknown
+  const parsed = yaml.load(text0) as unknown
   if (parsed === undefined || parsed === null) return { ok: true, config: {} }
   if (typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { ok: false, error: `${id} 行 config 不是对象` }
@@ -143,49 +128,65 @@ export function readRowConfig(home: string, profile: string, id: string): Config
   return { ok: true, config: parsed as Record<string, unknown> }
 }
 
-/** 浅合并写回整行 config（行无 config 则追加子块；行不存在报错）。 */
-export function writeRowConfig(home: string, profile: string, id: string, patch: Record<string, unknown>): ConfigRowResult {
+/** 读目标插件行的整行 config（无行 → 报错；无 config → {}）。 */
+export function readRowConfig(home: string, profile: string, id: string): ConfigRowResult {
   let path: string
   try {
-    path = profilePatchPath(home, profile)
+    path = resolvePatchPath(home, profile)
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
   if (!existsSync(path)) return { ok: false, error: `profile patch 层不存在：${path}` }
-  const text = readFileSync(path, 'utf8')
-  const lines = text.split('\n')
-  const row = findRow(lines, id)
-  if (row === undefined) return { ok: false, error: `patch 层没有 ${id} 行` }
-  const current = readRowConfig(home, profile, id)
-  if (!current.ok) return current
-  const merged = { ...current.config, ...patch }
-  const dumped = yaml.dump(merged, { lineWidth: -1, noRefs: true }).trimEnd()
-  const rowLines = lines.slice(row.start, row.end)
-  // 行尾空行不进 config 追加位置（追加必须紧贴行末内容行）。
-  while (rowLines.length > 0 && (rowLines[rowLines.length - 1] ?? '').trim() === '') rowLines.pop()
-  const block = findConfigBlock(rowLines, row.indent)
-  const configLines = dumped.split('\n').map(line => `${row.indent}  ${line}`)
-  let nextRow: string[]
-  if (block === undefined) {
-    nextRow = [...rowLines, `${row.indent}  config:`, ...configLines.map(line => `  ${line}`)]
-  } else if (block.inline !== undefined) {
-    nextRow = [
-      ...rowLines.slice(0, block.start),
-      `${block.indent}config:`,
-      ...configLines.map(line => `  ${line}`),
-      ...rowLines.slice(block.end),
-    ]
-  } else {
-    nextRow = [
-      ...rowLines.slice(0, block.start),
-      `${block.indent}config:`,
-      ...configLines.map(line => `  ${line}`),
-      ...rowLines.slice(block.end),
-    ]
+  return rowConfigOfText(readFileSync(path, 'utf8'), id)
+}
+
+/** 浅合并写回整行 config（行无 config 则追加子块；行不存在报错）。 */
+export function writeRowConfig(home: string, profile: string, id: string, patch: Record<string, unknown>): ConfigRowResult {
+  let path: string
+  try {
+    path = resolvePatchPath(home, profile)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
-  const next = [...lines.slice(0, row.start), ...nextRow, ...lines.slice(row.end)].join('\n')
-  writeFileSync(path, next, 'utf8')
-  return { ok: true, config: merged }
+  let result: ConfigRowResult = { ok: false, error: 'patch 写盘未执行' }
+  mutatePatchFile(home, profile, (text, exists) => {
+    if (!exists) {
+      result = { ok: false, error: `profile patch 层不存在：${path}` }
+      return undefined
+    }
+    const lines = text.split('\n')
+    const row = findRow(lines, id)
+    if (row === undefined) {
+      result = { ok: false, error: `patch 层没有 ${id} 行` }
+      return undefined
+    }
+    const current = rowConfigOfText(text, id)
+    if (!current.ok) {
+      result = current
+      return undefined
+    }
+    const merged = { ...current.config, ...patch }
+    const dumped = yaml.dump(merged, { lineWidth: -1, noRefs: true }).trimEnd()
+    const rowLines = lines.slice(row.start, row.end)
+    // 行尾空行不进 config 追加位置（追加必须紧贴行末内容行）。
+    while (rowLines.length > 0 && (rowLines[rowLines.length - 1] ?? '').trim() === '') rowLines.pop()
+    const block = findConfigBlock(rowLines, row.indent)
+    const configLines = dumped.split('\n').map(line => `${row.indent}  ${line}`)
+    let nextRow: string[]
+    if (block === undefined) {
+      nextRow = [...rowLines, `${row.indent}  config:`, ...configLines.map(line => `  ${line}`)]
+    } else {
+      nextRow = [
+        ...rowLines.slice(0, block.start),
+        `${block.indent}config:`,
+        ...configLines.map(line => `  ${line}`),
+        ...rowLines.slice(block.end),
+      ]
+    }
+    result = { ok: true, config: merged }
+    return [...lines.slice(0, row.start), ...nextRow, ...lines.slice(row.end)].join('\n')
+  })
+  return result
 }
 
 /**
@@ -198,18 +199,17 @@ export function upsertRowConfig(home: string, profile: string, id: string, patch
   const text = readProfilePatchText(home, profile)
   const lines = text.split('\n')
   if (findRow(lines, id) !== undefined) return writeRowConfig(home, profile, id, patch)
-  const path = profilePatchPath(home, profile)
   const dumped = yaml.dump(patch, { lineWidth: -1, noRefs: true }).trimEnd()
   const entry = [`- id: ${id}`, '  config:', ...dumped.split('\n').map(line => `    ${line}`)].join('\n')
-  // 空用户层（无行且恰含独立 `[]` 占位行）：替换占位行而非追加——追加会在
-  // `[]` 之后产出非法 YAML（rc.4 同形态教训，e2e 实测抓出）。
-  const next = /^\[\]\s*$/m.test(text) && listPatchRowIds(text).length === 0
-    ? text.replace(/^\[\]\s*$/m, `${entry}\n`)
-    : (() => {
-        const head = text.trimEnd()
-        return head === '' ? `${entry}\n` : `${head}\n\n${entry}\n`
-      })()
-  writeFileSync(path, next, 'utf8')
+  mutatePatchFile(home, profile, (current) => {
+    // 空用户层（无行且恰含独立 `[]` 占位行）：替换占位行而非追加——追加会在
+    // `[]` 之后产出非法 YAML（rc.4 同形态教训，e2e 实测抓出）。
+    if (/^\[\]\s*$/m.test(current) && listPatchRowIds(current).length === 0) {
+      return current.replace(/^\[\]\s*$/m, `${entry}\n`)
+    }
+    const head = current.trimEnd()
+    return head === '' ? `${entry}\n` : `${head}\n\n${entry}\n`
+  })
   return { ok: true, config: patch }
 }
 
@@ -220,64 +220,66 @@ export interface RemovePatchRowsResult {
   readonly error?: string | undefined
 }
 
-/** 判断一段文本是否含 YAML 内容行（非空非注释；与 bridge-rows 同口径）。 */
-function hasYamlContent(text: string): boolean {
-  return text.split('\n').some(line => {
-    const trimmed = line.trim()
-    return trimmed !== '' && !trimmed.startsWith('#')
-  })
-}
-
 /**
  * 卸载清理（rc.6 残留 bugfix）：移除 patch 层内指定 id 的定向行（r6
- * upsert 写入的 config 覆盖行）、mygo 受管 disable 块与 bundle-rail
+ * upsert 写入的 config 覆盖行）、mygo 受管 disable 块、bundle-rail
  * companion 块（disable/enable/host，块内 rowId 可能不止一个，整块剥
- * 才不留孤儿行），其余用户内容不动；移除后无内容行时回落 `[]`——host
+ * 才不留孤儿行）与 live rail 受管块（r7；块标记携带包名，按 id 精确或
+ * scope 末段匹配），其余用户内容不动；移除后无内容行时回落 `[]`——host
  * 要求顶层合法 YAML 数组，仅注释/空白的文件解析为 null 会 fail-loud
  * （rc.3 同形态）。幂等；文件缺失按无行计。
  */
 export function removePatchRows(home: string, profile: string, ids: readonly string[]): RemovePatchRowsResult {
   let path: string
   try {
-    path = profilePatchPath(home, profile)
+    path = resolvePatchPath(home, profile)
   } catch (error) {
     return { ok: false, removed: [], error: error instanceof Error ? error.message : String(error) }
   }
   if (!existsSync(path)) return { ok: true, removed: [] }
-  let text = readFileSync(path, 'utf8')
   const removed: string[] = []
   const mark = (id: string): void => {
     if (!removed.includes(id)) removed.push(id)
   }
-  for (const id of ids) {
-    // 受管块先整块剥（块内含 - id 行，单剥行会留下不成对的标记）。
-    const begin = `${DISABLE_BLOCK_BEGIN} (id:${id}) ---`
-    const pattern = new RegExp(`\\n?${escapeRegExp(begin)}\\n(?:.*\\n)*?${escapeRegExp(DISABLE_BLOCK_END)}\\n?`)
-    const stripped = text.replace(pattern, '\n')
-    if (stripped !== text) {
-      text = stripped
-      mark(id)
-    }
-    for (const [start, end] of COMPANION_BLOCK_MARKERS(id)) {
-      const blockPattern = new RegExp(`\\n?${escapeRegExp(start)}\\n[\\s\\S]*?${escapeRegExp(end)}\\n?`)
-      const without = text.replace(blockPattern, '\n')
-      if (without !== text) {
-        text = without
+  mutatePatchFile(home, profile, (text) => {
+    let current = text
+    // live rail 受管块整块剥（r7 兜底；正常卸载路径 liveUninstall 已剥，
+    // 这里是崩溃残留/旁路写入的清理）。包名 = id 或任意 scope 末段。
+    current = current.replace(LIVE_BLOCK_PATTERN, (whole, pkg: string) => {
+      const hit = ids.find(candidate => pkg === candidate || pkg.endsWith(`/${candidate}`))
+      if (hit === undefined) return whole
+      mark(hit)
+      return '\n'
+    })
+    for (const id of ids) {
+      // 受管块先整块剥（块内含 - id 行，单剥行会留下不成对的标记）。
+      const begin = `${DISABLE_BLOCK_BEGIN} (id:${id}) ---`
+      const pattern = new RegExp(`\\n?${escapeRegExp(begin)}\\n(?:.*\\n)*?${escapeRegExp(DISABLE_BLOCK_END)}\\n?`)
+      const stripped = current.replace(pattern, '\n')
+      if (stripped !== current) {
+        current = stripped
+        mark(id)
+      }
+      for (const [start, end] of COMPANION_BLOCK_MARKERS(id)) {
+        const blockPattern = new RegExp(`\\n?${escapeRegExp(start)}\\n[\\s\\S]*?${escapeRegExp(end)}\\n?`)
+        const without = current.replace(blockPattern, '\n')
+        if (without !== current) {
+          current = without
+          mark(id)
+        }
+      }
+      // 定向行（findRow 取首个匹配，循环剥净同名行）。
+      for (;;) {
+        const lines = current.split('\n')
+        const row = findRow(lines, id)
+        if (row === undefined) break
+        current = [...lines.slice(0, row.start), ...lines.slice(row.end)].join('\n')
         mark(id)
       }
     }
-    // 定向行（findRow 取首个匹配，循环剥净同名行）。
-    for (;;) {
-      const lines = text.split('\n')
-      const row = findRow(lines, id)
-      if (row === undefined) break
-      text = [...lines.slice(0, row.start), ...lines.slice(row.end)].join('\n')
-      mark(id)
-    }
-  }
-  if (removed.length === 0) return { ok: true, removed }
-  const body = text.replace(/\n{3,}/g, '\n\n').trimEnd()
-  const next = hasYamlContent(body) ? `${body}\n` : body === '' ? '[]\n' : `${body}\n[]\n`
-  writeFileSync(path, next, 'utf8')
+    if (removed.length === 0) return undefined
+    const body = current.replace(/\n{3,}/g, '\n\n').trimEnd()
+    return hasYamlContent(body) ? `${body}\n` : body === '' ? '[]\n' : `${body}\n[]\n`
+  })
   return { ok: true, removed }
 }

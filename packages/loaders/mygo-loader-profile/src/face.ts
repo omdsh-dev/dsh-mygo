@@ -22,7 +22,7 @@ import {
   writeProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
 import type { ProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import { assertInsideHome, DISABLE_BLOCK_BEGIN, DISABLE_BLOCK_END, resolveDshHome } from '@r05en1cu/dsh-mygo'
+import { assertInsideHome, DISABLE_BLOCK_BEGIN, DISABLE_BLOCK_END, liveBlockPackages, resolveDshHome } from '@r05en1cu/dsh-mygo'
 
 export interface ProfileExecOptions {
   /** 目标 profile 名。 */
@@ -72,8 +72,12 @@ function reconcilePlugins(before: ProfileManifest, profileDir: string): void {
   const beforeDeps = new Set(Object.keys(before.dependencies ?? {}))
   const dependencies = Object.keys(after.dependencies ?? {})
   const plugins = [...(after.dsh?.profile?.bundles ?? [])]
+  // r7 单轨规则：live rail 受管块在管的包不进 bundles（同 id 双 insert 对
+  // boot 是致命错误；块内行重启后由 profile patch 层照常物化）。
+  const livePackages = new Set(liveBlockPackages(readPatchText(profileDir)))
   let changed = false
   for (const packageName of dependencies) {
+    if (livePackages.has(packageName)) continue
     const isBundle = exportsPatch(packageName, profileDir)
     if (isBundle && !plugins.includes(packageName)) {
       plugins.push(packageName)

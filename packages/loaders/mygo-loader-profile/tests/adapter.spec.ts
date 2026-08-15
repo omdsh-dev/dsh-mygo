@@ -9,6 +9,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { writeLiveBlock } from '@r05en1cu/dsh-mygo'
 import { createProfileLoaderAdapter, resolveProfileSpec } from '../src/index.ts'
 
 describe('resolveProfileSpec（四种 spec + 拒绝面）', () => {
@@ -79,6 +80,29 @@ describe('ProfileLoaderAdapter（执行面收敛后行为不变）', () => {
     expect(receipt.error?.code).toBe('package-not-resolvable')
     expect(receipt.error?.message).toContain('只执行 pnpm intent')
   })
+
+  it('install：live rail 受管块在管的包不进 bundles（r7 单轨排除）', async () => {
+    const bundleDir = await writeBundleFixture('@test/bundle-live', true)
+    // 预写 live 受管块（模拟 live rail 已接管该包的物化）
+    await mkdir(join(home, 'profiles', 'face'), { recursive: true })
+    expect(writeLiveBlock(home, 'face', '@test/bundle-live', bundleDir).ok).toBe(true)
+    const adapter = createProfileLoaderAdapter()
+    const receipt = await adapter.install({ kind: 'pnpm', spec: bundleDir }, { home, profile: 'face' })
+    expect(receipt.ok).toBe(true)
+    expect(receipt.bundles).not.toContain('@test/bundle-live')
+    // 依赖落盘但 bundles 无该包（live 块接管）
+    const manifest = JSON.parse(await readFile(join(home, 'profiles', 'face', 'package.json'), 'utf8')) as {
+      readonly dependencies?: Record<string, string>
+      readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
+    }
+    expect(Object.keys(manifest.dependencies ?? {})).toContain('@test/bundle-live')
+    expect(manifest.dsh?.profile?.bundles ?? []).not.toContain('@test/bundle-live')
+    // 无 live 块的对照包照常进 bundles
+    const plainDir = await writeBundleFixture('@test/bundle-plain', true)
+    const plain = await adapter.install({ kind: 'pnpm', spec: plainDir }, { home, profile: 'face' })
+    expect(plain.ok).toBe(true)
+    expect(plain.bundles).toContain('@test/bundle-plain')
+  }, 60_000)
 
   it('uninstall / setEnabled：扩展面对账与 patch 块写入', async () => {
     const bundleDir = await writeBundleFixture('@test/bundle-a', true)

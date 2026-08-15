@@ -8,10 +8,12 @@
  */
 
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { profileInstall } from '@r05en1cu/dsh-mygo-loader-profile'
+import { hasLiveBlock, writeLiveBlock } from '@r05en1cu/dsh-mygo'
 import type { BundleMember } from '@r05en1cu/dsh-mygo'
 import type { BundleUninstallOutcome } from '../src/index.ts'
 
@@ -23,6 +25,40 @@ type PanelContext = import('../src/index.ts').PanelContext
 
 function memberOf(id: string, packageName: string): BundleMember {
   return { id, packageName, enabled: true } as BundleMember
+}
+
+/** 读 profile manifest（同步；mock loader 闭包内用）。 */
+function manifestDeps(): readonly string[] {
+  const manifest = JSON.parse(readFileSync(join(home, 'profiles', 'web', 'package.json'), 'utf8')) as {
+    readonly dependencies?: Record<string, string>
+  }
+  return Object.keys(manifest.dependencies ?? {})
+}
+
+/**
+ * live 路径 mock ctx：get('loader') 供给条目枚举桩（activeIds 存活 fiber，
+ * inactiveIds 条目残留但 fiber 已 dispose），pluginManager 附
+ * bundleSetEnabled 记录面。onPoll 回调供顺序断言（观察调用时序的盘态）。
+ */
+function mockLiveCtx(
+  members: readonly BundleMember[],
+  loader: { entries(): Iterable<{ id: string; fiber?: object }> },
+  extra?: { onBundleSetEnabled?: (id: string, enabled: boolean) => void },
+): PanelContext {
+  return {
+    get: (name: string) => (name === 'loader' ? loader : undefined),
+    pluginManager: {
+      bundleList: () => members,
+      plan: () => Promise.resolve({ accepted: true }),
+      bundleSetEnabled: (id: string, enabled: boolean) => {
+        extra?.onBundleSetEnabled?.(id, enabled)
+        return Promise.resolve()
+      },
+      plugins: () => [],
+      configOf: () => ({}),
+      updateConfig: () => Promise.resolve(),
+    },
+  } as unknown as PanelContext
 }
 
 function mockCtx(members: readonly BundleMember[], planAccepted = true): PanelContext {
@@ -186,5 +222,104 @@ describe('routeBundleUninstall（bundle 轨卸载路由）', () => {
     expect(outcome.ok).toBe(true)
     const text = await readFile(patchPath, 'utf8')
     expect(text.trim()).toBe('[]')
+  }, 120_000)
+})
+
+describe('routeBundleUninstall（r7 live rail 路径）', () => {
+  it('live rail 包：先剥块 + 验证 dispose 再 pnpm remove（顺序断言），文案刷新生效', async () => {
+    const bundleDir = await writeBundleFixture(
+      '@test/live-five',
+      "- insert:\n    - id: live-five-row\n      name: '@test/live-five'\n",
+    )
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    // 模拟 live rail 安装后的盘态：受管块在 patch 层
+    const installedDir = join(home, 'profiles', 'web', 'node_modules', '@test', 'live-five')
+    expect(writeLiveBlock(home, 'web', '@test/live-five', installedDir).ok).toBe(true)
+    // loader 桩：第一次枚举条目仍存活（dispose 尚未发生），之后消失；
+    // 每次枚举记录当时依赖是否仍在（验证 dispose 必须先于 pnpm remove）。
+    let polls = 0
+    let depPresentAtLastPoll: boolean | undefined
+    const loader = {
+      *entries() {
+        polls += 1
+        depPresentAtLastPoll = manifestDeps().includes('@test/live-five')
+        if (polls === 1) yield { id: 'include:live-five-row', fiber: {} }
+      },
+    }
+    const outcome = await routeBundleUninstall(
+      mockLiveCtx([memberOf('live-five', '@test/live-five')], loader),
+      'live-five',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(true)
+    expect(polls).toBeGreaterThan(0)
+    expect(depPresentAtLastPoll).toBe(true)
+    expect(outcome.message).toContain('刷新页面后生效')
+    expect(manifestDeps()).not.toContain('@test/live-five')
+    expect(hasLiveBlock(home, 'web', '@test/live-five')).toBe(false)
+  }, 120_000)
+
+  it('live 验证超时：恢复 live 块且不执行 pnpm remove', async () => {
+    const bundleDir = await writeBundleFixture(
+      '@test/live-six',
+      "- insert:\n    - id: live-six-row\n      name: '@test/live-six'\n",
+    )
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    const installedDir = join(home, 'profiles', 'web', 'node_modules', '@test', 'live-six')
+    expect(writeLiveBlock(home, 'web', '@test/live-six', installedDir).ok).toBe(true)
+    // 条目始终存活 → dispose 验证永不通过（默认 10s 超时）
+    const loader = {
+      *entries() {
+        yield { id: 'include:live-six-row', fiber: {} }
+      },
+    }
+    const outcome = await routeBundleUninstall(
+      mockLiveCtx([memberOf('live-six', '@test/live-six')], loader),
+      'live-six',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('live 卸载验证超时')
+    expect(manifestDeps()).toContain('@test/live-six')
+    expect(hasLiveBlock(home, 'web', '@test/live-six')).toBe(true)
+  }, 120_000)
+
+  it('boot rail 包且实例在跑：先写 disable 块摘 fiber（验证先于 pnpm remove）', async () => {
+    const bundleDir = await writeBundleFixture(
+      '@test/live-seven',
+      "- insert:\n    - id: live-seven-row\n      name: '@test/live-seven'\n",
+    )
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    let detached = false
+    let depPresentAtDetach: boolean | undefined
+    let disableArgs: readonly [string, boolean] | undefined
+    const member = {
+      ...memberOf('live-seven', '@test/live-seven'),
+      patchFacts: [{ rowId: 'live-seven-row', kind: 'insert' as const }],
+    }
+    const loader = {
+      *entries() {
+        if (!detached) yield { id: 'include:live-seven-row', fiber: {} }
+      },
+    }
+    const outcome = await routeBundleUninstall(
+      mockLiveCtx([member], loader, {
+        onBundleSetEnabled: (id, enabled) => {
+          disableArgs = [id, enabled]
+          depPresentAtDetach = manifestDeps().includes('@test/live-seven')
+          detached = true
+        },
+      }),
+      'live-seven',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(true)
+    expect(disableArgs).toEqual(['live-seven', false])
+    expect(depPresentAtDetach).toBe(true)
+    expect(outcome.message).toContain('刷新页面后生效')
+    expect(manifestDeps()).not.toContain('@test/live-seven')
   }, 120_000)
 })

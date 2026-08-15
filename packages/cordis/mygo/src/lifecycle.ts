@@ -117,6 +117,13 @@ import {
 } from './compatibility.ts'
 import { EntrypointsTable } from './entrypoints.ts'
 import type { BundleInstallResult, BundleMember, BundleRail } from './bundle-rail.ts'
+import {
+  liveUninstall,
+  loaderEntrySnapshot,
+  precheckLiveInstall,
+  verifyEntryState,
+  writeLiveBlock,
+} from './live-rail.ts'
 import type { RegistryPersistence } from './persistence.ts'
 import type { SnapshotMeta } from './snapshots.ts'
 import type {
@@ -1934,7 +1941,90 @@ export class LifecycleEngine {
         member.id,
       )
     }
-    return { member, plan }
+    const activated = await this.activateLiveRail(member)
+    return { member, plan, activated }
+  }
+
+  /**
+   * r7 live rail：实例在跑（host loader 可达）时把新装 bundle 切到 live
+   * 轨——离线组合预检 id 撞车 → 移出 dsh.profile.bundles（单轨规则：同 id
+   * 双 insert 对 boot 是 exit=1 致命错误；先于写块做，崩于此窗口只丢激活
+   * 不毁 boot）→ 写受管 live 块 → 轮询验证激活。任一步失败回滚（剥块 /
+   * 回 bundles / bundleRail.uninstall）并抛错。loader 不可达（CLI 等
+   * 实例外形态）保持 boot 轨，下次 boot 物化。
+   */
+  private async activateLiveRail(member: BundleMember): Promise<'live' | 'pending-restart'> {
+    if (this.bundleRail === undefined) return 'pending-restart'
+    if (loaderEntrySnapshot((name: string) => this.ctx.get(name)) === undefined) return 'pending-restart'
+    const home = this.bundleRail.homeDir()
+    const profile = this.bundleRail.profileName()
+    const dir = this.bundleRail.resolveBundleDir(member.packageName)
+    if (dir === undefined) return 'pending-restart'
+    const rollback = (restoreBundles: boolean): void => {
+      try {
+        liveUninstall(home, profile, member.packageName)
+      } catch {
+        // 剥块尽力而为；下面整包回滚后由 removePatchRows 口径兜底
+      }
+      if (restoreBundles) this.restoreBootRail(member.packageName)
+      try {
+        this.bundleRail?.uninstall(member.id)
+      } catch {
+        // rollback is best-effort; the rejection below names the cause
+      }
+    }
+    const pre = await precheckLiveInstall(home, profile, dir)
+    for (const warning of pre.warnings) this.logger.warn(`live rail: ${warning}`)
+    if (!pre.ok) {
+      rollback(false)
+      throw new PluginError(
+        'compatibility-conflict',
+        pre.error ?? 'live rail 预检未通过',
+        { plugin: member.id },
+        member.id,
+      )
+    }
+    this.removeFromBootRail(member.packageName)
+    const written = writeLiveBlock(home, profile, member.packageName, dir)
+    if (!written.ok) {
+      rollback(true)
+      throw new PluginError(
+        'bundle-invalid',
+        written.error ?? 'live 块写入失败',
+        { plugin: member.id },
+        member.id,
+      )
+    }
+    const mounted = await verifyEntryState((name: string) => this.ctx.get(name), written.rowIds, 'active')
+    if (!mounted) {
+      rollback(true)
+      throw new PluginError(
+        'swap-timeout',
+        `live 重放验证超时（行 ${written.rowIds.join('、') || '(无 insert 行)'} 未激活；已回滚，bundle 未安装）`,
+        { plugin: member.id },
+        member.id,
+      )
+    }
+    return 'live'
+  }
+
+  /** 单轨切换：把包移出 dsh.profile.bundles（live 块接管物化）。 */
+  private removeFromBootRail(packageName: string): void {
+    if (this.bundleRail === undefined) return
+    const { dependencies, bundles } = this.bundleRail.readManifest()
+    if (!bundles.includes(packageName)) return
+    this.bundleRail.writeManifest({
+      dependencies,
+      bundles: bundles.filter(bundle => bundle !== packageName),
+    })
+  }
+
+  /** removeFromBootRail 的逆操作（live 写块/验证失败的回滚）。 */
+  private restoreBootRail(packageName: string): void {
+    if (this.bundleRail === undefined) return
+    const { dependencies, bundles } = this.bundleRail.readManifest()
+    if (bundles.includes(packageName)) return
+    this.bundleRail.writeManifest({ dependencies, bundles: [...bundles, packageName] })
   }
 
   /**
