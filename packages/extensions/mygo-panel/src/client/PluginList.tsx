@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from 'react'
 import css from './Panel.module.css'
-import { api, ApiError, COMPAT_EDGES, STATUS_LABEL, STATUS_TONE, type MygoPluginRow, type PlanShape } from './api'
+import { api, ApiError, COMPAT_EDGES, RAIL_LABEL, STATUS_LABEL, STATUS_TONE, type MygoPluginRow, type PlanShape } from './api'
 import { ConfirmDialog } from './ConfirmDialog'
 
 export interface PluginListProps {
@@ -33,7 +33,7 @@ const STATUS_FILTER_LABEL: Record<string, string> = {
   quarantined: '隔离',
   shadowed: '遮蔽',
 }
-const RAIL_FILTERS: readonly (string | undefined)[] = [undefined, 'bridge', 'bundle']
+const RAIL_FILTERS: readonly (string | undefined)[] = [undefined, 'bridge', 'bundle', 'live']
 
 export function PluginList(props: PluginListProps): JSX.Element {
   const { plugins, loading, highlighted, onRefresh, onError, onNotice, onOpenConfig, onAskHelper } = props
@@ -204,7 +204,7 @@ export function PluginList(props: PluginListProps): JSX.Element {
             className={railFilter === filter ? css.chip + ' ' + css.chipActive : css.chip}
             onClick={() => setRailFilter(filter)}
           >
-            {filter === undefined ? '全部轨道' : filter === 'bridge' ? 'bridge' : 'bundle'}
+            {filter === undefined ? '全部轨道' : RAIL_LABEL[filter] ?? filter}
           </button>
         ))}
       </div>
@@ -269,7 +269,7 @@ export function PluginList(props: PluginListProps): JSX.Element {
                   >
                     {plugin.status === 'enabled' ? '停用' : '启用'}
                   </button>
-                  {rail !== 'bundle' && (
+                  {rail === 'bridge' && (
                     <button
                       className={css.btn + ' ' + css.btnGhost + ' ' + css.btnSm}
                       disabled={busy}
@@ -278,7 +278,7 @@ export function PluginList(props: PluginListProps): JSX.Element {
                       配置
                     </button>
                   )}
-                  {rail !== 'bundle' && (
+                  {rail === 'bridge' && (
                     <button
                       className={css.btn + ' ' + css.btnGhost + ' ' + css.btnSm}
                       onClick={() => onAskHelper(plugin)}

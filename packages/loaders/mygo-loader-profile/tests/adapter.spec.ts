@@ -9,7 +9,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { writeLiveBlock } from '@r05en1cu/dsh-mygo'
+import { writeLiveBlock, hasLiveBlock } from '@r05en1cu/dsh-mygo'
 import { createProfileLoaderAdapter, resolveProfileSpec } from '../src/index.ts'
 
 describe('resolveProfileSpec（四种 spec + 拒绝面）', () => {
@@ -90,6 +90,7 @@ describe('ProfileLoaderAdapter（执行面收敛后行为不变）', () => {
     const receipt = await adapter.install({ kind: 'pnpm', spec: bundleDir }, { home, profile: 'face' })
     expect(receipt.ok).toBe(true)
     expect(receipt.bundles).not.toContain('@test/bundle-live')
+    expect(receipt.live).toBe(true)
     // 依赖落盘但 bundles 无该包（live 块接管）
     const manifest = JSON.parse(await readFile(join(home, 'profiles', 'face', 'package.json'), 'utf8')) as {
       readonly dependencies?: Record<string, string>
@@ -102,6 +103,30 @@ describe('ProfileLoaderAdapter（执行面收敛后行为不变）', () => {
     const plain = await adapter.install({ kind: 'pnpm', spec: plainDir }, { home, profile: 'face' })
     expect(plain.ok).toBe(true)
     expect(plain.bundles).toContain('@test/bundle-plain')
+    expect(plain.live).toBe(false)
+    expect(plain.activated).toBe('pending-restart')
+  }, 60_000)
+
+  it('uninstall：live rail 包先剥受管块再 pnpm remove（r7 对齐）', async () => {
+    const bundleDir = await writeBundleFixture('@test/bundle-live-rm', true)
+    // live 轨盘态：受管块先于安装写入（reconcile 单轨排除 → 不进 bundles）
+    await mkdir(join(home, 'profiles', 'face'), { recursive: true })
+    expect(writeLiveBlock(home, 'face', '@test/bundle-live-rm', bundleDir).ok).toBe(true)
+    const adapter = createProfileLoaderAdapter()
+    const target = { home, profile: 'face' }
+    const receipt = await adapter.install({ kind: 'pnpm', spec: bundleDir }, target)
+    expect(receipt.ok).toBe(true)
+    expect(receipt.bundles).not.toContain('@test/bundle-live-rm')
+    expect(receipt.live).toBe(true)
+    expect(receipt.activated).toBe('live')
+    const removed = adapter.uninstall('@test/bundle-live-rm', target)
+    expect(removed.ok).toBe(true)
+    expect(removed.liveStripped).toBe(true)
+    expect(hasLiveBlock(home, 'face', '@test/bundle-live-rm')).toBe(false)
+    const manifest = JSON.parse(await readFile(join(home, 'profiles', 'face', 'package.json'), 'utf8')) as {
+      readonly dependencies?: Record<string, string>
+    }
+    expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@test/bundle-live-rm')
   }, 60_000)
 
   it('uninstall / setEnabled：扩展面对账与 patch 块写入', async () => {

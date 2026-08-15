@@ -25,6 +25,8 @@ export interface ProfileInstallReceipt extends InstallReceipt {
   readonly bundles?: readonly string[]
   /** 本次自动放行的构建脚本键（P7-A1 一键写白名单）。 */
   readonly allowedBuilds?: readonly string[]
+  /** r7：新装/变更的包由 live rail 受管块在管（运行期重放生效）。 */
+  readonly live?: boolean
 }
 
 /**
@@ -91,6 +93,8 @@ export function createProfileLoaderAdapter(): ProfileLoaderAdapter {
         ok: true,
         profile: outcome.profile,
         bundles: outcome.bundles ?? [],
+        activated: outcome.live === true ? 'live' : 'pending-restart',
+        ...(outcome.live === undefined ? {} : { live: outcome.live }),
         ...(outcome.allowedBuilds === undefined ? {} : { allowedBuilds: outcome.allowedBuilds }),
       })
     },

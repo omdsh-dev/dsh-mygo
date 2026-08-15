@@ -22,7 +22,7 @@ import {
   writeProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
 import type { ProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import { assertInsideHome, DISABLE_BLOCK_BEGIN, DISABLE_BLOCK_END, liveBlockPackages, resolveDshHome } from '@r05en1cu/dsh-mygo'
+import { assertInsideHome, DISABLE_BLOCK_BEGIN, DISABLE_BLOCK_END, hasLiveBlock, liveBlockPackages, liveUninstall, resolveDshHome, writeLiveBlock } from '@r05en1cu/dsh-mygo'
 
 export interface ProfileExecOptions {
   /** 目标 profile 名。 */
@@ -42,6 +42,10 @@ export interface ProfileExecResult {
   readonly bundles?: readonly string[]
   /** 本次自动放行的构建脚本键（P7-A1；写入 profile pnpm-workspace.yaml）。 */
   readonly allowedBuilds?: readonly string[]
+  /** r7：新装/变更的包由 live rail 受管块在管（运行期重放生效，install）。 */
+  readonly live?: boolean
+  /** r7：本次卸载剥除了 live rail 受管块（先剥块后 pnpm remove，uninstall）。 */
+  readonly liveStripped?: boolean
   readonly error?: string | undefined
 }
 
@@ -238,10 +242,17 @@ export function profileInstall(spec: string, options: ProfileExecOptions): Profi
   if (!run.ok) return { ok: false, profile: options.profile, error: run.error }
   reconcilePlugins(before, dir)
   const after = readProfileManifest('mygo', dir)
+  // r7：新装/版本变更的包若已在 live rail 受管块在管（升级场景），运行期
+  // 重放即生效；否则进 bundles，重启/boot 物化。
+  const liveSet = new Set(liveBlockPackages(readPatchText(dir)))
+  const beforeDeps = before.dependencies ?? {}
+  const live = Object.entries(after.dependencies ?? {})
+    .some(([name, spec]) => beforeDeps[name] !== spec && liveSet.has(name))
   return {
     ok: true,
     profile: options.profile,
     bundles: after.dsh?.profile?.bundles ?? [],
+    live,
     ...(allowedBuilds === undefined ? {} : { allowedBuilds }),
   }
 }
@@ -250,11 +261,32 @@ export function profileInstall(spec: string, options: ProfileExecOptions): Profi
 export function profileUninstall(name: string, options: ProfileExecOptions): ProfileExecResult {
   const dir = ensureProfile(options)
   const before = readProfileManifest('mygo', dir)
+  // r7 live rail：先剥受管块（实例在跑时 host 重放即 live dispose），再
+  // pnpm remove——反了残留行会在下次重放/重启 import 失败连坐整次重放
+  // （CLI 与面板同口径；面板路径已剥时此处幂等 no-op）。
+  const home = options.home ?? resolveDshHome(process.env)
+  const liveStripped = hasLiveBlock(home, options.profile, name)
+  if (liveStripped) liveUninstall(home, options.profile, name)
   const run = runPnpm(dir, ['remove', name], options.cwd ?? process.cwd())
-  if (!run.ok) return { ok: false, profile: options.profile, error: run.error }
+  if (!run.ok) {
+    if (liveStripped) {
+      // pnpm 失败 = 包未卸载，恢复 live 块（物化源不能丢；恢复尽力而为）。
+      try {
+        writeLiveBlock(home, options.profile, name, resolveBundleDir('mygo', name, installAnchor(dir), dir))
+      } catch {
+        // 包目录不可解析等：块已剥，下次 boot 由 bundles/依赖残态兜底
+      }
+    }
+    return { ok: false, profile: options.profile, error: run.error }
+  }
   reconcilePlugins(before, dir)
   const after = readProfileManifest('mygo', dir)
-  return { ok: true, profile: options.profile, bundles: after.dsh?.profile?.bundles ?? [] }
+  return {
+    ok: true,
+    profile: options.profile,
+    bundles: after.dsh?.profile?.bundles ?? [],
+    ...(liveStripped ? { liveStripped } : {}),
+  }
 }
 
 /** 读 profile 用户 patch 层文本（缺省为空文档）。 */

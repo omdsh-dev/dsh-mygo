@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ResolutionReport, ServiceResolutionReport } from '@r05en1cu/dsh-mygo'
-import { jsonOutput, renderReportHuman, renderRestoreSuccess, renderUsage } from '../src/render.ts'
+import { jsonOutput, renderInstallSuccess, renderReportHuman, renderRestoreSuccess, renderUsage } from '../src/render.ts'
 
 function resolveFailed(): ResolutionReport {
   return {
@@ -165,5 +165,22 @@ describe('报告渲染（T48）', () => {
       expect(renderUsage(topic)).toContain(`dsh --profile <profile> mygo ${topic}`)
     }
     expect(renderUsage()).toContain('子命令：')
+  })
+})
+
+describe('install/uninstall 激活态文案（r7 对齐面板）', () => {
+  it('install：live 轨与 boot 轨文案分野', () => {
+    const live = renderInstallSuccess('install', 'web', [], { live: true })
+    expect(live).toContain('运行期重放即生效')
+    const boot = renderInstallSuccess('install', 'web', ['@deepseek-ai/dsh-base'])
+    expect(boot).toContain('重启实例后生效')
+    expect(boot).toContain('profile bundle 层：@deepseek-ai/dsh-base')
+  })
+
+  it('uninstall：剥除 live 块时提示重放/dispose 语义', () => {
+    const stripped = renderInstallSuccess('uninstall', 'web', [], { liveStripped: true })
+    expect(stripped).toContain('live 受管块已剥除')
+    const plain = renderInstallSuccess('uninstall', 'web', [])
+    expect(plain).not.toContain('live 受管块')
   })
 })

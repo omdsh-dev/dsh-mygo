@@ -26,6 +26,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import * as yaml from 'js-yaml'
 import type { PluginCompatibility } from '@r05en1cu/dsh-mygo-api'
+import { liveBlockPackages } from './live-rail.ts'
 import type { PluginOperationPlan } from './types.ts'
 
 /** One row-level fact extracted from a bundle's `cordis.patch.yml`. */
@@ -47,6 +48,12 @@ export interface BundleMember {
   readonly provides?: readonly string[]
   /** Active = listed in `dsh.profile.bundles` and not disabled by a companion block. */
   readonly enabled: boolean
+  /**
+   * r7 live rail 在管：该包的行由 profile patch 层 mygo live 受管块物化，
+   * 不进 `dsh.profile.bundles`（单轨规则）；此时 enabled 反映受管块 +
+   * companion 判定的真实激活态，而非恒 false。
+   */
+  readonly live?: boolean
   readonly patchFacts: readonly BundlePatchFact[]
   /** Human-readable host-row rewrites this bundle performs (needs double confirm). */
   readonly hostConflicts: readonly string[]
@@ -306,15 +313,32 @@ export class BundleRail {
   members(): BundleMember[] {
     const { dependencies, bundles } = this.readManifest()
     const bundleSet = new Set(bundles)
+    const liveSet = this.livePackageSet()
     const members: BundleMember[] = []
     const seen = new Set<string>()
     for (const packageName of [...bundleSet, ...Object.keys(dependencies)]) {
       if (seen.has(packageName)) continue
       seen.add(packageName)
       const member = this.readMember(packageName, bundleSet.has(packageName))
-      if (member !== undefined) members.push(member)
+      if (member === undefined) continue
+      // r7 单轨：live 块在管的包不进 bundles，enabled 以 companion 判定
+      // （否则会被 inBundles=false 恒误计为 disabled）。
+      members.push(liveSet.has(packageName)
+        ? { ...member, live: true, enabled: !this.hasCompanion(member.id) }
+        : member)
     }
     return members
+  }
+
+  /** live rail 受管块在管的包名集合（patch 层文本扫描；缺失/不可读按空集）。 */
+  private livePackageSet(): ReadonlySet<string> {
+    const path = this.patchPath()
+    if (!existsSync(path)) return new Set()
+    try {
+      return new Set(liveBlockPackages(readFileSync(path, 'utf8')))
+    } catch {
+      return new Set()
+    }
   }
 
   /** Forward one official `dsh plugin` invocation and return its output. */

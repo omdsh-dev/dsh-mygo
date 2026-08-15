@@ -22,6 +22,8 @@ interface PendingInstall {
   readonly id: string
   readonly plan: PlanShape
   readonly payload: Record<string, unknown>
+  /** 服务端安装回执文案（含激活态：已激活刷新可见 / 重启后生效）。 */
+  readonly message?: string
   readonly hostConflicts?: readonly string[]
 }
 
@@ -87,6 +89,7 @@ export function InstallPanel(props: InstallPanelProps): JSX.Element {
             id: result.id,
             plan,
             payload,
+            message: result.message,
             ...(result.hostConflicts === undefined ? {} : { hostConflicts: result.hostConflicts }),
           })
           return
@@ -132,7 +135,7 @@ export function InstallPanel(props: InstallPanelProps): JSX.Element {
     setInstalling(true)
     try {
       const result = current.payload.method === 'bundle'
-        ? { message: 'bundle ' + current.id + ' 已安装' }
+        ? { message: current.message ?? ('bundle ' + current.id + ' 已安装') }
         : await api.install(current.payload)
       onNotice(result.message)
       setSpec('')

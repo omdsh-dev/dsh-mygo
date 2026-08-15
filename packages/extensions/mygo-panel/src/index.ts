@@ -2937,7 +2937,7 @@ export function apply(ctx: PanelContext): void {
             status: member.enabled ? 'enabled' : 'disabled',
             origin: 'bundle',
             generation: 0,
-            rail: 'bundle',
+            rail: member.live === true ? 'live' : 'bundle',
             ...(member.compatibility === undefined ? {} : { compatibility: member.compatibility }),
             ...(member.hostConflicts.length === 0 ? {} : { hostConflicts: member.hostConflicts }),
           }))

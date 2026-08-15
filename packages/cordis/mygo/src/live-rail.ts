@@ -339,3 +339,31 @@ export async function liveInstall(
   const written = writeLiveBlock(home, profile, packageName, bundleDir)
   return { ...written, warnings: pre.warnings }
 }
+
+/**
+ * boot/运行期对账（r7 P5）：同一包同时出现在 dsh.profile.bundles 与 live
+ * 受管块 = 下次 boot 同 id 双 insert（exit=1 致命；boot 挂死时 mygo 没有
+ * 运行机会，故对账必须在实例活着时做）。bundle 赢：剥 live 块，行随下次
+ * boot 从 bundle 层物化（当前会话该包的 live 行随重放摘掉，重启后恢复）。
+ * 返回被剥块的包名；无重叠返回空。
+ */
+export function reconcileLiveRailOverlap(home: string, profile: string): readonly string[] {
+  const manifestPath = join(home, 'profiles', profile, 'package.json')
+  let bundles: readonly string[]
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      readonly dsh?: { readonly profile?: { readonly bundles?: unknown } }
+    }
+    const list = parsed.dsh?.profile?.bundles
+    bundles = Array.isArray(list) ? list.filter((entry): entry is string => typeof entry === 'string') : []
+  } catch {
+    return []
+  }
+  const bundleSet = new Set(bundles)
+  const overlap = liveBlockPackages(readPatchText(home, profile)).filter(pkg => bundleSet.has(pkg))
+  const stripped: string[] = []
+  for (const pkg of overlap) {
+    if (liveUninstall(home, profile, pkg).ok) stripped.push(pkg)
+  }
+  return stripped
+}

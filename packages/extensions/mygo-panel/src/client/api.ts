@@ -43,7 +43,7 @@ export interface MygoPluginRow {
   readonly status: string
   readonly origin: string
   readonly generation: number
-  readonly rail?: 'bridge' | 'bundle'
+  readonly rail?: 'bridge' | 'bundle' | 'live'
   readonly hostConflicts?: readonly string[]
   readonly entrypoints?: readonly string[]
   readonly compatibility?: PluginCompatibility
@@ -167,6 +167,8 @@ export const api = {
     readonly id: string
     readonly plan: PlanShape
     readonly message: string
+    /** r7 live rail：live = 运行期已激活；pending-restart = 重启后生效。 */
+    readonly activated?: 'live' | 'pending-restart'
     readonly hostConflicts?: readonly string[]
   }> {
     return request('/bundles/install', { method: 'POST', body: { spec } })
@@ -221,6 +223,7 @@ export const STATUS_TONE: Record<string, 'ok' | 'off' | 'warn' | 'danger' | 'dim
 export const RAIL_LABEL: Record<string, string> = {
   bridge: 'bridge',
   bundle: 'bundle',
+  live: 'live',
 }
 
 /** 兼容性边渲染顺序与标签。 */

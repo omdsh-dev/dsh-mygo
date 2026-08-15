@@ -26,6 +26,7 @@ export {
   liveUninstall,
   loaderEntrySnapshot,
   precheckLiveInstall,
+  reconcileLiveRailOverlap,
   verifyEntryState,
   writeLiveBlock,
 } from './live-rail.ts'

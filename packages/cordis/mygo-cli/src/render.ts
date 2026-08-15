@@ -99,10 +99,23 @@ export function renderInitSuccess(dir: string, fileCount: number, id: string): s
   ].join('\n') + '\n'
 }
 
-/** install/uninstall 成功的人类可读输出（含对账后 bundle 层列表）。 */
-export function renderInstallSuccess(verb: 'install' | 'uninstall', profile: string, bundles: readonly string[]): string {
+/** install/uninstall 成功的人类可读输出（含对账后 bundle 层列表与激活态提示）。 */
+export function renderInstallSuccess(
+  verb: 'install' | 'uninstall',
+  profile: string,
+  bundles: readonly string[],
+  live?: { readonly live?: boolean; readonly liveStripped?: boolean },
+): string {
   const lines = [`✓ ${verb} 完成 → profile ${profile}`]
   if (bundles.length > 0) lines.push(`  profile bundle 层：${bundles.join(', ')}`)
+  // r7 激活态对齐面板文案：live 轨 = 运行期重放生效；boot 轨 = 重启后生效。
+  if (verb === 'install') {
+    lines.push(live?.live === true
+      ? '  live 轨在管：运行期重放即生效（浏览器端刷新页面后可见）'
+      : '  实例在运行时，新装插件重启实例后生效（经面板安装可运行期激活）')
+  } else if (live?.liveStripped === true) {
+    lines.push('  live 受管块已剥除：实例在运行则重放后即 dispose，否则重启后生效')
+  }
   return lines.join('\n') + '\n'
 }
 

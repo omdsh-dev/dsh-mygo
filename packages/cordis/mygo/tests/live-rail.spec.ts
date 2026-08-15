@@ -20,6 +20,7 @@ import {
   liveUninstall,
   loaderEntrySnapshot,
   precheckLiveInstall,
+  reconcileLiveRailOverlap,
   removePatchRows,
   verifyEntryState,
   writeLiveBlock,
@@ -256,5 +257,39 @@ describe('verifyEntryState（写后验证轮询）', () => {
     await expect(verifyEntryState(get, ['never-row'], 'active', 60, 20)).resolves.toBe(false)
     await expect(verifyEntryState(() => undefined, ['row'], 'active', 2_000, 20)).resolves.toBe(false)
     expect(loaderEntrySnapshot(() => undefined)).toBeUndefined()
+  })
+})
+
+describe('reconcileLiveRailOverlap（r7 P5 boot/运行期对账）', () => {
+  const ROWS = "- insert:\n    - id: live-row\n      name: '@test/live-pkg'\n"
+
+  it('bundles 与 live 块重叠：剥 live 块（bundle 赢），不重叠的块不动', async () => {
+    const liveA = await writeBundleFixture('@test/live-a', ROWS)
+    const liveB = await writeBundleFixture('@test/live-b', "- insert:\n    - id: live-b-row\n      name: '@test/live-b'\n")
+    writeLiveBlock(home, 'web', '@test/live-a', liveA)
+    writeLiveBlock(home, 'web', '@test/live-b', liveB)
+    // 官方 CLI 旁路：@test/live-a 被加进 bundles（live 块还在 → 下次 boot 撞车）
+    await writeProfileManifest(['@test/live-a'])
+    const stripped = reconcileLiveRailOverlap(home, 'web')
+    expect(stripped).toEqual(['@test/live-a'])
+    expect(hasLiveBlock(home, 'web', '@test/live-a')).toBe(false)
+    expect(hasLiveBlock(home, 'web', '@test/live-b')).toBe(true)
+    // patch 层仍合法 YAML 数组
+    expect(Array.isArray(yaml.load(await readPatch()))).toBe(true)
+    // 幂等：再对账无动作
+    expect(reconcileLiveRailOverlap(home, 'web')).toEqual([])
+  })
+
+  it('无重叠 / manifest 缺失：空结果不改写文件', async () => {
+    const liveA = await writeBundleFixture('@test/live-a', ROWS)
+    writeLiveBlock(home, 'web', '@test/live-a', liveA)
+    await writeProfileManifest([])
+    const before = await readPatch()
+    expect(reconcileLiveRailOverlap(home, 'web')).toEqual([])
+    expect(await readPatch()).toBe(before)
+    // manifest 缺失（profile 未初始化形态）
+    await rm(join(home, 'profiles', 'web', 'package.json'), { force: true })
+    expect(reconcileLiveRailOverlap(home, 'web')).toEqual([])
+    expect(await readPatch()).toBe(before)
   })
 })

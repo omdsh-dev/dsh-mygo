@@ -58,9 +58,11 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, watch } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { readGovernanceView, checkBundleResolution, type GovernanceView } from './governance.ts'
+import { reconcileLiveRailOverlap } from './live-rail.ts'
 import { writeMygoSelfInstallation } from './self.ts'
 import type {
   PluginManager,
@@ -402,6 +404,41 @@ export class PluginManagerService extends Service implements PluginManager {
     // Publish the aggregation service so host-shaped raw plugins can own
     // (`define`) and consume (`get`) extension-point keys without mygo code.
     const entrypointsDisposer = ctx.provide('entrypoints', entrypoints)
+    // r7 P5 live rail 对账：bundles 与 live 受管块重叠（官方 CLI 运行期
+    // 旁路 add 同包）对下次 boot 是同 id 双 insert 致命错误；boot 挂死时
+    // 本服务没有运行机会，故在实例活着时对账——启动一次 + 运行期监听
+    // profile manifest 变更（pnpm 写 package.json 是 tmp+rename，目录级
+    // watch + debounce 覆盖）。
+    const reconcileOverlap = (reason: string): void => {
+      try {
+        for (const pkg of reconcileLiveRailOverlap(dshHome, this.profile)) {
+          ctx.logger.warn(
+            `[dsh-mygo] live rail 对账（${reason}）：${pkg} 同时在 bundles 与 live 受管块，`
+            + '已剥 live 块（bundle 轨接管，重启后恢复）',
+          )
+        }
+      } catch (error) {
+        ctx.logger.warn(`[dsh-mygo] live rail 对账失败（${reason}）：${String(error)}`)
+      }
+    }
+    reconcileOverlap('启动')
+    let reconcileTimer: ReturnType<typeof setTimeout> | undefined
+    let manifestWatcher: FSWatcher | undefined
+    try {
+      manifestWatcher = watch(join(dshHome, 'profiles', this.profile), (_event, filename) => {
+        if (filename === null || String(filename) !== 'package.json') return
+        if (reconcileTimer !== undefined) clearTimeout(reconcileTimer)
+        reconcileTimer = setTimeout(() => {
+          reconcileTimer = undefined
+          reconcileOverlap('manifest 变更')
+        }, 500)
+      })
+      manifestWatcher.on('error', (error: unknown) => {
+        ctx.logger.warn(`[dsh-mygo] live rail manifest 监听报错（对账转仅启动一次）：${String(error)}`)
+      })
+    } catch (error) {
+      ctx.logger.warn(`[dsh-mygo] live rail manifest 监听不可用（对账仅启动一次）：${String(error)}`)
+    }
     // Zero-intrusion unknown-tool attribution: the harness wraps every tool
     // dispatch in the `tools/execute` waterfall, so intercepting there lets a
     // call to an uninstalled plugin's old tool return a friendly failure
@@ -418,6 +455,8 @@ export class PluginManagerService extends Service implements PluginManager {
       }
     }) as never)
     ctx.effect(() => () => {
+      manifestWatcher?.close()
+      if (reconcileTimer !== undefined) clearTimeout(reconcileTimer)
       holder.engine?.dispose()
       entrypointsDisposer()
       void persistence.close()

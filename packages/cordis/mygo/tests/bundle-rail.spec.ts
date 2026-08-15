@@ -16,6 +16,7 @@ import {
   InMemoryRegistryStore,
   LifecycleEngine,
   resolvePluginManagerConfig,
+  writeLiveBlock,
 } from '@r05en1cu/dsh-mygo'
 
 interface Fixture {
@@ -169,6 +170,28 @@ describe('bundle rail primitives', () => {
     const afterEnable = readFileSync(patchFile, 'utf8')
     expect(afterEnable).not.toContain('mygo bundle disable block')
     expect(afterEnable.trimEnd().endsWith('[]')).toBe(true)
+  })
+
+  it('live rail 在管的包：members() 标 live 且 enabled 反映真实激活态（r7 P4 回归）', () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/live-bundle')
+    writeBundle(f, '@dsh-external/plain-dep')
+    // live 轨：dependency 但不在 bundles（单轨），patch 层有受管块
+    declareInstalled(f, '@dsh-external/live-bundle', false)
+    declareInstalled(f, '@dsh-external/plain-dep', false)
+    const bundleDir = join(f.dshHome, 'profiles', 'web', 'node_modules', '@dsh-external', 'live-bundle')
+    expect(writeLiveBlock(f.dshHome, 'web', '@dsh-external/live-bundle', bundleDir).ok).toBe(true)
+    const members = f.rail.members()
+    const live = members.find(member => member.id === 'live-bundle')
+    expect(live?.live).toBe(true)
+    expect(live?.enabled).toBe(true)
+    // 无 live 块也未列入 bundles 的依赖维持 disabled（行为不变）
+    const plain = members.find(member => member.id === 'plain-dep')
+    expect(plain?.live).toBeUndefined()
+    expect(plain?.enabled).toBe(false)
+    // companion disable 块对 live 成员照常生效
+    f.rail.disable('live-bundle')
+    expect(f.rail.members().find(member => member.id === 'live-bundle')?.enabled).toBe(false)
   })
 
   it('forwards install/uninstall through the official CLI', () => {

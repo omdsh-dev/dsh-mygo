@@ -292,10 +292,13 @@ async function runInstall(
       ok: true,
       profile: receipt.profile,
       bundles: receipt.bundles,
+      activated: receipt.activated ?? 'pending-restart',
       ...(receipt.allowedBuilds === undefined ? {} : { allowedBuilds: receipt.allowedBuilds }),
     }))
   } else {
-    internals.stdout.write(renderInstallSuccess('install', receipt.profile ?? current.profile, receipt.bundles ?? []))
+    internals.stdout.write(renderInstallSuccess('install', receipt.profile ?? current.profile, receipt.bundles ?? [], {
+      ...(receipt.live === undefined ? {} : { live: receipt.live }),
+    }))
   }
   return 0
 }
@@ -309,9 +312,16 @@ function runUninstall(
   const outcome = profileAdapterOf(ctx).uninstall(command.name, { home: resolveDshHome(process.env), profile: current.profile })
   if (!outcome.ok) return errorEnvelope('uninstall', 'uninstall-failed', outcome.error ?? 'pnpm 失败', command.json)
   if (command.json) {
-    internals.stdout.write(jsonOutput('uninstall', { ok: true, profile: outcome.profile, bundles: outcome.bundles }))
+    internals.stdout.write(jsonOutput('uninstall', {
+      ok: true,
+      profile: outcome.profile,
+      bundles: outcome.bundles,
+      ...(outcome.liveStripped === true ? { liveStripped: true } : {}),
+    }))
   } else {
-    internals.stdout.write(renderInstallSuccess('uninstall', outcome.profile, outcome.bundles ?? []))
+    internals.stdout.write(renderInstallSuccess('uninstall', outcome.profile, outcome.bundles ?? [], {
+      ...(outcome.liveStripped === true ? { liveStripped: true } : {}),
+    }))
   }
   return 0
 }
