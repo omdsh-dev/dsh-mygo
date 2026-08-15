@@ -177,9 +177,9 @@ export function renderConfigShow(profile: string, id: string, config: Record<str
 }
 
 /** 用法文本（mygo 总览 + 可选子命令详情）。 */
-export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config'): string {
+export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' | 'registry' | 'auth'): string {
   const common = '  --json     机器可读输出（stdout 只含唯一 JSON 文档）\n'
-  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config', string> = {
+  const topics: Record<'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' | 'registry' | 'auth', string> = {
     pack: [
       '用法：dsh --profile <profile> mygo pack [-o|--output <path>] [--ref <id>|--ref=all] [--no-community-deps] [--json]',
       '',
@@ -270,6 +270,22 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
       '  --set \'<json>\'       浅合并进整行 config 并写回（JSON 对象）',
       common,
     ].join('\n'),
+    registry: [
+      '用法：dsh --profile <profile> mygo registry <verb> [args] [--json]',
+      '',
+      '  list                          列出 .npmrc 受管块的 registry 映射',
+      '  add <scope> <registry> [--auth-ref <REF>]  写入/覆盖映射（只写 ${REF} 占位）',
+      '  remove <scope>                移除映射（删净后受管块/文件不留痕）',
+      common,
+    ].join('\n'),
+    auth: [
+      '用法：dsh --profile <profile> mygo auth <verb> [ref] [--value-env <VAR>] [--json]',
+      '',
+      '  status [ref]         凭据状态（只答 已配置/来源/可写，不答值）',
+      '  set <ref>            设凭据（--value-env 从环境变量读，或交互隐藏输入；不回显）',
+      '  unset <ref>          删凭据（env 遮蔽时 set/unset 拒绝）',
+      common,
+    ].join('\n'),
   }
   if (topic !== undefined) return topics[topic]
   return [
@@ -288,6 +304,8 @@ export function renderUsage(topic?: 'pack' | 'restore' | 'init' | 'install' | 'u
     '  clone      跨实例克隆插件（pack → 共享缓存 → 目标实例还原安装）',
     '  hub        dsh-hub 市场（search / info / install / collections）',
     '  config     读/改插件行 config（整行写回，免手工重述全字段）',
+    '  registry   registry 映射管理（profile .npmrc 受管块，list / add / remove）',
+    '  auth       registry 凭据设/删/状态（官方 credentials 存储，status / set / unset）',
     '',
     '全局：--json 机器可读；-h/--help 查看子命令用法。',
     '',

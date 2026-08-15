@@ -22,6 +22,8 @@ import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
 import { listPatchRowIds, readProfilePatchText, readRowConfig, removePatchRows, upsertRowConfig } from '@r05en1cu/dsh-mygo'
 import { hasLiveBlock, liveUninstall, loaderEntrySnapshot, verifyEntryState, writeLiveBlock } from '@r05en1cu/dsh-mygo'
+import { listRegistries, removeRegistry, upsertRegistry } from '@r05en1cu/dsh-mygo'
+import type { CredentialsLike } from '@r05en1cu/dsh-mygo'
 import { profileUninstall } from '@r05en1cu/dsh-mygo-loader-profile'
 import { buildArgsFor, listMygoPackageDirs, swapTreeIntoPlace } from './workspace-packages.js'
 import type {
@@ -241,6 +243,48 @@ function resolveProfilePackageDir(packageName: string, profile: string): string 
   } catch {
     return undefined
   }
+}
+
+/** 凭据写路由的结果信封（status + body；body 永不携带凭据值）。 */
+export interface CredentialMutationResult {
+  readonly status: number
+  readonly body: Record<string, unknown>
+}
+
+/**
+ * rc8 凭据设/删路由（官方 credentials 语义）：服务缺席 503；env 遮蔽
+ * （describe.writable === false）409；空值拒绝（空值等于不存在）；任何
+ * 响应不携带值。
+ */
+export async function routeCredentialMutation(
+  credentials: CredentialsLike | undefined,
+  method: 'PUT' | 'DELETE',
+  ref: string,
+  value?: unknown,
+): Promise<CredentialMutationResult> {
+  if (credentials === undefined) {
+    return { status: 503, body: { ok: false, error: '宿主 credentials 服务不可达（非 web 组合？）' } }
+  }
+  const info = await credentials.describe(ref)
+  if (!info.writable) {
+    return {
+      status: 409,
+      body: {
+        ok: false,
+        writable: false,
+        error: `引用 ${ref} 被更高优先级来源（如环境变量）遮蔽，写入无效——请先解除遮蔽`,
+      },
+    }
+  }
+  if (method === 'PUT') {
+    if (typeof value !== 'string' || value === '') {
+      return { status: 400, body: { ok: false, error: '缺少凭据值（空值等于不存在；删除请用 DELETE）' } }
+    }
+    await credentials.set(ref, value)
+    return { status: 200, body: { ok: true, message: `凭据 ${ref} 已存入实例凭据存储（$DSH_HOME/.credentials.yaml）` } }
+  }
+  await credentials.unset(ref)
+  return { status: 200, body: { ok: true, message: `凭据 ${ref} 已删除` } }
 }
 
 interface WebServerLike {
@@ -3020,6 +3064,69 @@ export function apply(ctx: PanelContext): void {
             },
             ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
           })
+          return
+        }
+        // rc8：registry 映射与凭据管理面（.npmrc 受管块 + 官方 credentials
+        // 服务；任何响应不携带机密值）。
+        if (method === 'GET' && path === '/api/mygo/registries') {
+          const dir = join(HOME_ROOT, 'profiles', panelProfile())
+          const credentials = ctx.get('credentials') as CredentialsLike | undefined
+          const registries = await Promise.all(listRegistries(dir).map(async binding => ({
+            scope: binding.scope,
+            registry: binding.registry,
+            ...(binding.authRef === undefined ? {} : { authRef: binding.authRef }),
+            ...(binding.authRef === undefined || credentials === undefined
+              ? {}
+              : { credential: await credentials.describe(binding.authRef) }),
+          })))
+          json(200, { ok: true, registries, credentialsAvailable: credentials !== undefined })
+          return
+        }
+        const registryMatch = /^\/api\/mygo\/registries\/([^/]+)$/.exec(path)
+        if (registryMatch !== null) {
+          const scope = decodeURIComponent(registryMatch[1] ?? '')
+          const dir = join(HOME_ROOT, 'profiles', panelProfile())
+          if (method === 'PUT') {
+            const body = JSON.parse(await readBody(req)) as {
+              readonly registry?: unknown
+              readonly authRef?: unknown
+            }
+            if (typeof body.registry !== 'string' || body.registry.trim() === '') {
+              throw new Error('缺少 registry URL')
+            }
+            const result = upsertRegistry(
+              dir,
+              scope,
+              body.registry.trim(),
+              typeof body.authRef === 'string' && body.authRef.trim() !== '' ? body.authRef.trim() : undefined,
+            )
+            if (!result.ok) throw new Error(result.error ?? '写入失败')
+            json(200, { ok: true, message: `registry ${scope} 已写入 profile .npmrc 受管块` })
+            return
+          }
+          if (method === 'DELETE') {
+            const result = removeRegistry(dir, scope)
+            json(200, {
+              ok: true,
+              message: result.removed ? `registry ${scope} 已移除` : `registry ${scope} 不存在（幂等）`,
+            })
+            return
+          }
+        }
+        const credentialMatch = /^\/api\/mygo\/credentials\/([^/]+)$/.exec(path)
+        if (credentialMatch !== null && (method === 'PUT' || method === 'DELETE')) {
+          const ref = decodeURIComponent(credentialMatch[1] ?? '')
+          let value: unknown
+          if (method === 'PUT') {
+            value = (JSON.parse(await readBody(req)) as { readonly value?: unknown }).value
+          }
+          const result = await routeCredentialMutation(
+            ctx.get('credentials') as CredentialsLike | undefined,
+            method,
+            ref,
+            value,
+          )
+          json(result.status, result.body)
           return
         }
         if (method === 'POST' && path === '/api/mygo/install') {

@@ -21,6 +21,12 @@ export type InstallIntent =
 export interface InstallTarget {
   readonly home: string
   readonly profile: string
+  /**
+   * rc8 registry auth：调用方解析好的子进程 env 增量（profile `.npmrc`
+   * 受管块 `${REF}` 占位经官方 credentials 服务按操作解析）；缺省透传
+   * process.env。
+   */
+  readonly env?: Readonly<Record<string, string>>
 }
 
 /** 一次安装的回执。 */

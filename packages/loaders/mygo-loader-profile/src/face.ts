@@ -33,6 +33,11 @@ export interface ProfileExecOptions {
   readonly cwd?: string
   /** 构建政策拦截时自动写白名单并重试一次（P7-A1；缺省 true）。 */
   readonly autoFixPnpmPolicies?: boolean
+  /**
+   * rc8 registry auth：调用方解析好的子进程 env 增量（`.npmrc` 受管块
+   * `${REF}` 占位经 credentials 解析）；缺省透传 process.env。
+   */
+  readonly env?: Readonly<Record<string, string>>
 }
 
 export interface ProfileExecResult {
@@ -109,12 +114,14 @@ function anchorPathSpec(argument: string, cwd: string): string {
   return `${match.groups.prefix ?? ''}${resolve(cwd, match.groups.path)}`
 }
 
-function runPnpm(profileDir: string, args: readonly string[], cwd: string): { readonly ok: boolean; readonly error?: string; readonly output: string } {
+function runPnpm(profileDir: string, args: readonly string[], cwd: string, env?: Readonly<Record<string, string>>): { readonly ok: boolean; readonly error?: string; readonly output: string } {
   const result = spawnSync('pnpm', args.map(argument => anchorPathSpec(argument, cwd)), {
     cwd: profileDir,
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
     encoding: 'utf8',
+    // rc8 registry auth：解析好的 ${REF} env 增量并入子进程环境。
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
   })
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
   // 透传保持终端可见性（原 stdio: inherit 语义），捕获供政策检测。
@@ -216,7 +223,7 @@ function ensureProfile(options: ProfileExecOptions): string {
 export function profileInstall(spec: string, options: ProfileExecOptions): ProfileExecResult {
   const dir = ensureProfile(options)
   const before = readProfileManifest('mygo', dir)
-  let run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd())
+  let run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd(), options.env)
   let allowedBuilds: readonly string[] | undefined
   if (!run.ok && options.autoFixPnpmPolicies !== false) {
     // P7-A1：构建政策双门槛一键放行——检测拦截 → 写白名单 → 重试一次
@@ -228,10 +235,10 @@ export function profileInstall(spec: string, options: ProfileExecOptions): Profi
         allowBuilds: keys,
         ...(exotic ? { blockExoticSubdeps: true } : {}),
       })
-      run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd())
+      run = runPnpm(dir, ['add', spec], options.cwd ?? process.cwd(), options.env)
       if (run.ok && keys.length > 0) {
         const names = [...new Set(keys.map(packageNameOfBuildKey))]
-        const rebuild = runPnpm(dir, ['rebuild', ...names], options.cwd ?? process.cwd())
+        const rebuild = runPnpm(dir, ['rebuild', ...names], options.cwd ?? process.cwd(), options.env)
         if (!rebuild.ok) {
           return { ok: false, profile: options.profile, error: `白名单已写入但 rebuild 失败：${rebuild.error ?? ''}` }
         }
@@ -267,7 +274,7 @@ export function profileUninstall(name: string, options: ProfileExecOptions): Pro
   const home = options.home ?? resolveDshHome(process.env)
   const liveStripped = hasLiveBlock(home, options.profile, name)
   if (liveStripped) liveUninstall(home, options.profile, name)
-  const run = runPnpm(dir, ['remove', name], options.cwd ?? process.cwd())
+  const run = runPnpm(dir, ['remove', name], options.cwd ?? process.cwd(), options.env)
   if (!run.ok) {
     if (liveStripped) {
       // pnpm 失败 = 包未卸载，恢复 live 块（物化源不能丢；恢复尽力而为）。

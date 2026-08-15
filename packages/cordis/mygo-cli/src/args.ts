@@ -78,14 +78,30 @@ export type CliCommand =
     readonly set?: string
     readonly json: boolean
   }
+  | {
+    readonly kind: 'registry'
+    readonly verb: 'list' | 'add' | 'remove'
+    readonly scope?: string
+    readonly registry?: string
+    readonly authRef?: string
+    readonly json: boolean
+  }
+  | {
+    readonly kind: 'auth'
+    readonly verb: 'status' | 'set' | 'unset'
+    readonly ref?: string
+    /** set 的值来源环境变量名（不回显；缺省交互隐藏输入）。 */
+    readonly valueEnv?: string
+    readonly json: boolean
+  }
 
 /** 解析结果：一条命令 / 帮助请求 / 用法错误。 */
 export type CliParse =
   | { readonly kind: 'command'; readonly command: CliCommand }
-  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' }
+  | { readonly kind: 'help'; readonly topic?: 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' | 'registry' | 'auth' }
   | { readonly kind: 'usage-error'; readonly message: string }
 
-const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone', 'hub', 'config'])
+const COMMANDS = new Set(['pack', 'restore', 'init', 'install', 'uninstall', 'enable', 'disable', 'instances', 'adopt', 'clone', 'hub', 'config', 'registry', 'auth'])
 
 /** npm 包名最小校验（手写；task 允许）：小写、URL 安全、非空段。 */
 export function isValidNpmName(name: string): boolean {
@@ -128,9 +144,9 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   if (head === undefined) return { kind: 'help' }
   if (head === '-h' || head === '--help') return { kind: 'help' }
   if (!COMMANDS.has(head)) {
-    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone / hub / config）` }
+    return { kind: 'usage-error', message: `未知子命令 ${JSON.stringify(head)}（可用：pack / restore / init / install / uninstall / enable / disable / instances / adopt / clone / hub / config / registry / auth）` }
   }
-  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config'
+  const command = head as 'pack' | 'restore' | 'init' | 'install' | 'uninstall' | 'enable' | 'disable' | 'instances' | 'adopt' | 'clone' | 'hub' | 'config' | 'registry' | 'auth'
   const positional: string[] = []
   let json = false
   let output = ''
@@ -143,6 +159,8 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
   let to: string | undefined
   let snapshot: string | undefined
   let set: string | undefined
+  let authRef: string | undefined
+  let valueEnv: string | undefined
   let register = true
   const refs: string[] = []
   let insecureNoVerify = false
@@ -264,6 +282,20 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
       index = taken.next
       continue
     }
+    if (command === 'registry' && flag === '--auth-ref') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--auth-ref 需要一个值` }
+      authRef = taken.value
+      index = taken.next
+      continue
+    }
+    if (command === 'auth' && flag === '--value-env') {
+      const taken = takeValue(rest, index, inline)
+      if (!taken.ok) return { kind: 'usage-error', message: `--value-env 需要一个值` }
+      valueEnv = taken.value
+      index = taken.next
+      continue
+    }
     return { kind: 'usage-error', message: `${command} 不支持参数 ${JSON.stringify(token)}` }
   }
 
@@ -290,6 +322,57 @@ export function parseCliArgs(argv: readonly string[]): CliParse {
         ...(arg === undefined ? {} : { arg }),
         ...(snapshot === undefined ? {} : { snapshot }),
         insecureNoVerify,
+        json,
+      },
+    }
+  }
+  if (command === 'registry') {
+    const verb = positional.shift()
+    if (verb === undefined || !['list', 'add', 'remove'].includes(verb)) {
+      return { kind: 'usage-error', message: `registry 需要子命令（list / add / remove），实际：${verb ?? '（缺）'}` }
+    }
+    const scope = positional.shift()
+    if (verb !== 'list' && (scope === undefined || scope === '')) {
+      return { kind: 'usage-error', message: `registry ${verb} 需要 scope（如 @my-scope）` }
+    }
+    const registry = verb === 'add' ? positional.shift() : undefined
+    if (verb === 'add' && (registry === undefined || registry === '')) {
+      return { kind: 'usage-error', message: 'registry add 需要 registry URL' }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `registry ${verb} 位置参数过多：${positional.join(' ')}` }
+    }
+    return {
+      kind: 'command',
+      command: {
+        kind: 'registry',
+        verb: verb as 'list' | 'add' | 'remove',
+        ...(scope === undefined ? {} : { scope }),
+        ...(registry === undefined ? {} : { registry }),
+        ...(authRef === undefined ? {} : { authRef }),
+        json,
+      },
+    }
+  }
+  if (command === 'auth') {
+    const verb = positional.shift()
+    if (verb === undefined || !['status', 'set', 'unset'].includes(verb)) {
+      return { kind: 'usage-error', message: `auth 需要子命令（status / set / unset），实际：${verb ?? '（缺）'}` }
+    }
+    const ref = positional.shift()
+    if (verb !== 'status' && (ref === undefined || ref === '')) {
+      return { kind: 'usage-error', message: `auth ${verb} 需要引用名（如 MY_SCOPE_TOKEN）` }
+    }
+    if (positional.length > 0) {
+      return { kind: 'usage-error', message: `auth ${verb} 位置参数过多：${positional.join(' ')}` }
+    }
+    return {
+      kind: 'command',
+      command: {
+        kind: 'auth',
+        verb: verb as 'status' | 'set' | 'unset',
+        ...(ref === undefined ? {} : { ref }),
+        ...(valueEnv === undefined ? {} : { valueEnv }),
         json,
       },
     }

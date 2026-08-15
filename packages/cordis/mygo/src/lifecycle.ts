@@ -124,6 +124,8 @@ import {
   verifyEntryState,
   writeLiveBlock,
 } from './live-rail.ts'
+import { resolveProfileEnv } from './registry-auth.ts'
+import type { CredentialsLike } from './registry-auth.ts'
 import type { RegistryPersistence } from './persistence.ts'
 import type { SnapshotMeta } from './snapshots.ts'
 import type {
@@ -1923,7 +1925,8 @@ export class LifecycleEngine {
   /** Install one profile bundle via the official CLI. */
   async bundleInstall(spec: string): Promise<BundleInstallResult> {
     if (this.bundleRail === undefined) throw new Error('bundle rail 未启用')
-    const member = this.bundleRail.install(spec)
+    const env = await this.resolveSpawnEnv()
+    const member = this.bundleRail.install(spec, env === undefined ? {} : { env })
     const plan = this.verifyBundleInstall(member)
     if (!plan.accepted || plan.error !== undefined) {
       try {
@@ -2075,7 +2078,30 @@ export class LifecycleEngine {
         ...(activationPlan.error?.details === undefined ? {} : { ...activationPlan.error.details }),
       }, id)
     }
-    this.bundleRail.uninstall(id)
+    const env = await this.resolveSpawnEnv()
+    this.bundleRail.uninstall(id, env === undefined ? {} : { env })
+  }
+
+  /**
+   * rc8 registry auth：spawn 前把 profile .npmrc 受管块的 `${REF}` 占位经
+   * host credentials 服务解析成子进程 env 增量（按操作解析不缓存）；
+   * 服务缺席/未配置只 warn 不阻断（pnpm 自己的 401 是最清楚的报错）。
+   */
+  private async resolveSpawnEnv(): Promise<Record<string, string> | undefined> {
+    if (this.bundleRail === undefined) return undefined
+    const credentials = this.ctx.get('credentials') as CredentialsLike | undefined
+    const { env, missing } = await resolveProfileEnv(
+      this.bundleRail.homeDir(),
+      this.bundleRail.profileName(),
+      credentials,
+    )
+    for (const ref of missing) {
+      this.logger.warn(
+        `registry auth：引用 ${ref} ${credentials === undefined ? '的 credentials 服务缺席' : '未配置'}`
+        + '——若该源需要认证，pnpm 将以匿名请求（可能 401）',
+      )
+    }
+    return Object.keys(env).length === 0 ? undefined : { ...env }
   }
 
   /** Enable/disable one profile bundle (routes through the unified graph). */

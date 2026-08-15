@@ -95,6 +95,18 @@ export interface StatusResult {
   }
 }
 
+/** 一条 registry 绑定（.npmrc 受管块行 + 凭据 describe 徽标；永不携带值）。 */
+export interface RegistryRow {
+  readonly scope: string
+  readonly registry: string
+  readonly authRef?: string
+  readonly credential?: {
+    readonly configured: boolean
+    readonly source?: string
+    readonly writable: boolean
+  }
+}
+
 /** 批量更新单条结果。 */
 export interface BatchUpdateResult {
   readonly id: string
@@ -202,6 +214,27 @@ export const api = {
   },
   bomExport(): Promise<{ readonly message: string; readonly jsonPath: string; readonly mdPath: string }> {
     return request('/bom/export', { method: 'POST' })
+  },
+  registries(): Promise<{
+    readonly registries: readonly RegistryRow[]
+    readonly credentialsAvailable: boolean
+  }> {
+    return request('/registries')
+  },
+  saveRegistry(scope: string, registry: string, authRef?: string): Promise<{ readonly message: string }> {
+    return request(`/registries/${encodeURIComponent(scope)}`, {
+      method: 'PUT',
+      body: { registry, ...(authRef === undefined ? {} : { authRef }) },
+    })
+  },
+  removeRegistry(scope: string): Promise<{ readonly message: string }> {
+    return request(`/registries/${encodeURIComponent(scope)}`, { method: 'DELETE' })
+  },
+  setCredential(ref: string, value: string): Promise<{ readonly message: string }> {
+    return request(`/credentials/${encodeURIComponent(ref)}`, { method: 'PUT', body: { value } })
+  },
+  unsetCredential(ref: string): Promise<{ readonly message: string }> {
+    return request(`/credentials/${encodeURIComponent(ref)}`, { method: 'DELETE' })
   },
 }
 

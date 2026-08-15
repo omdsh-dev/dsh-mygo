@@ -342,13 +342,15 @@ export class BundleRail {
   }
 
   /** Forward one official `dsh plugin` invocation and return its output. */
-  runDshPlugin(args: readonly string[]): string {
+  runDshPlugin(args: readonly string[], env?: Readonly<Record<string, string>>): string {
     const bin = this.options.dshBin
       ?? (this.options.checkout === undefined ? 'dsh' : join(this.options.checkout, 'bin', 'dsh'))
     const result = spawnSync(bin, ['plugin', '--profile', this.options.profile, ...args], {
       cwd: this.profileDir(),
       encoding: 'utf8',
       timeout: 120_000,
+      // rc8 registry auth：调用方解析好的 ${REF} env 增量并入子进程环境。
+      ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
     })
     if (result.status !== 0) {
       const detail = (result.stderr ?? result.stdout ?? '').trim()
@@ -358,8 +360,9 @@ export class BundleRail {
   }
 
   /** Install one bundle spec (npm name@range, git url, or path) via the official CLI. */
-  install(spec: string): BundleMember {
-    this.runDshPlugin(['add', spec])
+  install(spec: string, options?: { readonly env?: Readonly<Record<string, string>> }): BundleMember {
+    const beforeDeps = new Set(Object.keys(this.readManifest().dependencies))
+    this.runDshPlugin(['add', spec], options?.env)
     const { bundles } = this.readManifest()
     // The CLI reconciles bundle-declaring dependencies into the list; find the
     // newly installed member by matching the requested spec's package name.
@@ -367,7 +370,20 @@ export class BundleRail {
     const member = installed === undefined
       ? this.members().at(-1)
       : this.readMember(installed, bundles.includes(installed))
-    if (member === undefined) throw new Error(`安装后未能在 profile 中找到 bundle：${spec}`)
+    if (member === undefined) {
+      // rc8 P4 回滚小修：add 成功但成员解析失败（如包 exports 缺
+      // ./package.json 子路径）时不能留 deps/bundles 残账——按依赖差集
+      // 尽力 remove（spec 推导对 scoped 名不可靠）。
+      for (const name of Object.keys(this.readManifest().dependencies)) {
+        if (beforeDeps.has(name)) continue
+        try {
+          this.runDshPlugin(['remove', name], options?.env)
+        } catch {
+          // 回滚尽力而为；下面抛出的错误仍指认解析失败本身
+        }
+      }
+      throw new Error(`安装后未能在 profile 中找到 bundle：${spec}`)
+    }
     if (member.hostDisables.length > 0) this.writeHostBlock(member.id, member.hostDisables)
     // 0809 roster 读 `dshClient`，0810 读 `dsh.client`。官方 0810 格式的 bundle
     // 只声明 dsh.client；补一个 legacy 字段让 0809 的浏览器半部也能进 roster
@@ -377,13 +393,13 @@ export class BundleRail {
   }
 
   /** Uninstall one bundle via the official CLI, then drop its companion block. */
-  uninstall(id: string): void {
+  uninstall(id: string, options?: { readonly env?: Readonly<Record<string, string>> }): void {
     const member = this.members().find(candidate => candidate.id === id)
     if (member === undefined) throw new Error(`bundle ${id} 未安装`)
     this.removeDisableBlock(id)
     this.removeEnableBlock(id)
     this.removeHostBlock(id)
-    this.runDshPlugin(['remove', member.packageName])
+    this.runDshPlugin(['remove', member.packageName], options?.env)
     this.restoreLegacyClient(member.packageName)
   }
 

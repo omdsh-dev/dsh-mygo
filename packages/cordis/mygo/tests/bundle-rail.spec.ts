@@ -211,6 +211,32 @@ describe('bundle rail primitives', () => {
     }
   })
 
+  it('add 成功但 member 解析失败：回滚 remove，deps/bundles 不留残（rc8 P4）', () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/broken-bundle')
+    // exports 缺 ./package.json 子路径 → resolveBundleDir 解析失败（P6 e2e
+    // 实测形态）→ member 解析失败必须回滚
+    const pkgPath = join(f.dshHome, 'profiles', 'web', 'node_modules', '@dsh-external', 'broken-bundle', 'package.json')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
+    pkg.exports = { '.': './index.js' }
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
+    const env = process.env
+    process.env = { ...env, MYGO_DSH_HOME: f.dshHome, MYGO_PROFILE: f.profile, MYGO_CLI_CALLS: '[]' }
+    try {
+      expect(() => f.rail.install('@dsh-external/broken-bundle@1.0.0')).toThrow('未能在 profile 中找到 bundle')
+      const manifest = JSON.parse(readFileSync(join(f.dshHome, 'profiles', 'web', 'package.json'), 'utf8')) as {
+        readonly dependencies?: Record<string, string>
+        readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
+      }
+      expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@dsh-external/broken-bundle')
+      expect(manifest.dsh?.profile?.bundles ?? []).not.toContain('@dsh-external/broken-bundle')
+    } finally {
+      process.env = env
+      rmSync(f.dshHome, { recursive: true, force: true })
+      rmSync(f.checkout, { recursive: true, force: true })
+    }
+  })
+
   it('merges dsh.bundle.requires/breaks into compatibility', () => {
     const f = fixture()
     writeBundle(f, '@dsh-external/compat-bundle', {

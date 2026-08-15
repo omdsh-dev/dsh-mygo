@@ -11,12 +11,18 @@
 import {
   MYGO_MANAGER_VERSION,
   PluginPackageManager,
+  collectAuthRefs,
   listInstances,
+  listRegistries,
+  removeRegistry,
   resolveCoreVersion,
   resolveDshHome,
   resolveMygoPaths,
+  resolveProfileEnv,
+  upsertRegistry,
 } from '@r05en1cu/dsh-mygo'
-import { resolve } from 'node:path'
+import type { CredentialsLike } from '@r05en1cu/dsh-mygo'
+import { join, resolve } from 'node:path'
 import { parseCliArgs, type CliCommand } from './args.ts'
 import { InitError, generatePluginSkeleton } from './init.ts'
 import { createProfileLoaderAdapter, type ProfileLoaderAdapter } from '@r05en1cu/dsh-mygo-loader-profile'
@@ -116,8 +122,27 @@ export async function invokeCli(ctx: CliHost, argv: readonly string[]): Promise<
   return code
 }
 
-/** 当前 profile：管理器推导值优先，行配置次之（bundle 形态 config 可不携带）。 */
-function profileOf(ctx: CliHost): { readonly ok: true; readonly profile: string } | { readonly ok: false; readonly reason: string } {
+/**
+ * rc8 registry auth：spawn 前把 profile .npmrc 受管块的 `${REF}` 占位经
+ * host credentials 服务解析成子进程 env 增量（按操作解析不缓存）；
+ * 服务缺席/未配置只 warn 不阻断。
+ */
+async function resolveSpawnEnv(
+  ctx: CliHost,
+  home: string,
+  profile: string,
+): Promise<Record<string, string> | undefined> {
+  const credentials = ctx.get<CredentialsLike>('credentials')
+  const { env, missing } = await resolveProfileEnv(home, profile, credentials)
+  for (const ref of missing) {
+    internals.stderr.write(
+      `[warn] registry auth：引用 ${ref} ${credentials === undefined ? '的 credentials 服务缺席' : '未配置'}——若该源需要认证，pnpm 将以匿名请求（可能 401）\n`,
+    )
+  }
+  return Object.keys(env).length === 0 ? undefined : { ...env }
+}
+
+/** 当前 profile：管理器推导值优先，行配置次之（bundle 形态 config 可不携带）。 */function profileOf(ctx: CliHost): { readonly ok: true; readonly profile: string } | { readonly ok: false; readonly reason: string } {
   const manager = ctx.get<{ readonly profile?: string; readonly config?: { readonly profile?: string } }>('pluginManager')
   const profile = manager?.profile ?? manager?.config?.profile
   if (profile === undefined || profile === '') {
@@ -168,12 +193,154 @@ async function runCommand(ctx: CliHost, command: CliCommand): Promise<number> {
     case 'clone': return runClone(command)
     case 'hub': return runHub(ctx, command)
     case 'config': return runConfig(ctx, command)
+    case 'registry': return runRegistry(ctx, command)
+    case 'auth': return runAuth(ctx, command)
   }
 }
 
-/** config 命令（P7-A2）：整行 config 读/浅合并写回（patch 不 deep-merge 的补救）。 */
-function runConfig(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'config' }>): number {
+/**
+ * registry 命令（rc8）：profile .npmrc 受管块的映射管理（只携带 ${REF}
+ * 占位；块外用户行不动）。
+ */
+function runRegistry(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'registry' }>): number {
   const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('registry', 'no-profile', current.reason, command.json)
+  const dir = join(resolveDshHome(process.env), 'profiles', current.profile)
+  if (command.verb === 'list') {
+    const registries = listRegistries(dir)
+    if (command.json) {
+      internals.stdout.write(jsonOutput('registry', { ok: true, profile: current.profile, registries }))
+    } else if (registries.length === 0) {
+      internals.stdout.write('（无自定义 registry；profile .npmrc 受管块为空）\n')
+    } else {
+      internals.stdout.write(registries.map(binding =>
+        `${binding.scope} -> ${binding.registry}${binding.authRef === undefined ? '' : `（凭据引用 \${${binding.authRef}}）`}`,
+      ).join('\n') + '\n')
+    }
+    return 0
+  }
+  if (command.verb === 'add') {
+    const result = upsertRegistry(dir, command.scope ?? '', command.registry ?? '', command.authRef)
+    if (!result.ok) return errorEnvelope('registry', 'registry-invalid', result.error ?? '写入失败', command.json)
+    const message = `registry ${command.scope} 已写入 profile .npmrc 受管块`
+    if (command.json) internals.stdout.write(jsonOutput('registry', { ok: true, profile: current.profile }))
+    else internals.stdout.write(`✓ ${message}\n`)
+    return 0
+  }
+  const result = removeRegistry(dir, command.scope ?? '')
+  const message = result.removed ? `registry ${command.scope} 已移除` : `registry ${command.scope} 不存在（幂等）`
+  if (command.json) internals.stdout.write(jsonOutput('registry', { ok: true, profile: current.profile, removed: result.removed }))
+  else internals.stdout.write(`✓ ${message}\n`)
+  return 0
+}
+
+/** 交互隐藏输入读凭据值（非 TTY 时拒绝并指引 --value-env）。 */
+function readSecretInteractively(prompt: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const stdin = process.stdin
+    if (stdin.isTTY !== true) {
+      reject(new Error('非交互终端：请用 --value-env VAR 从环境变量读入'))
+      return
+    }
+    internals.stderr.write(prompt)
+    let value = ''
+    const cleanup = (): void => {
+      stdin.setRawMode(false)
+      stdin.pause()
+      stdin.off('data', onData)
+      internals.stderr.write('\n')
+    }
+    const onData = (chunk: Buffer): void => {
+      for (const ch of chunk.toString('utf8')) {
+        if (ch === '\n' || ch === '\r') {
+          cleanup()
+          resolvePromise(value)
+          return
+        }
+        if (ch === '\u0003') {
+          cleanup()
+          reject(new Error('已取消'))
+          return
+        }
+        if (ch === '\u007f' || ch === '\b') {
+          value = value.slice(0, -1)
+          continue
+        }
+        value += ch
+      }
+    }
+    stdin.setRawMode(true)
+    stdin.resume()
+    stdin.on('data', onData)
+  })
+}
+
+/**
+ * auth 命令（rc8）：凭据设/删/状态——全部经官方 credentials 服务
+ * （.credentials.yaml；值不进命令行参数与任何输出）。status 只答
+ * configured/source/writable（官方 describe 语义）。
+ */
+async function runAuth(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'auth' }>): Promise<number> {
+  const current = profileOf(ctx)
+  if (!current.ok) return errorEnvelope('auth', 'no-profile', current.reason, command.json)
+  const credentials = ctx.get<CredentialsLike>('credentials')
+  if (credentials === undefined) {
+    return errorEnvelope('auth', 'credentials-unavailable', '宿主 credentials 服务不可达（非 web 组合？）', command.json)
+  }
+  if (command.verb === 'status') {
+    const dir = join(resolveDshHome(process.env), 'profiles', current.profile)
+    const refs = command.ref === undefined ? collectAuthRefs(dir) : [command.ref]
+    const entries = await Promise.all(refs.map(async ref => ({
+      ref,
+      ...(await credentials.describe(ref)),
+    })))
+    if (command.json) {
+      internals.stdout.write(jsonOutput('auth', { ok: true, profile: current.profile, credentials: entries }))
+    } else if (entries.length === 0) {
+      internals.stdout.write('（.npmrc 受管块无凭据引用）\n')
+    } else {
+      internals.stdout.write(entries.map(entry =>
+        `${entry.ref}：${entry.configured ? `已配置（${entry.source ?? 'store'}）` : '未配置'}${entry.writable ? '' : '；被环境遮蔽不可写'}`,
+      ).join('\n') + '\n')
+    }
+    return 0
+  }
+  const ref = command.ref ?? ''
+  // env 遮蔽时 set/unset 拒绝（官方语义）：先 describe 探 writable。
+  const info = await credentials.describe(ref)
+  if (!info.writable) {
+    return errorEnvelope('auth', 'credential-shadowed', `引用 ${ref} 被更高优先级来源（如环境变量）遮蔽，写入无效`, command.json)
+  }
+  if (command.verb === 'unset') {
+    await credentials.unset(ref)
+    if (command.json) internals.stdout.write(jsonOutput('auth', { ok: true, ref }))
+    else internals.stdout.write(`✓ 凭据 ${ref} 已删除\n`)
+    return 0
+  }
+  let value: string
+  if (command.valueEnv !== undefined) {
+    value = process.env[command.valueEnv] ?? ''
+    if (value === '') {
+      return errorEnvelope('auth', 'credential-empty', `环境变量 ${command.valueEnv} 为空或不存在（空值等于不存在）`, command.json)
+    }
+  } else {
+    try {
+      value = await readSecretInteractively(`输入 ${ref} 的凭据值（不回显）：`)
+    } catch (error) {
+      return errorEnvelope('auth', 'credential-read-failed', error instanceof Error ? error.message : String(error), command.json)
+    }
+    if (value === '') {
+      return errorEnvelope('auth', 'credential-empty', '空值等于不存在；删除请用 auth unset', command.json)
+    }
+  }
+  await credentials.set(ref, value)
+  if (command.json) internals.stdout.write(jsonOutput('auth', { ok: true, ref }))
+  else internals.stdout.write(`✓ 凭据 ${ref} 已存入实例凭据存储（$DSH_HOME/.credentials.yaml）\n`)
+  return 0
+}
+
+/** config 命令（P7-A2）：整行 config 读/浅合并写回（patch 不 deep-merge 的补救）。 */
+function runConfig(ctx: CliHost, command: Extract<CliCommand, { readonly kind: 'config' }>): number {  const current = profileOf(ctx)
   if (!current.ok) return errorEnvelope('config', 'no-profile', current.reason, command.json)
   const home = resolveDshHome(process.env)
   if (command.set === undefined) {
@@ -282,7 +449,13 @@ async function runInstall(
   if (intent === null) {
     return errorEnvelope('install', 'install-failed', `无法识别的安装 spec：${command.spec}`, command.json)
   }
-  const receipt = await adapter.install(intent, { home: resolveDshHome(process.env), profile: current.profile })
+  const home = resolveDshHome(process.env)
+  const spawnEnv = await resolveSpawnEnv(ctx, home, current.profile)
+  const receipt = await adapter.install(intent, {
+    home,
+    profile: current.profile,
+    ...(spawnEnv === undefined ? {} : { env: spawnEnv }),
+  })
   if (!receipt.ok) return errorEnvelope('install', 'install-failed', receipt.error?.message ?? 'pnpm 失败', command.json)
   if ((receipt.allowedBuilds?.length ?? 0) > 0 && !command.json) {
     internals.stdout.write(`  已放行构建脚本（写入 profile pnpm-workspace.yaml 白名单）：${(receipt.allowedBuilds ?? []).join(', ')}\n`)
@@ -303,13 +476,19 @@ async function runInstall(
   return 0
 }
 
-function runUninstall(
+async function runUninstall(
   ctx: CliHost,
   command: Extract<CliCommand, { readonly kind: 'uninstall' }>,
-): number {
+): Promise<number> {
   const current = profileOf(ctx)
   if (!current.ok) return errorEnvelope('uninstall', 'no-profile', current.reason, command.json)
-  const outcome = profileAdapterOf(ctx).uninstall(command.name, { home: resolveDshHome(process.env), profile: current.profile })
+  const home = resolveDshHome(process.env)
+  const spawnEnv = await resolveSpawnEnv(ctx, home, current.profile)
+  const outcome = profileAdapterOf(ctx).uninstall(command.name, {
+    home,
+    profile: current.profile,
+    ...(spawnEnv === undefined ? {} : { env: spawnEnv }),
+  })
   if (!outcome.ok) return errorEnvelope('uninstall', 'uninstall-failed', outcome.error ?? 'pnpm 失败', command.json)
   if (command.json) {
     internals.stdout.write(jsonOutput('uninstall', {

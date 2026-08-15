@@ -81,7 +81,11 @@ export function createProfileLoaderAdapter(): ProfileLoaderAdapter {
           },
         })
       }
-      const outcome = profileInstall(intent.spec, { profile: target.profile, home: target.home })
+      const outcome = profileInstall(intent.spec, {
+        profile: target.profile,
+        home: target.home,
+        ...(target.env === undefined ? {} : { env: target.env }),
+      })
       if (!outcome.ok) {
         return Promise.resolve({
           ok: false,
@@ -99,7 +103,11 @@ export function createProfileLoaderAdapter(): ProfileLoaderAdapter {
       })
     },
     uninstall(name: string, target: InstallTarget): ProfileExecResult {
-      return profileUninstall(name, { profile: target.profile, home: target.home })
+      return profileUninstall(name, {
+        profile: target.profile,
+        home: target.home,
+        ...(target.env === undefined ? {} : { env: target.env }),
+      })
     },
     setEnabled(id: string, enabled: boolean, target: InstallTarget): ProfileExecResult {
       return profileSetEnabled(id, enabled, { profile: target.profile, home: target.home })

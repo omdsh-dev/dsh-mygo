@@ -1,7 +1,7 @@
 /**
  * mygo 面板主壳（r7 重做）：头部概览（mygo 版本 / 状态统计 / BOM）+ 标签页
- * 导航（插件 / 安装 / 更新 / 助手）+ 全局通知条 + 配置抽屉 + 助手会话轮询。
- * 数据全部经 /api/mygo/* JSON API。
+ * 导航（插件 / 安装 / 更新 / 助手 / 源与凭据）+ 全局通知条 + 配置抽屉 +
+ * 助手会话轮询。数据全部经 /api/mygo/* JSON API。
  * @module @r05en1cu/dsh-mygo-ext-panel/client/Panel
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -17,11 +17,12 @@ import { UpdatesPanel } from './UpdatesPanel'
 import { ConfigHelper, type HelperPanelState } from './ConfigHelper'
 import { ConfigEditor, type ConfigDrawerState } from './ConfigEditor'
 import { ConfigTransfer } from './ConfigTransfer'
+import { RegistriesPanel } from './RegistriesPanel'
 
 export type { ConfigFieldShape } from './ConfigFields'
 export type { MygoPluginRow, RemoteUpdateRow } from './api'
 
-type TabId = 'plugins' | 'install' | 'updates' | 'helper'
+type TabId = 'plugins' | 'install' | 'updates' | 'helper' | 'registries'
 
 interface NoticeState {
   readonly kind: 'error' | 'notice'
@@ -35,6 +36,7 @@ const TAB_LABEL: Record<TabId, string> = {
   install: '安装',
   updates: '更新',
   helper: '助手',
+  registries: '源与凭据',
 }
 
 export function Panel(): JSX.Element {
@@ -431,6 +433,12 @@ export function Panel(): JSX.Element {
           onSend={sendHelperMessage}
           onStop={stopHelper}
           onClearContext={() => setHelperContext(undefined)}
+        />
+      )}
+      {tab === 'registries' && (
+        <RegistriesPanel
+          onError={reportError}
+          onNotice={reportNotice}
         />
       )}
       {configDrawer !== undefined && (

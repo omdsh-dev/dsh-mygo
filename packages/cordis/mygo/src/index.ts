@@ -17,6 +17,19 @@ export { BundleRail, patchFactsFromText } from './bundle-rail.ts'
 export type { BundleInstallResult, BundleMember, BundlePatchFact, BundleRailOptions } from './bundle-rail.ts'
 export { hasYamlContent, mutatePatchFile, readPatchText, resolvePatchPath } from './patch-io.ts'
 export {
+  NPMRC_BLOCK_BEGIN,
+  NPMRC_BLOCK_END,
+  collectAuthRefs,
+  listRegistries,
+  mutateNpmrc,
+  readNpmrc,
+  removeRegistry,
+  upsertRegistry,
+} from './npmrc.ts'
+export type { RegistryBinding } from './npmrc.ts'
+export { resolveProfileEnv } from './registry-auth.ts'
+export type { CredentialsLike, ProfileEnvResolution } from './registry-auth.ts'
+export {
   LIVE_BLOCK_BEGIN,
   LIVE_BLOCK_END,
   LIVE_BLOCK_PATTERN,
