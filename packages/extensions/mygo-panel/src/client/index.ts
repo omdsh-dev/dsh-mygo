@@ -11,6 +11,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { Panel } from './Panel'
 import { MygoPluginConfigCard, type MygoPluginCardSeed } from './PluginConfigCard'
+import { applyLiveRailHmr } from './live-rail'
 
 /**
  * settings.plugin.item 槽契约镜像（与官方 dsh-client-ui-settings-plugins
@@ -42,6 +43,8 @@ interface CardsResult {
 }
 
 export function apply(ctx: ClientContext): void {
+  // rc8：live rail 页内图变更通道（loader/modules 不可达时内部降级不订阅）。
+  applyLiveRailHmr(ctx)
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'mygo-plugins',

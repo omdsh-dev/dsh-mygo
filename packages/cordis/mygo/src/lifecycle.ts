@@ -1949,9 +1949,12 @@ export class LifecycleEngine {
    * r7 live rail：实例在跑（host loader 可达）时把新装 bundle 切到 live
    * 轨——先移出 dsh.profile.bundles（单轨规则：同 id 双 insert 对 boot 是
    * exit=1 致命错误；且必须先于预检，否则离线组合树已含新 bundle 的行，
-   * 预检会自撞假阳性）→ 离线组合预检 id 撞车 → 写受管 live 块 → 轮询
-   * 验证激活。任一步失败回滚（剥块 / 回 bundles / bundleRail.uninstall）
-   * 并抛错。loader 不可达（CLI 等实例外形态）保持 boot 轨，下次 boot 物化。
+   * 预检会自撞假阳性）→ 离线组合预检 id 撞车 → 冻结层守卫（行已被 boot
+   * 轨 frozen bundlePatches 物化时保持 boot 轨不写块——冻结层在实例存活
+   * 期不变，写块会构成运行期双 insert 毒化后续每次重放，rc8 e2e 实测
+   * 抓出）→ 写受管 live 块 → 轮询验证激活。任一步失败回滚（剥块 /
+   * 回 bundles / bundleRail.uninstall）并抛错。loader 不可达（CLI 等
+   * 实例外形态）保持 boot 轨，下次 boot 物化。
    */
   private async activateLiveRail(member: BundleMember): Promise<'live' | 'pending-restart'> {
     if (this.bundleRail === undefined) return 'pending-restart'
@@ -1984,6 +1987,15 @@ export class LifecycleEngine {
         { plugin: member.id },
         member.id,
       )
+    }
+    // 冻结层守卫：insert 行已被 boot 轨 frozen bundlePatches 物化（重复
+    // 安装/官方 CLI 先装过）时保持 boot 轨、不写 live 块——冻结层在实例
+    // 存活期不变，写块会构成运行期同 id 双 insert 毒化后续每次重放。
+    // 行当前即激活态，返回 'live' 如实上报。
+    if (pre.rowIds.length > 0
+      && await verifyEntryState((name: string) => this.ctx.get(name), pre.rowIds, 'active', 1, 1)) {
+      this.restoreBootRail(member.packageName)
+      return 'live'
     }
     const written = writeLiveBlock(home, profile, member.packageName, dir)
     if (!written.ok) {

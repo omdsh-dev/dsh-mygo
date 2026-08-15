@@ -286,8 +286,7 @@ describe('routeBundleUninstall（r7 live rail 路径）', () => {
     expect(hasLiveBlock(home, 'web', '@test/live-six')).toBe(true)
   }, 120_000)
 
-  it('boot rail 包且实例在跑：先写 disable 块摘 fiber（验证先于 pnpm remove）', async () => {
-    const bundleDir = await writeBundleFixture(
+  it('boot rail 包且实例在跑：先写 disable 块摘 fiber（验证先于 pnpm remove）', async () => {    const bundleDir = await writeBundleFixture(
       '@test/live-seven',
       "- insert:\n    - id: live-seven-row\n      name: '@test/live-seven'\n",
     )
@@ -321,5 +320,40 @@ describe('routeBundleUninstall（r7 live rail 路径）', () => {
     expect(depPresentAtDetach).toBe(true)
     expect(outcome.message).toContain('刷新页面后生效')
     expect(manifestDeps()).not.toContain('@test/live-seven')
+  }, 120_000)
+
+  it('live 生效的卸载向 SSE 通道广播 unmount 帧（rc8）', async () => {
+    const bundleDir = await writeBundleFixture(
+      '@test/live-eight',
+      "- insert:\n    - id: live-eight-row\n      name: '@test/live-eight'\n",
+    )
+    expect(profileInstall(bundleDir, { profile: 'web', home }).ok).toBe(true)
+    const installedDir = join(home, 'profiles', 'web', 'node_modules', '@test', 'live-eight')
+    expect(writeLiveBlock(home, 'web', '@test/live-eight', installedDir).ok).toBe(true)
+    // 挂接一个假 SSE 连接（直接经 live-events 路由面）
+    const { registerLiveEventsRoute } = await import('../src/live-events.ts')
+    const chunks: string[] = []
+    let closeListener: (() => void) | undefined
+    registerLiveEventsRoute({
+      register(route) {
+        const handler = route.handler as (req: unknown, res: unknown) => void
+        handler({ method: 'GET' }, {
+          writeHead: () => {},
+          write: (chunk: string) => chunks.push(chunk),
+          on: (_event: 'close', listener: () => void) => { closeListener = listener },
+        })
+        return () => {}
+      },
+    } as never)
+    const loader = { *entries() { /* 行已 dispose（无条目） */ } }
+    const outcome = await routeBundleUninstall(
+      mockLiveCtx([memberOf('live-eight', '@test/live-eight')], loader),
+      'live-eight',
+      false,
+      'web',
+    )
+    expect(outcome.ok).toBe(true)
+    expect(chunks.some(chunk => chunk.includes('"op":"unmount","id":"@test/live-eight"'))).toBe(true)
+    closeListener?.()
   }, 120_000)
 })

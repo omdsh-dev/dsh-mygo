@@ -113,6 +113,8 @@ const MANIFEST = '.mygo-install.json'
 
 // rc.3：桥接行装配/可解析性校验收敛进 bridge-rows.ts（纯函数可测面）。
 import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
+// rc8：live rail 事件通道（SSE 端点 + 广播面）。
+import { broadcastLiveRail, liveRowUrlOf, registerLiveEventsRoute } from './live-events.js'
 
 export const name = 'dsh-mygo-panel'
 export const inject = ['pluginManager', 'webServer']
@@ -218,6 +220,9 @@ export async function routeBundleUninstall(
     ...(id === 'dsh-mygo' ? ['mygo 管理面已随核心卸载中断'] : []),
     ...(cleanup.ok ? [] : [`配置行清理失败（请手工检查 profile cordis.patch.yml）：${cleanup.error ?? ''}`]),
   ]
+  // rc8：live 生效（dispose 已验证）的卸载广播——打开中的页面页内拆卸
+  // client 行；boot 轨未摘取/实例不在跑的路径不发帧（重启生效语义不变）。
+  if (liveEffective) broadcastLiveRail({ type: 'live-rail', op: 'unmount', id: packageName })
   return {
     ok: true,
     id,
@@ -2900,6 +2905,8 @@ export function apply(ctx: PanelContext): void {
   })().catch((error: unknown) => {
     console.error('[dsh-mygo-panel] startup sync failed:', error)
   })
+  // rc8：live rail 事件通道（exact 先于下面的 /api/mygo prefix 匹配）。
+  registerLiveEventsRoute(ctx.webServer)
   ctx.webServer.register({
     kind: 'prefix',
     path: '/api/mygo',
@@ -2989,6 +2996,16 @@ export function apply(ctx: PanelContext): void {
           const spec = body.spec?.trim()
           if (spec === undefined || spec.length === 0) throw new Error('缺少 bundle spec')
           const result = await ctx.pluginManager.bundleInstall(spec)
+          // rc8：live 激活的包装卸即时性广播——打开中的页面页内挂载 client 行。
+          if (result.activated === 'live') {
+            const url = liveRowUrlOf(name => ctx.get(name), result.member.packageName)
+            broadcastLiveRail({
+              type: 'live-rail',
+              op: 'mount',
+              id: result.member.packageName,
+              ...(url === undefined ? {} : { url }),
+            })
+          }
           json(200, {
             ok: true,
             id: result.member.id,

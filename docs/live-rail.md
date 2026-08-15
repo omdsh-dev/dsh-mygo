@@ -86,12 +86,38 @@
 - live 重放静默失败的兜底 = verifyEntryState 超时回滚 + 报错，不假设
   写文件即生效。
 
-## 6. 已知限制
+## 6. 免刷新 UI（rc8）
 
-- **client 图行需刷新页面**：带 `dsh.client` 的插件 live 挂载后，浏览器
-  端图行要刷新页面才出现（host 既有行为：graph 帧只在 SSE 连接时推
-  送，浏览器半对 graph 帧 no-op）。收口提案 = EXT-4 /
-  `patches/client-hmr-graph-host.patch`（host 补丁提案，不 apply）。
+live 装卸后，打开中的页面免刷新看到插件 UI 出现/消失。host 现状：node
+半 client-modules 图随 `internal/plugin` 事件自动更新（新插件的
+`/plugins/<id>/client.js` 立即可服务），但 graph 帧只在 SSE 连接时推
+一次、client-hmr 浏览器半显式忽略 graph 帧（EXT-4 提案未合入）。mygo
+侧自建一条通道：
+
+- **node 半（面板）**：live 轨装卸成功（安装验证激活 / 卸载验证
+  dispose）后，`/api/mygo/events` SSE 广播
+  `{ type: 'live-rail', op: 'mount'|'unmount', id: <包名>, url? }`
+  （帧格式与 host `/plugins/events` 同款；url 取 host 图行，含 rev）。
+  boot 轨的重启生效路径不发帧。
+- **client 半（面板）**：订阅该端点，串行 queue 页内应用图变更，动词
+  复用 client-hmr 同款——mount：`modules.invalidate` → `prefetch`
+  （boot 图表外的新行回落为直接 script 加载 bundle 注册工厂）→
+  `loader.create({ name })`；unmount：registry-first 删 callback →
+  drain inertia → 清 fiber → 撤 `style[data-plugin]` → `loader.remove`。
+  loader/modules 不可达（headless）时不订阅、不报错；帧处理失败 warn
+  并提示刷新页面兜底。
+- **与 EXT-4 的关系**：EXT-4 合入后两通道并存不冲突——host graph 帧
+  管全量图（含非 mygo 来源的图变化），mygo 帧只管自己 live 轨的操作；
+  两侧 mount/unmount 均幂等（已挂载/未挂载 no-op），重复帧无害。
+
+## 7. 已知限制
+
+- **冻结层守卫**：boot 轨已物化（frozen bundlePatches 在实例存活期
+  不变）的包再经面板安装时，保持 boot 轨不写 live 块（写块会构成运行
+  期同 id 双 insert 毒化后续每次重放；rc8 e2e 实测抓出）。
+- **client 图行免刷新仅限新面板 bundle 页面**：rc8 通道由面板 client
+  半承载，老 bundle 打开的页面仍需刷新一次拿到新面板代码。EXT-4 合入
+  后由 host graph 帧统一接管。
 - live 块内容不随 CLI 升级自动刷新（块内是安装时 bundle patch 原文；
   行 id 漂移时由 P5 启动对账剥块让 bundle 层接管）。块刷新机制留后续。
 - pack 整合包不做 live 安装（pack restore 仍走注册进 profile 的既有

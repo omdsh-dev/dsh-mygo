@@ -3,7 +3,7 @@
  * `dsh plugin` forwarding through a fake CLI, and cross-rail solving.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -439,10 +439,13 @@ describe('bundle rail unified graph', () => {
 
   function liveEngine(f: Fixture): LifecycleEngine {
     const ctx = new Context()
-    // loader 桩：live 块一写入即视为已挂载（verifyEntryState 首轮即过）。
+    // loader 桩：live 块落盘后才视为已挂载（verifyEntryState 首轮即过；
+    // 冻结层守卫依赖「写块前条目不活跃」）。
     ctx.provide('loader', {
       *entries() {
-        yield { id: 'include:live-ok-row', fiber: {} }
+        const patchFile = join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml')
+        const text = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
+        if (text.includes('live-ok-row')) yield { id: 'include:live-ok-row', fiber: {} }
       },
     })
     const machine = new DispatchMachine(ctx, { vocabulary: new Map() })
@@ -506,6 +509,45 @@ describe('bundle rail unified graph', () => {
       expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@dsh-external/challenger')
       expect(manifest.dsh?.profile?.bundles ?? []).not.toContain('@dsh-external/challenger')
       expect(readFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).not.toContain('challenger')
+    } finally {
+      process.env = env
+      rmSync(f.dshHome, { recursive: true, force: true })
+      rmSync(f.checkout, { recursive: true, force: true })
+    }
+  })
+
+  it('冻结层守卫：行已被 boot 轨物化（重复安装）时保持 boot 轨、不写 live 块（rc8 e2e 修复）', async () => {
+    const f = fixture()
+    writeBundle(f, '@dsh-external/live-ok')
+    writeFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), '[]\n', 'utf8')
+    healAppBoot(f)
+    const env = process.env
+    process.env = { ...env, MYGO_DSH_HOME: f.dshHome, MYGO_PROFILE: f.profile, MYGO_CLI_CALLS: '[]' }
+    // loader 桩：行自始至终活跃（模拟 frozen bundlePatches 已物化该包）。
+    const ctx = new Context()
+    ctx.provide('loader', {
+      *entries() {
+        yield { id: 'include:live-ok-row', fiber: {} }
+      },
+    })
+    const machine = new DispatchMachine(ctx, { vocabulary: new Map() })
+    machine.start()
+    const engine = new LifecycleEngine({
+      ctx,
+      dispatch: machine,
+      store: new InMemoryRegistryStore(),
+      config: resolvePluginManagerConfig({ swapTimeoutMs: 40, historyKeep: 2 }),
+      bundleRail: f.rail,
+    })
+    try {
+      const result = await engine.bundleInstall('@dsh-external/live-ok@1.0.0')
+      expect(result.activated).toBe('live')
+      const manifest = JSON.parse(readFileSync(join(f.dshHome, 'profiles', 'web', 'package.json'), 'utf8')) as {
+        readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
+      }
+      // 单轨落在 boot 轨：bundles 保留该包，patch 层无 live 块
+      expect(manifest.dsh?.profile?.bundles ?? []).toContain('@dsh-external/live-ok')
+      expect(readFileSync(join(f.dshHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).not.toContain('mygo live block')
     } finally {
       process.env = env
       rmSync(f.dshHome, { recursive: true, force: true })
