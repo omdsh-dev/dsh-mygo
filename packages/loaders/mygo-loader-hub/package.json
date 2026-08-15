@@ -1,7 +1,7 @@
 {
   "name": "@r05en1cu/dsh-mygo-loader-hub",
   "description": "mygo hub LoaderAdapter: dsh-hub registry (omdsh-registry/v1) fetch/verify/fallback, install-intent translation, and collections — as a mygo governed plugin",
-  "version": "0.2.0-rc.6",
+  "version": "0.2.0-rc.7",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -65,7 +65,7 @@
     "mygo": {
       "formatVersion": 1,
       "id": "dsh-mygo-loader-hub",
-      "version": "0.2.0-rc.6",
+      "version": "0.2.0-rc.7",
       "entry": "lib/index.js",
       "requires": {},
       "core": "^0.0.1-rc.1",

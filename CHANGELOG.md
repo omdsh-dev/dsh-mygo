@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0-rc.7（2026-08-15）— live rail：运行期装卸（r7 核心面）
+
+- 双轨制：boot rail（`dsh.profile.bundles`）与 live rail（profile
+  `cordis.patch.yml` 的 mygo 受管块）互斥，单轨规则全链路由
+  reconcile 排除与 P5 对账保证；设计文档 docs/live-rail.md。
+- 安装：面板装 bundle 在实例运行期即刻激活——pnpm 落盘后写受管
+  insert 块（host watchUserPatches 事务性重放），离线组合预检 id
+  撞车（host 组合函数不可达时降级 warn 不阻断），写后轮询验证激活，
+  失败回滚；回执带 `activated: 'live' | 'pending-restart'`。
+- 卸载：live rail 包先剥块验证 dispose 再 pnpm remove；boot rail 包
+  且实例在跑先写 disable 块摘 fiber；CLI 与面板同口径（face 层先剥
+  块后 pnpm remove）；文案按轨态区分「刷新页面后生效」/「重启后生效」。
+- patch-io：profile patch 层统一写盘通道（进程内串行 + tmp+rename
+  原子写 + 空回落 `[]`），row-config 三函数改走该通道。
+- P5 对账：启动一次 + 运行期监听 manifest——官方 CLI 旁路 add 同包
+  时当场剥 live 块（bundle 赢），消弭下次 boot 的同 id 双 insert
+  致命撞车（boot 挂死无对账窗口，故为运行期防线）。
+- 面板：插件行 rail 区分 live/bundle/bridge；安装结果展示激活态；
+  live 包启用态正确显示（不再被恒计为 disabled）。
+- EXT-4 挂账：client-hmr 浏览器半 graph 帧处理（页面免刷新看到 live
+  安装的插件行），host 补丁提案 patches/client-hmr-graph-host.patch
+  （不 apply，快照 47f9438）。
+- e2e：临时实例五场景真机验证（装→激活→卸→dispose→pnpm remove、
+  重启干净、CLI 旁路对账、撞车/不可解析回滚）；修复预检自撞假阳性
+  （单轨切换先于离线组合）。
+
 ## 0.2.0-rc.6（2026-08-14）— 配置注入 webui 插件页 + 面板功能面定型 + bundle 卸载路由修正
 
 ### 配置注入（核心交付）
