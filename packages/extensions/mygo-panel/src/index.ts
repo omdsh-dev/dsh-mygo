@@ -117,8 +117,9 @@ const MANIFEST = '.mygo-install.json'
 import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
 // rc8：live rail 事件通道（SSE 端点 + 广播面）。
 import { beginPanelOperation, broadcastLiveRail, finishPanelOperation, liveRowUrlOf, registerLiveEventsRoute } from './live-events.js'
-// P0：plughub 迁移面（hub catalog + trust fence）。
-import { hubAdapterOf, hubCatalogDocument, resolveHubInstallTarget, type HubCatalogDocument, type HubInstalledFact } from './hub-catalog.js'
+// P0：目录源层（hub/local/github 三源合并）+ trust fence。
+import type { HubInstalledFact } from './hub-catalog.js'
+import { CatalogSourceService, type CatalogSourceConfig } from './catalog-sources.js'
 import { isLoopbackRequest, isTrustedRequest, type TrustRequest } from './trust-fence.js'
 
 export const name = 'dsh-mygo-panel'
@@ -354,32 +355,28 @@ function panelHubInstalled(ctx: PanelContext): HubInstalledFact[] {
   return [...bridge, ...bundles]
 }
 
-/** 当前 bound hub adapter；无 loader-hub 时 undefined（目录页显示不可用）。 */
-function panelHubAdapter(ctx: PanelContext) {
-  return hubAdapterOf(ctx.pluginManager.loaderAdapters())
-}
+/** 面板目录源服务（apply 时按 $DSH_HOME 构造）。 */
+let panelCatalogSources: CatalogSourceService | undefined
 
-/** GET /api/mygo/hub 文档；无 hub adapter 时返回可用性说明。 */
-function panelHubDocument(ctx: PanelContext): HubCatalogDocument & { readonly available: boolean } {
-  const adapter = panelHubAdapter(ctx)
-  const document = hubCatalogDocument(adapter, panelHubInstalled(ctx))
-  return {
-    available: adapter !== undefined,
-    ...(document === undefined
-      ? {
-          source: {
-            adapter: 'hub' as const,
-            schema: 'unavailable',
-            revision: 0,
-            generatedAt: '',
-            origins: [],
-            snapshotId: '',
-            signature: null,
-          },
-          entries: [],
-        }
-      : document),
+/** GET /api/mygo/hub 文档（三源合并 + 逐源报告）。 */
+async function panelHubDocument(ctx: PanelContext, refresh: boolean) {
+  if (panelCatalogSources === undefined) {
+    return {
+      available: false,
+      source: {
+        adapter: 'hub' as const,
+        schema: 'unavailable',
+        revision: 0,
+        generatedAt: '',
+        origins: [],
+        snapshotId: '',
+        signature: null,
+      },
+      reports: [],
+      entries: [],
+    }
   }
+  return panelCatalogSources.document(panelHubInstalled(ctx), refresh)
 }
 
 interface InstallManifest {
@@ -3027,8 +3024,8 @@ async function cleanupHelperDebugSessions(
 }
 
 /**
- * 执行一条 hub catalog 安装/更新（P0）：条目 id 经 bound registry 翻译成
- * pnpm spec 后走 bundle rail；precondition 与 plughub 相反安装/更新语义一致。
+ * 执行一条目录条目安装/更新（P0）：条目 id 由目录源服务翻译成 pnpm spec
+ * 后走 bundle rail；安装与更新的 precondition 相反。
  */
 async function runHubBundleInstall(
   ctx: PanelContext,
@@ -3036,36 +3033,35 @@ async function runHubBundleInstall(
   releaseId: string | undefined,
   op: 'install' | 'update',
 ): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
-  const adapter = panelHubAdapter(ctx)
-  if (adapter === undefined) {
-    return { status: 503, body: { ok: false, error: 'hub loader adapter 未注册（请确认已安装 dsh-mygo-loader-hub）' } }
+  if (panelCatalogSources === undefined) {
+    return { status: 503, body: { ok: false, error: '目录源服务未初始化' } }
   }
-  const target = await resolveHubInstallTarget(adapter, id, releaseId)
+  const target = await panelCatalogSources.installTarget(id)
   if (!target.ok) {
     return {
-      status: target.status,
+      status: 409,
       body: {
         ok: false,
+        id: target.id,
         error: target.error,
-        ...(target.entry?.id === undefined ? {} : { id: target.entry.id }),
         ...(target.advisories.length === 0 ? {} : { advisories: target.advisories }),
       },
     }
   }
-  const installed = hubCatalogDocument(adapter, panelHubInstalled(ctx))
-    ?.entries.find(entry => entry.id === id)?.installed
+  const document = await panelCatalogSources.document(panelHubInstalled(ctx))
+  const installed = document.entries.find(entry => entry.id === id)?.installed
   if (op === 'install' && installed !== undefined) {
     return {
       status: 409,
       body: {
         ok: false,
         id,
-        error: `hub 条目 ${id} 已安装（${installed.rail} 轨${installed.version === undefined ? '' : ' v' + installed.version}），如需拉取最新版本请使用更新`,
+        error: `条目 ${id} 已安装（${installed.rail} 轨${installed.version === undefined ? '' : ' v' + installed.version}），如需拉取最新版本请使用更新`,
       },
     }
   }
   if (op === 'update' && installed === undefined) {
-    return { status: 409, body: { ok: false, id, error: `hub 条目 ${id} 未安装，不能更新` } }
+    return { status: 409, body: { ok: false, id, error: `条目 ${id} 未安装，不能更新` } }
   }
   const operation = beginPanelOperation(op, id)
   let result: Awaited<ReturnType<PanelContext['pluginManager']['bundleInstall']>>
@@ -3079,7 +3075,7 @@ async function runHubBundleInstall(
         ok: false,
         id,
         error: error instanceof Error ? error.message : String(error),
-        ...(target.assessment.advisories.length === 0 ? {} : { advisories: target.assessment.advisories }),
+        ...(target.advisories.length === 0 ? {} : { advisories: target.advisories }),
       },
     }
   }
@@ -3101,8 +3097,8 @@ async function runHubBundleInstall(
       id: result.member.id,
       entryId: id,
       message: result.activated === 'live'
-        ? `hub 条目 ${id} 已安装并激活（刷新页面后界面可见）`
-        : `hub 条目 ${id} 已安装（重启实例后生效）`,
+        ? `条目 ${id} 已安装并激活（刷新页面后界面可见）`
+        : `条目 ${id} 已安装（重启实例后生效）`,
       activated: result.activated ?? 'pending-restart',
       plan: {
         accepted: result.plan.accepted,
@@ -3112,7 +3108,7 @@ async function runHubBundleInstall(
           : { warnings: result.plan.warnings }),
       },
       ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
-      ...(target.assessment.advisories.length === 0 ? {} : { advisories: target.assessment.advisories }),
+      ...(target.advisories.length === 0 ? {} : { advisories: target.advisories }),
       ...(target.experimental ? { experimental: true } : {}),
     },
   }
@@ -3123,6 +3119,7 @@ export function apply(ctx: PanelContext): void {
   // 与 mygo service.ts 的 resolveProfileName 同源；后续 patch/桥接投影
   // 全部经 panelProfile()/profilePatchPath() 取生效值。
   runtimeProfile = resolvePanelProfile(ctx)
+  panelCatalogSources = new CatalogSourceService(HOME_ROOT)
   void (async () => {
     await syncBridgeRows()
     await regenerateBridges()
@@ -3901,8 +3898,25 @@ export function apply(ctx: PanelContext): void {
           return
         }
         if (method === 'GET' && (path === '/api/mygo/hub' || path === '/api/mygo/hub/')) {
-          json(200, { ok: true, ...panelHubDocument(ctx) })
+          const refresh = new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1'
+          json(200, { ok: true, ...await panelHubDocument(ctx, refresh) })
           return
+        }
+        if (path === '/api/mygo/hub/sources' || path === '/api/mygo/hub/sources/') {
+          if (panelCatalogSources === undefined) {
+            json(503, { ok: false, error: '目录源服务未初始化' })
+            return
+          }
+          if (method === 'GET') {
+            json(200, { ok: true, config: panelCatalogSources.config() })
+            return
+          }
+          if (method === 'PUT') {
+            const body = JSON.parse(await readBody(req)) as Partial<CatalogSourceConfig>
+            const config = await panelCatalogSources.saveConfig(body)
+            json(200, { ok: true, config, message: '目录源配置已更新，目录已失效重取' })
+            return
+          }
         }
         const hubInstallMatch = /^\/api\/mygo\/hub\/(install|update)$/.exec(path)
         if (method === 'POST' && hubInstallMatch !== null) {

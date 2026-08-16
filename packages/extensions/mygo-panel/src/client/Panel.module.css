@@ -1378,3 +1378,18 @@
 @keyframes spinnerSpin {
   to { transform: rotate(360deg); }
 }
+
+/* 目录来源折叠行（HubCatalog 顶部） */
+.sourcesToggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}

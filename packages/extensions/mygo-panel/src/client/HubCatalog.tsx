@@ -6,7 +6,8 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import css from './Panel.module.css'
-import type { HubCatalogEntry, HubCatalogResult } from './api'
+import type { HubCatalogEntry, HubCatalogResult, HubSourceConfig, HubSourceReport } from './api'
+import { CatalogSourcesPanel } from './CatalogSourcesPanel'
 
 /** P2 operation 事件帧（与 node 半 live-events.ts 同形）。 */
 interface PanelOperation {
@@ -26,7 +27,11 @@ export interface HubCatalogProps {
   readonly catalog: HubCatalogResult | null
   readonly loading: boolean
   readonly busy: boolean
+  readonly sourcesBusy: boolean
+  readonly reports: readonly HubSourceReport[]
+  readonly sourceConfig: HubSourceConfig | null
   readonly onRefresh: () => void
+  readonly onSaveSources: (patch: Partial<HubSourceConfig>) => void
   readonly onInstall: (id: string) => void
   readonly onUpdate: (id: string) => void
 }
@@ -50,7 +55,7 @@ function riskClass(level: HubCatalogEntry['risk']['level']): string {
 }
 
 export function HubCatalog(props: HubCatalogProps): JSX.Element {
-  const { catalog, loading, busy, onRefresh, onInstall, onUpdate } = props
+  const { catalog, loading, busy, sourcesBusy, reports, sourceConfig, onRefresh, onSaveSources, onInstall, onUpdate } = props
   const [search, setSearch] = useState('')
   const [kind, setKind] = useState<string | undefined>(undefined)
   const [risk, setRisk] = useState<string | undefined>(undefined)
@@ -136,6 +141,12 @@ export function HubCatalog(props: HubCatalogProps): JSX.Element {
           </div>
         </div>
       )}
+      <CatalogSourcesPanel
+        reports={reports}
+        config={sourceConfig}
+        busy={sourcesBusy}
+        onSave={onSaveSources}
+      />
       <div className={css.searchRow}>
         <input
           className={css.searchInput}
@@ -215,6 +226,7 @@ export function HubCatalog(props: HubCatalogProps): JSX.Element {
                         {RISK_LABEL[entry.risk.level]}
                       </span>
                       <span className={css.railChip}>{entry.kind}</span>
+                      {entry.source !== undefined && <span className={css.railChip}>{entry.source}</span>}
                       {entry.listing.state !== 'auto-listed' && entry.listing.state !== 'reviewed' && (
                         <span className={css.badge + ' ' + css.badgeWarn}>
                           <span className={css.badgeDot} />

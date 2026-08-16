@@ -42,6 +42,8 @@ export interface HubInstalledFact {
 
 /** One hub entry as served to the browser. */
 export interface HubCatalogRow extends HubEntry {
+  /** 获胜目录源（local / hub / github）。 */
+  readonly source?: 'local' | 'hub' | 'github'
   readonly installed?: {
     readonly id: string
     readonly rail: 'bridge' | 'bundle' | 'live'
@@ -78,7 +80,7 @@ export function hubAdapterOf(adapters: readonly LoaderAdapter[]): HubAdapterLike
 }
 
 /** Match one hub entry against the installed rows. */
-function installedFactOf(
+export function installedFactOf(
   entry: HubEntry,
   facts: readonly HubInstalledFact[],
 ): HubInstalledFact | undefined {
@@ -89,6 +91,29 @@ function installedFactOf(
   )
 }
 
+/** Project one hub entry plus installed/update facts into a catalog row. */
+export function hubEntryRow(
+  entry: HubEntry,
+  installed: readonly HubInstalledFact[],
+): HubCatalogRow {
+  const fact = installedFactOf(entry, installed)
+  const offered = entry.version ?? undefined
+  return {
+    ...entry,
+    assessment: assessHubEntry(entry),
+    ...(fact === undefined
+      ? {}
+      : {
+          installed: {
+            id: fact.id,
+            rail: fact.rail,
+            ...(fact.version === undefined ? {} : { version: fact.version }),
+            update: hubUpdateStateOf(offered, fact.version),
+          },
+        }),
+  }
+}
+
 /** Project the bound hub registry plus installed/update facts into one document. */
 export function hubCatalogDocument(
   adapter: HubAdapterLike | undefined,
@@ -96,24 +121,7 @@ export function hubCatalogDocument(
 ): HubCatalogDocument | undefined {
   if (adapter === undefined) return undefined
   const registry = adapter.registry
-  const entries = registry.entries.map((entry): HubCatalogRow => {
-    const fact = installedFactOf(entry, installed)
-    const offered = entry.version ?? undefined
-    return {
-      ...entry,
-      assessment: assessHubEntry(entry),
-      ...(fact === undefined
-        ? {}
-        : {
-            installed: {
-              id: fact.id,
-              rail: fact.rail,
-              ...(fact.version === undefined ? {} : { version: fact.version }),
-              update: hubUpdateStateOf(offered, fact.version),
-            },
-          }),
-    }
-  })
+  const entries = registry.entries.map(entry => hubEntryRow(entry, installed))
   return {
     source: {
       adapter: 'hub',

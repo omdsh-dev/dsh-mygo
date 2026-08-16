@@ -143,8 +143,10 @@ export interface HelperStatus {
   readonly error?: string
 }
 
-/** hub catalog 的一条条目（P0 迁移自 plughub catalog 卡片）。 */
+/** hub catalog 的一条条目。 */
 export interface HubCatalogEntry {
+  /** 获胜目录源。 */
+  readonly source?: 'local' | 'hub' | 'github'
   readonly id: string
   readonly displayName: string
   readonly description: string
@@ -201,7 +203,27 @@ export interface HubCatalogSource {
 export interface HubCatalogResult {
   readonly available: boolean
   readonly source: HubCatalogSource
+  readonly reports: readonly HubSourceReport[]
   readonly entries: readonly HubCatalogEntry[]
+}
+
+/** 逐源解析报告。 */
+export interface HubSourceReport {
+  readonly kind: 'local' | 'hub' | 'github'
+  readonly origin: string
+  readonly ok: boolean
+  readonly count: number
+  readonly error?: string
+}
+
+/** 目录源配置（$DSH_HOME/mygo-panel/catalog-sources.json）。 */
+export interface HubSourceConfig {
+  readonly localSources: readonly string[]
+  readonly hubOrigins: readonly string[]
+  readonly githubUpstream: string
+  readonly maxRepos: number
+  readonly timeoutMs: number
+  readonly cacheTtlMs: number
 }
 
 export interface HubInstallResult {
@@ -216,8 +238,14 @@ export interface HubInstallResult {
 }
 
 export const api = {
-  hubCatalog(): Promise<HubCatalogResult> {
-    return request<HubCatalogResult>('/hub')
+  hubCatalog(refresh = false): Promise<HubCatalogResult> {
+    return request<HubCatalogResult>(refresh ? '/hub?refresh=1' : '/hub')
+  },
+  hubSources(): Promise<{ readonly config: HubSourceConfig }> {
+    return request('/hub/sources')
+  },
+  saveHubSources(config: Partial<HubSourceConfig>): Promise<{ readonly config: HubSourceConfig; readonly message: string }> {
+    return request('/hub/sources', { method: 'PUT', body: config })
   },
   hubInstall(id: string, releaseId?: string): Promise<HubInstallResult> {
     return request<HubInstallResult>('/hub/install', {

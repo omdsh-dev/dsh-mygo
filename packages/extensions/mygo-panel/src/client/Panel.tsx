@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import css from './Panel.module.css'
 import {
   api, ApiError, STATUS_LABEL, formatTime,
-  type HubCatalogResult, type MygoPluginRow, type RemoteUpdateRow, type StatusResult,
+  type HubCatalogResult, type HubSourceConfig, type MygoPluginRow, type RemoteUpdateRow, type StatusResult,
 } from './api'
 import type { ConfigFieldShape } from './ConfigFields'
 import { PluginList } from './PluginList'
@@ -58,6 +58,8 @@ export function Panel(): JSX.Element {
   const [hubCatalog, setHubCatalog] = useState<HubCatalogResult | null>(null)
   const [hubBusy, setHubBusy] = useState(false)
   const [hubFailed, setHubFailed] = useState(false)
+  const [hubSources, setHubSources] = useState<HubSourceConfig | null>(null)
+  const [hubSourcesBusy, setHubSourcesBusy] = useState(false)
   const helperTimer = useRef<ReturnType<typeof setInterval> | undefined>()
   useEffect(() => () => { if (helperTimer.current !== undefined) clearInterval(helperTimer.current) }, [])
 
@@ -98,11 +100,11 @@ export function Panel(): JSX.Element {
     }
   }, [])
 
-  const loadHubCatalog = useCallback(async (): Promise<void> => {
+  const loadHubCatalog = useCallback(async (refresh = false): Promise<void> => {
     setHubBusy(true)
     setHubFailed(false)
     try {
-      setHubCatalog(await api.hubCatalog())
+      setHubCatalog(await api.hubCatalog(refresh))
     } catch (caught) {
       setHubFailed(true)
       setNotice({
@@ -115,16 +117,47 @@ export function Panel(): JSX.Element {
     }
   }, [])
 
+  const loadHubSources = useCallback(async (): Promise<void> => {
+    setHubSourcesBusy(true)
+    try {
+      const result = await api.hubSources()
+      setHubSources(result.config)
+    } catch (caught) {
+      setNotice({
+        kind: 'error',
+        title: '目录源配置加载失败',
+        text: caught instanceof Error ? caught.message : String(caught),
+      })
+    } finally {
+      setHubSourcesBusy(false)
+    }
+  }, [])
+
   useEffect(() => {
-    if (tab !== 'hub' || hubCatalog !== null) return
-    void loadHubCatalog()
-  }, [tab, hubCatalog, loadHubCatalog])
+    if (tab !== 'hub') return
+    if (hubCatalog === null) void loadHubCatalog()
+    if (hubSources === null) void loadHubSources()
+  }, [tab, hubCatalog, hubSources, loadHubCatalog, loadHubSources])
 
   useEffect(() => { void refresh() }, [refresh])
 
   const reportError = useCallback((message: string, details?: Readonly<Record<string, unknown>>): void => {
     setNotice({ kind: 'error', title: '操作失败', text: message, ...(details === undefined ? {} : { details }) })
   }, [])
+
+  const saveHubSources = useCallback(async (patch: Partial<HubSourceConfig>): Promise<void> => {
+    setHubSourcesBusy(true)
+    try {
+      const result = await api.saveHubSources(patch)
+      setHubSources(result.config)
+      setNotice({ kind: 'notice', text: result.message })
+      await loadHubCatalog(true)
+    } catch (caught) {
+      reportError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setHubSourcesBusy(false)
+    }
+  }, [loadHubCatalog, reportError])
 
   const reportNotice = useCallback((message: string): void => {
     setNotice({ kind: 'notice', text: message })
@@ -485,7 +518,11 @@ export function Panel(): JSX.Element {
           catalog={hubCatalog}
           loading={hubCatalog === null && !hubFailed}
           busy={hubBusy}
-          onRefresh={() => void loadHubCatalog()}
+          sourcesBusy={hubSourcesBusy}
+          reports={hubCatalog?.reports ?? []}
+          sourceConfig={hubSources}
+          onRefresh={() => void loadHubCatalog(true)}
+          onSaveSources={(patch) => void saveHubSources(patch)}
           onInstall={(id) => void runHubAction(id, 'install')}
           onUpdate={(id) => void runHubAction(id, 'update')}
         />
