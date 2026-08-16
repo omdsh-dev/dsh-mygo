@@ -48,6 +48,8 @@ export type PluginErrorCode =
   | 'veto-position-conflict'
   /** returning to a cached generation conflicts with a newly installed companion; details: companion */
   | 'companion-conflict'
+  /** config write carries a stale revision; details: id + expected + actual */
+  | 'config-revision-conflict'
   /** package-level requires/breaks constraint violated; details: plugin + violations */
   | 'compatibility-conflict'
   /** claims targets a slot a raw Cordis plugin holds; details: slot */
@@ -170,6 +172,8 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
     `veto position conflict between outermost intercept plugins ${render(details.a)} and ${render(details.b)}`,
   'companion-conflict': details =>
     `companion ${render(details.companion)} conflicts with the cached generation`,
+  'config-revision-conflict': details =>
+    `config revision conflict for plugin ${render(details.id)}: expected ${render(details.expected)}, actual ${render(details.actual)}`,
   'compatibility-conflict': details => {
     const lines = Array.isArray(details.violations)
       ? (details.violations as unknown[]).map(line => `  - ${String(line)}`).join('\n')

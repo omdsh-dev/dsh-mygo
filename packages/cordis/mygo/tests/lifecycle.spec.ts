@@ -2238,6 +2238,36 @@ describe('LifecycleEngine updateConfig, adoptStatic, dispose', () => {
     expect(h.events.filter(event => event.name === 'plugin/replaced').length).toBe(replacedBefore)
   })
 
+  it('configRevisionOf：首次为 0，config 实际变化 +1，no-op 不推进', async () => {
+    const h = harness()
+    h.definitions.set('p', fixture('p', {
+      config: z.object({ step: z.number() }),
+    }))
+    await h.engine.install(source('p'), { config: { step: 1 } })
+    expect(h.engine.configRevisionOf('p')).toBe(0)
+    await h.engine.updateConfig('p', { step: 2 })
+    expect(h.engine.configRevisionOf('p')).toBe(1)
+    await h.engine.updateConfig('p', { step: 2 })
+    expect(h.engine.configRevisionOf('p')).toBe(1)
+  })
+
+  it('updateConfig 携带过期 expectedRevision 时拒绝，且不覆盖已落地写入', async () => {
+    const h = harness()
+    h.definitions.set('p', fixture('p', {
+      config: z.object({ step: z.number() }),
+    }))
+    await h.engine.install(source('p'), { config: { step: 1 } })
+    await h.engine.updateConfig('p', { step: 2 })
+    await expect(h.engine.updateConfig('p', { step: 3 }, 0)).rejects.toMatchObject({
+      code: 'config-revision-conflict',
+      details: { id: 'p', expected: 0, actual: 1 },
+    })
+    expect(h.engine.configOf('p')).toEqual({ step: 2 })
+    await h.engine.updateConfig('p', { step: 3 }, 1)
+    expect(h.engine.configOf('p')).toEqual({ step: 3 })
+    expect(h.engine.configRevisionOf('p')).toBe(2)
+  })
+
   it('adopts static entries and shadows a dynamic install of the same id (T2-4)', async () => {
     const h = harness()
     h.definitions.set('p', fixture('p'))

@@ -48,6 +48,17 @@ export function ConfigEditor(props: ConfigEditorProps): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [busy, onClose])
 
+  // revision 冲突后父级会重读并传入新的 current/fields；本地草稿必须同步，
+  // 否则界面显示的仍是触发冲突的旧快照。
+  useEffect(() => {
+    const base = isPlainObject(current) ? current : {}
+    const out: Record<string, unknown> = {}
+    for (const field of fields) out[field.name] = editableOf(field, base[field.name])
+    setEditable(out)
+    setText(JSON.stringify(base, null, 2))
+    setParseError(undefined)
+  }, [current, fields])
+
   const parsedJson = (): Record<string, unknown> | undefined => {
     if (mode !== 'json') return undefined
     try {
@@ -186,6 +197,8 @@ export interface ConfigDrawerState {
   readonly description?: string
   readonly fields: readonly ConfigFieldShape[]
   readonly template?: unknown
+  /** 当前 config revision；保存时作为 expectedRevision 回传。 */
+  readonly revision?: number
 }
 
 export type { PlanShape }

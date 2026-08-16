@@ -8,6 +8,8 @@
 export class ApiError extends Error {
   constructor(
     message: string,
+    readonly status?: number,
+    readonly code?: string,
     readonly details?: Readonly<Record<string, unknown>>,
   ) {
     super(message)
@@ -22,8 +24,20 @@ async function request<T>(path: string, init?: { readonly method?: string; reado
       ? {}
       : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(init.body) }),
   })
-  const data = (await res.json()) as T & { readonly ok?: boolean; readonly error?: string }
-  if (data.ok === false) throw new ApiError(data.error ?? `HTTP ${res.status}`, (data as { readonly details?: Record<string, unknown> }).details)
+  const data = (await res.json()) as T & {
+    readonly ok?: boolean
+    readonly error?: string
+    readonly code?: string
+    readonly details?: Readonly<Record<string, unknown>>
+  }
+  if (data.ok === false) {
+    throw new ApiError(
+      data.error ?? `HTTP ${res.status}`,
+      res.status,
+      data.code,
+      data.details,
+    )
+  }
   return data
 }
 
@@ -244,13 +258,17 @@ export const api = {
   pluginConfig(id: string): Promise<{
     readonly id: string
     readonly current: unknown
+    readonly revision: number
     readonly schema?: { readonly description?: string; readonly fields?: readonly import('./ConfigFields').ConfigFieldShape[] }
     readonly template?: unknown
   }> {
     return request(`/plugins/${encodeURIComponent(id)}/config`)
   },
-  saveConfig(id: string, config: unknown): Promise<{ readonly message: string }> {
-    return request(`/plugins/${encodeURIComponent(id)}/config`, { method: 'POST', body: { config } })
+  saveConfig(id: string, config: unknown, expectedRevision?: number): Promise<{ readonly message: string }> {
+    return request(`/plugins/${encodeURIComponent(id)}/config`, {
+      method: 'POST',
+      body: { config, ...(expectedRevision === undefined ? {} : { expectedRevision }) },
+    })
   },
   installPlan(payload: Record<string, unknown>): Promise<{
     readonly id: string

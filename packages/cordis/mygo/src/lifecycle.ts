@@ -39,6 +39,7 @@ import type {
 } from '@r05en1cu/dsh-mygo-api'
 import type { Context } from '@deepseek-ai/cordis'
 import { isDeepStrictEqual } from 'node:util'
+import { configFingerprint } from './config-fingerprint.ts'
 
 /** Implicit manager identity in the unified dependency graph. */
 export const MYGO_MANAGER_ID = 'dsh-mygo'
@@ -838,6 +839,7 @@ export class LifecycleEngine {
   private readonly crashAfterPersist: () => void
 
   private readonly records = new Map<string, ManagedRecord>()
+  private readonly configRevisions = new Map<string, { revision: number; fingerprint: string | undefined }>()
   private readonly locks = new Map<string, string>()
   private readonly provideTable = new Map<string, { readonly pluginId: string; value: unknown }>()
   private readonly toolIndirections = new Map<string, { readonly pluginId: string; definition: PluginToolDefinition }>()
@@ -1535,24 +1537,70 @@ export class LifecycleEngine {
    * 空操作短路（HMR 体验）：patch 解析后与当前 live 代 resolvedConfig
    * deep-equal 时直接返回，不 bump generation、不重跑 apply、不发
    * `plugin/replaced`——与 adoptStatic 的同代幂等守卫同口径。
+   *
+   * Revision 层（mygo native）：expectedRevision 可选；携带时在锁内、写盘前
+   * 校验当前 config revision，过期抛 `config-revision-conflict`。revision
+   * 只随 stored config 实际变化推进；no-op 写不推进。
    * @param id - plugin id to reconfigure.
    * @param patch - new resolved config value.
+   * @param expectedRevision - revision the caller read; stale writes are refused.
    */
-  async updateConfig(id: string, patch: unknown): Promise<void> {
+  async updateConfig(id: string, patch: unknown, expectedRevision?: number): Promise<void> {
     await this.withLock(id, 'updateConfig', async () => {
       const record = this.requireRecord(id, 'updateConfig')
       const manifest = record.generations.at(-1)?.manifest
       if (manifest === undefined) {
         throw fail('staging-failed', { stage: 'cache', cause: 'no generation to update' }, id)
       }
+      const before = this.configOf(id)
+      const currentRevision = this.configRevisionOf(id)
+      if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+        throw fail(
+          'config-revision-conflict',
+          { id, expected: expectedRevision, actual: currentRevision },
+          id,
+        )
+      }
       // 先解析校验（非法 patch 依旧 manifest-invalid 失败），再与 live 代比较。
       const resolved = this.resolveConfig(manifest, patch)
       const live = record.generations.at(-1)
       if (record.status === 'enabled' && live !== undefined && live.mounted && isDeepStrictEqual(resolved, live.resolvedConfig)) {
+        this.advanceConfigRevision(id, before, before)
         return
       }
       await this.replaceWithDefinition(id, record.source, manifest, false, patch)
+      this.advanceConfigRevision(id, before, this.configOf(id))
     })
+  }
+
+  /** 读当前 config revision；首次读为 0，config 值变化时 +1。 */
+  configRevisionOf(id: string): number | undefined {
+    const record = this.records.get(id)
+    if (record === undefined) return undefined
+    const value = this.configOf(id)
+    const fingerprint = configFingerprint(value)
+    const current = this.configRevisions.get(id)
+    if (current === undefined) {
+      this.configRevisions.set(id, { revision: 0, fingerprint })
+      return 0
+    }
+    if (current.fingerprint !== fingerprint) {
+      current.revision += 1
+      current.fingerprint = fingerprint
+    }
+    return current.revision
+  }
+
+  /** 写入后推进 revision；值未变则不动。 */
+  private advanceConfigRevision(id: string, before: unknown, after: unknown): number {
+    const current = this.configRevisions.get(id) ?? { revision: 0, fingerprint: configFingerprint(before) }
+    const fingerprint = configFingerprint(after)
+    if (current.fingerprint !== fingerprint) {
+      current.revision += 1
+      current.fingerprint = fingerprint
+    }
+    this.configRevisions.set(id, current)
+    return current.revision
   }
 
   /**

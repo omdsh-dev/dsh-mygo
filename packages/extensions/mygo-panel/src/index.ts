@@ -20,7 +20,7 @@ import { promisify } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PluginManager } from '@r05en1cu/dsh-mygo'
 import { compatibilityViolationLines, compatibilityWarningLines } from '@r05en1cu/dsh-mygo'
-import { listPatchRowIds, readProfilePatchText, readRowConfig, removePatchRows, upsertRowConfig } from '@r05en1cu/dsh-mygo'
+import { listPatchRowIds, readProfilePatchText, readRowConfig, readRowConfigRevision, removePatchRows, upsertRowConfig } from '@r05en1cu/dsh-mygo'
 import { hasLiveBlock, liveUninstall, loaderEntrySnapshot, verifyEntryState, writeLiveBlock } from '@r05en1cu/dsh-mygo'
 import { listRegistries, removeRegistry, upsertRegistry } from '@r05en1cu/dsh-mygo'
 import type { CredentialsLike } from '@r05en1cu/dsh-mygo'
@@ -872,6 +872,7 @@ interface ConfigCardInfo {
   readonly packageName: string
   readonly schema: ConfigSchemaInfo
   readonly config: unknown
+  readonly revision: number
   readonly enabled: boolean
 }
 
@@ -915,6 +916,7 @@ async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCar
         packageName: bridgeNameOf(manifest.id),
         schema: { ...schema, fields: redacted.fields },
         config: redacted.config,
+        revision: ctx.pluginManager.configRevisionOf(manifest.id) ?? 0,
         enabled: managerPlugins.get(manifest.id)?.status === 'enabled',
       })
     } catch {
@@ -939,6 +941,7 @@ async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCar
       // bundle 无 patch 文件：回退成员 id
     }
     const current = readRowConfig(HOME_ROOT, panelProfile(), rowId)
+    const revisionState = readRowConfigRevision(HOME_ROOT, panelProfile(), rowId)
     const redacted = redactSecretConfig(schema.fields, current.ok ? current.config : {})
     out.push({
       id: member.id,
@@ -947,6 +950,7 @@ async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCar
       packageName,
       schema: { ...schema, fields: redacted.fields },
       config: redacted.config,
+      revision: revisionState.ok ? revisionState.revision : 0,
       enabled: member.enabled,
     })
   }
@@ -958,6 +962,22 @@ async function readPluginConfig(ctx: PanelContext, id: string, kind: string, row
   if (kind === 'bridge') return ctx.pluginManager.configOf(id) ?? {}
   const result = readRowConfig(HOME_ROOT, panelProfile(), rowId ?? id)
   return result.ok ? result.config : {}
+}
+
+/** 单个 config revision 读取（bridge → 引擎；bundle → patch 行）。 */
+function readPluginConfigRevision(ctx: PanelContext, id: string, kind: string, rowId?: string): number {
+  if (kind === 'bridge') return ctx.pluginManager.configRevisionOf(id) ?? 0
+  const result = readRowConfigRevision(HOME_ROOT, panelProfile(), rowId ?? id)
+  return result.ok ? result.revision : 0
+}
+
+/** 从 PluginError 中取 config-revision-conflict 事实。 */
+function configConflictOf(error: unknown): { readonly expected: number; readonly actual: number } | undefined {
+  const candidate = error as { readonly code?: unknown; readonly details?: unknown }
+  if (candidate.code !== 'config-revision-conflict') return undefined
+  const details = candidate.details as { readonly expected?: unknown; readonly actual?: unknown } | undefined
+  if (typeof details?.expected !== 'number' || typeof details.actual !== 'number') return undefined
+  return { expected: details.expected, actual: details.actual }
 }
 
 /** bundle 行 id 推导（写路径）：bundle patch 首个 insert 行，回退成员 id。 */
@@ -3402,6 +3422,7 @@ export function apply(ctx: PanelContext): void {
             ok: true,
             id,
             current: redacted.config,
+            revision: ctx.pluginManager.configRevisionOf(id) ?? 0,
             ...(info === undefined
               ? {}
               : {
@@ -3415,7 +3436,10 @@ export function apply(ctx: PanelContext): void {
         }
         if (method === 'POST' && configMatch !== null) {
           const id = configMatch[1]
-          const body = JSON.parse(await readBody(req)) as { readonly config?: unknown }
+          const body = JSON.parse(await readBody(req)) as {
+            readonly config?: unknown
+            readonly expectedRevision?: unknown
+          }
           if (typeof body.config !== 'object' || body.config === null || Array.isArray(body.config)) {
             throw new Error('config 必须是 JSON 对象')
           }
@@ -3424,7 +3448,23 @@ export function apply(ctx: PanelContext): void {
           const config = info === undefined
             ? body.config as Record<string, unknown>
             : mergeSecretConfigWrite(info.fields, body.config as Record<string, unknown>, stored)
-          await ctx.pluginManager.updateConfig(id, config)
+          const expectedRevision = typeof body.expectedRevision === 'number' ? body.expectedRevision : undefined
+          try {
+            await ctx.pluginManager.updateConfig(id, config, expectedRevision)
+          } catch (error) {
+            const conflict = configConflictOf(error)
+            if (conflict !== undefined) {
+              json(409, {
+                ok: false,
+                code: 'config-revision-conflict',
+                error: `插件 ${id} 配置已变化（expected revision ${conflict.expected}, actual ${conflict.actual}）`,
+                id,
+                ...conflict,
+              })
+              return
+            }
+            throw error
+          }
           // Persist the updated config into the bridge row: the profile patch
           // is the boot-time authority, so a restart must see the new value.
           await syncBridgeRows({ [id]: ctx.pluginManager.configOf(id) })
@@ -3456,7 +3496,13 @@ export function apply(ctx: PanelContext): void {
             return
           }
           const rowId = query.get('rowId') ?? undefined
-          json(200, { ok: true, id, kind, config: await readPluginConfig(ctx, id, kind, rowId) })
+          json(200, {
+            ok: true,
+            id,
+            kind,
+            config: await readPluginConfig(ctx, id, kind, rowId),
+            revision: readPluginConfigRevision(ctx, id, kind, rowId),
+          })
           return
         }
         if (method === 'PUT' && path === '/api/mygo/config') {
@@ -3465,12 +3511,14 @@ export function apply(ctx: PanelContext): void {
             readonly kind?: string
             readonly rowId?: string
             readonly config?: unknown
+            readonly expectedRevision?: unknown
           }
           if (body.id === undefined || typeof body.config !== 'object' || body.config === null || Array.isArray(body.config)) {
             json(400, { ok: false, error: 'config 写入需要 id 与对象形态的 config' })
             return
           }
           const incoming = body.config as Record<string, unknown>
+          const expectedRevision = typeof body.expectedRevision === 'number' ? body.expectedRevision : undefined
           const cards = await collectConfigCards(ctx)
           const card = cards.find(candidate => candidate.id === body.id && candidate.kind === body.kind)
           if (body.kind === 'bridge') {
@@ -3478,7 +3526,23 @@ export function apply(ctx: PanelContext): void {
             const config = card === undefined
               ? incoming
               : mergeSecretConfigWrite(card.schema.fields, incoming, stored)
-            await ctx.pluginManager.updateConfig(body.id, config)
+            try {
+              await ctx.pluginManager.updateConfig(body.id, config, expectedRevision)
+            } catch (error) {
+              const conflict = configConflictOf(error)
+              if (conflict !== undefined) {
+                json(409, {
+                  ok: false,
+                  code: 'config-revision-conflict',
+                  error: `插件 ${body.id} 配置已变化（expected revision ${conflict.expected}, actual ${conflict.actual}）`,
+                  id: body.id,
+                  kind: 'bridge',
+                  ...conflict,
+                })
+                return
+              }
+              throw error
+            }
             await syncBridgeRows({ [body.id]: ctx.pluginManager.configOf(body.id) })
             json(200, { ok: true, id: body.id, kind: 'bridge', message: `插件 ${body.id} 配置已更新（HMR 生效）` })
             return
@@ -3491,7 +3555,19 @@ export function apply(ctx: PanelContext): void {
           const config = card === undefined
             ? incoming
             : mergeSecretConfigWrite(card.schema.fields, incoming, current.ok ? current.config : {})
-          const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), rowId, config)
+          const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), rowId, config, expectedRevision)
+          if (outcome.revisionConflict !== undefined) {
+            json(409, {
+              ok: false,
+              code: 'config-revision-conflict',
+              error: `${rowId} 行配置已变化（expected revision ${outcome.revisionConflict.expected}, actual ${outcome.revisionConflict.actual}）`,
+              id: body.id,
+              kind: 'bundle',
+              rowId,
+              ...outcome.revisionConflict,
+            })
+            return
+          }
           if (!outcome.ok) {
             json(400, { ok: false, error: outcome.error })
             return

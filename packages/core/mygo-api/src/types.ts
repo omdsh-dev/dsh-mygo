@@ -288,7 +288,7 @@ export interface PluginEnv {
   plugins(): readonly PluginHandleInfo[]
   install(source: PluginSource, options?: InstallOptions): Promise<PluginHandleInfo>
   uninstall(id: string): Promise<void>
-  updateConfig(patch: unknown): Promise<void>
+  updateConfig(patch: unknown, expectedRevision?: number): Promise<void>
   // 能力面（grant 把关，拒绝先于任何真实操作）：fs/vars/fetch 直通宿主，
   // llm/exec 无宿主 seam 时 fail-loud；http/skills/commands 随世代暂存与撤销。
   readonly fs: PluginFs

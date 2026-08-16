@@ -116,11 +116,12 @@ export {
   listPatchRowIds,
   readProfilePatchText,
   readRowConfig,
+  readRowConfigRevision,
   removePatchRows,
   upsertRowConfig,
   writeRowConfig,
 } from './row-config.ts'
-export type { ConfigRowResult, RemovePatchRowsResult } from './row-config.ts'
+export type { ConfigRowResult, ConfigRowRevision, RemovePatchRowsResult } from './row-config.ts'
 export { InMemoryRegistryStore } from './store.ts'
 export { AuditLog } from './audit.ts'
 export type { AuditClass, AuditEntry, AuditInput } from './audit.ts'

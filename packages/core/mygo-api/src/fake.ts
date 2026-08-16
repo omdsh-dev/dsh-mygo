@@ -613,8 +613,8 @@ class FakePluginEnvImpl implements FakePluginEnv {
     return this.options.plugins ?? []
   }
 
-  updateConfig(patch: unknown): Promise<void> {
-    this.state.updateConfigCalls.push(patch)
+  updateConfig(patch: unknown, expectedRevision?: number): Promise<void> {
+    this.state.updateConfigCalls.push(expectedRevision === undefined ? patch : { patch, expectedRevision })
     return Promise.resolve()
   }
 

@@ -12,6 +12,7 @@ import {
   listPatchRowIds,
   readProfilePatchText,
   readRowConfig,
+  readRowConfigRevision,
   removePatchRows,
   upsertRowConfig,
   writeRowConfig,
@@ -53,7 +54,7 @@ describe('row-config（整行读写 + upsert）', () => {
 
   it('read/write 整行 config（浅合并，注释与邻行不动）', async () => {
     await seed()
-    expect(readRowConfig(home, 'web', 'alpha')).toEqual({ ok: true, config: { step: 1 } })
+    expect(readRowConfig(home, 'web', 'alpha')).toMatchObject({ ok: true, config: { step: 1 } })
     const written = writeRowConfig(home, 'web', 'alpha', { step: 2, extra: true })
     expect(written.ok).toBe(true)
     const text = await readFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
@@ -95,6 +96,61 @@ describe('row-config（整行读写 + upsert）', () => {
     await seed()
     expect(upsertRowConfig(home, 'web', 'alpha', { step: 9 }).ok).toBe(true)
     expect(readRowConfig(home, 'web', 'alpha').config).toEqual({ step: 9 })
+  })
+})
+
+describe('row config revision（mygo native 乐观并发）', () => {
+  let home: string
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'mygo-row-rev-'))
+    await mkdir(join(home, 'profiles', 'web'), { recursive: true })
+  })
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true })
+  })
+
+  async function seed(text = PATCH): Promise<void> {
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(home, 'profiles', 'web', 'cordis.patch.yml'), text)
+  }
+
+  it('首次读为 0；实际变化 +1；相同写入不推进', async () => {
+    await seed()
+    expect(readRowConfigRevision(home, 'web', 'alpha')).toMatchObject({ ok: true, revision: 0 })
+    expect(writeRowConfig(home, 'web', 'alpha', { step: 2 }).revision).toBe(1)
+    expect(writeRowConfig(home, 'web', 'alpha', { step: 2 }).revision).toBe(1)
+    expect(readRowConfigRevision(home, 'web', 'alpha').revision).toBe(1)
+  })
+
+  it('expectedRevision 过期拒绝写入并携带 expected/actual', async () => {
+    await seed()
+    const first = writeRowConfig(home, 'web', 'alpha', { step: 2 })
+    expect(first.revision).toBe(1)
+    const stale = writeRowConfig(home, 'web', 'alpha', { step: 3 }, 0)
+    expect(stale.ok).toBe(false)
+    expect(stale.revisionConflict).toEqual({ expected: 0, actual: 1 })
+    expect(readRowConfig(home, 'web', 'alpha').config).toEqual({ step: 2 })
+    const fresh = writeRowConfig(home, 'web', 'alpha', { step: 3 }, 1)
+    expect(fresh.ok).toBe(true)
+    expect(fresh.revision).toBe(2)
+  })
+
+  it('外部编辑 patch 文件后下次读推进 revision', async () => {
+    await seed()
+    expect(readRowConfigRevision(home, 'web', 'alpha').revision).toBe(0)
+    await seed(PATCH.replace('step: 1', 'step: 7'))
+    expect(readRowConfigRevision(home, 'web', 'alpha')).toMatchObject({ revision: 1 })
+  })
+
+  it('upsert 新建行：创建推进 revision；stale expected 拒绝', async () => {
+    await seed('[]\n')
+    expect(readRowConfigRevision(home, 'web', 'advisor')).toMatchObject({ ok: true, config: undefined, revision: 0 })
+    const created = upsertRowConfig(home, 'web', 'advisor', { model: 'x' })
+    expect(created.ok).toBe(true)
+    expect(created.revision).toBe(1)
+    expect(upsertRowConfig(home, 'web', 'advisor', { model: 'y' }, 0).revisionConflict).toEqual({ expected: 0, actual: 1 })
   })
 })
 

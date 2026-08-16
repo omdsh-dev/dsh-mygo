@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import yaml from 'js-yaml'
 import { COMPANION_BLOCK_MARKERS } from './bundle-rail.ts'
+import { configFingerprint } from './config-fingerprint.ts'
 import { LIVE_BLOCK_PATTERN } from './live-rail.ts'
 import { hasYamlContent, mutatePatchFile, readPatchText, resolvePatchPath } from './patch-io.ts'
 
@@ -18,6 +19,21 @@ export interface ConfigRowResult {
   readonly ok: boolean
   /** 当前 config（读/写后均为整行最新值）。 */
   readonly config?: Record<string, unknown>
+  readonly error?: string | undefined
+  /** 该行 config 的当前 revision；行缺失时按 0 计。 */
+  readonly revision?: number | undefined
+  /** expectedRevision 过期时的冲突事实（不写入）。 */
+  readonly revisionConflict?: {
+    readonly expected: number
+    readonly actual: number
+  }
+}
+
+/** 行 config revision 的读视图：行缺失按空 config / revision 0 处理。 */
+export interface ConfigRowRevision {
+  readonly ok: boolean
+  readonly config: Record<string, unknown> | undefined
+  readonly revision: number
   readonly error?: string | undefined
 }
 
@@ -104,6 +120,68 @@ export function listPatchRowIds(text: string): readonly string[] {
 export const DISABLE_BLOCK_BEGIN = '# --- mygo managed disable'
 export const DISABLE_BLOCK_END = '# --- end mygo managed disable ---'
 
+/** 进程内行 revision 缓存：fingerprint 变化才推进，数值单调。 */
+interface RowRevisionEntry {
+  revision: number
+  fingerprint: string | undefined
+}
+
+const rowRevisions = new Map<string, RowRevisionEntry>()
+
+function rowRevisionKey(home: string, profile: string, id: string): string {
+  return `${home}\u0000${profile}\u0000${id}`
+}
+
+/** 按当前 fingerprint 取 revision：首次读为 0，fingerprint 变化 +1。 */
+function rowRevisionOf(key: string, fingerprint: string | undefined): number {
+  const current = rowRevisions.get(key)
+  if (current === undefined) {
+    rowRevisions.set(key, { revision: 0, fingerprint })
+    return 0
+  }
+  if (current.fingerprint !== fingerprint) {
+    current.revision += 1
+    current.fingerprint = fingerprint
+  }
+  return current.revision
+}
+
+/** 写入后推进 revision：before/after 相同则不动，不同则 +1。 */
+function advanceRowRevision(key: string, before: string | undefined, after: string | undefined): number {
+  const current = rowRevisions.get(key) ?? { revision: 0, fingerprint: before }
+  if (current.fingerprint !== after) {
+    current.revision += 1
+    current.fingerprint = after
+  }
+  rowRevisions.set(key, current)
+  return current.revision
+}
+
+/** 文本级 revision 状态：行缺失 = 空 config，revision 沿用该行缓存。 */
+function rowRevisionOfText(home: string, profile: string, id: string, text: string): ConfigRowRevision {
+  const key = rowRevisionKey(home, profile, id)
+  const lines = text.split('\n')
+  if (findRow(lines, id) === undefined) {
+    return {
+      ok: true,
+      config: undefined,
+      revision: rowRevisionOf(key, undefined),
+    }
+  }
+  const parsed = rowConfigOfText(text, id)
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      config: undefined,
+      revision: rowRevisions.get(key)?.revision ?? 0,
+      error: parsed.error,
+    }
+  }
+  const config = parsed.config ?? {}
+  const fingerprint = configFingerprint(config)
+  return { ok: true, config, revision: rowRevisionOf(key, fingerprint) }
+}
+
 /** 读 profile patch 层文本（缺失按空文档计）。 */
 export function readProfilePatchText(home: string, profile: string): string {
   return readPatchText(home, profile)
@@ -137,11 +215,38 @@ export function readRowConfig(home: string, profile: string, id: string): Config
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
   if (!existsSync(path)) return { ok: false, error: `profile patch 层不存在：${path}` }
-  return rowConfigOfText(readFileSync(path, 'utf8'), id)
+  const parsed = rowConfigOfText(readFileSync(path, 'utf8'), id)
+  if (!parsed.ok) return parsed
+  const key = rowRevisionKey(home, profile, id)
+  const fingerprint = configFingerprint(parsed.config ?? {})
+  return { ...parsed, revision: rowRevisionOf(key, fingerprint) }
+}
+
+/** 读行 config revision（行缺失按空 config / revision 0，供面板 API 使用）。 */
+export function readRowConfigRevision(home: string, profile: string, id: string): ConfigRowRevision {
+  let path: string
+  try {
+    path = resolvePatchPath(home, profile)
+  } catch (error) {
+    return {
+      ok: false,
+      config: undefined,
+      revision: rowRevisions.get(rowRevisionKey(home, profile, id))?.revision ?? 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  const text = existsSync(path) ? readFileSync(path, 'utf8') : ''
+  return rowRevisionOfText(home, profile, id, text)
 }
 
 /** 浅合并写回整行 config（行无 config 则追加子块；行不存在报错）。 */
-export function writeRowConfig(home: string, profile: string, id: string, patch: Record<string, unknown>): ConfigRowResult {
+export function writeRowConfig(
+  home: string,
+  profile: string,
+  id: string,
+  patch: Record<string, unknown>,
+  expectedRevision?: number,
+): ConfigRowResult {
   let path: string
   try {
     path = resolvePatchPath(home, profile)
@@ -149,6 +254,7 @@ export function writeRowConfig(home: string, profile: string, id: string, patch:
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
   let result: ConfigRowResult = { ok: false, error: 'patch 写盘未执行' }
+  const key = rowRevisionKey(home, profile, id)
   mutatePatchFile(home, profile, (text, exists) => {
     if (!exists) {
       result = { ok: false, error: `profile patch 层不存在：${path}` }
@@ -165,7 +271,20 @@ export function writeRowConfig(home: string, profile: string, id: string, patch:
       result = current
       return undefined
     }
+    const currentFingerprint = configFingerprint(current.config ?? {})
+    const actual = rowRevisionOf(key, currentFingerprint)
+    if (expectedRevision !== undefined && expectedRevision !== actual) {
+      result = {
+        ok: false,
+        error: `${id} 行 config 已变化（expected revision ${expectedRevision}, actual ${actual}）`,
+        revision: actual,
+        revisionConflict: { expected: expectedRevision, actual },
+      }
+      return undefined
+    }
     const merged = { ...current.config, ...patch }
+    const nextFingerprint = configFingerprint(merged)
+    const revision = advanceRowRevision(key, currentFingerprint, nextFingerprint)
     const dumped = yaml.dump(merged, { lineWidth: -1, noRefs: true }).trimEnd()
     const rowLines = lines.slice(row.start, row.end)
     // 行尾空行不进 config 追加位置（追加必须紧贴行末内容行）。
@@ -183,7 +302,7 @@ export function writeRowConfig(home: string, profile: string, id: string, patch:
         ...rowLines.slice(block.end),
       ]
     }
-    result = { ok: true, config: merged }
+    result = { ok: true, config: merged, revision }
     return [...lines.slice(0, row.start), ...nextRow, ...lines.slice(row.end)].join('\n')
   })
   return result
@@ -195,22 +314,44 @@ export function writeRowConfig(home: string, profile: string, id: string, patch:
  * `- id: <id>\n  config: {...}` 到文末（官方 id 定向 override 形态；
  * 宿主 watchUserPatches 重载后生效）。行存在时与 writeRowConfig 同语义。
  */
-export function upsertRowConfig(home: string, profile: string, id: string, patch: Record<string, unknown>): ConfigRowResult {
+export function upsertRowConfig(
+  home: string,
+  profile: string,
+  id: string,
+  patch: Record<string, unknown>,
+  expectedRevision?: number,
+): ConfigRowResult {
   const text = readProfilePatchText(home, profile)
   const lines = text.split('\n')
-  if (findRow(lines, id) !== undefined) return writeRowConfig(home, profile, id, patch)
+  if (findRow(lines, id) !== undefined) return writeRowConfig(home, profile, id, patch, expectedRevision)
+  const key = rowRevisionKey(home, profile, id)
   const dumped = yaml.dump(patch, { lineWidth: -1, noRefs: true }).trimEnd()
   const entry = [`- id: ${id}`, '  config:', ...dumped.split('\n').map(line => `    ${line}`)].join('\n')
+  let result: ConfigRowResult = { ok: false, error: 'patch 写盘未执行' }
   mutatePatchFile(home, profile, (current) => {
+    const currentFingerprint = configFingerprint(undefined)
+    const actual = rowRevisionOf(key, currentFingerprint)
+    if (expectedRevision !== undefined && expectedRevision !== actual) {
+      result = {
+        ok: false,
+        error: `${id} 行 config 已变化（expected revision ${expectedRevision}, actual ${actual}）`,
+        revision: actual,
+        revisionConflict: { expected: expectedRevision, actual },
+      }
+      return undefined
+    }
+    const revision = advanceRowRevision(key, currentFingerprint, configFingerprint(patch))
     // 空用户层（无行且恰含独立 `[]` 占位行）：替换占位行而非追加——追加会在
     // `[]` 之后产出非法 YAML（rc.4 同形态教训，e2e 实测抓出）。
     if (/^\[\]\s*$/m.test(current) && listPatchRowIds(current).length === 0) {
+      result = { ok: true, config: patch, revision }
       return current.replace(/^\[\]\s*$/m, `${entry}\n`)
     }
     const head = current.trimEnd()
+    result = { ok: true, config: patch, revision }
     return head === '' ? `${entry}\n` : `${head}\n\n${entry}\n`
   })
-  return { ok: true, config: patch }
+  return result
 }
 
 export interface RemovePatchRowsResult {
@@ -281,5 +422,6 @@ export function removePatchRows(home: string, profile: string, ids: readonly str
     const body = current.replace(/\n{3,}/g, '\n\n').trimEnd()
     return hasYamlContent(body) ? `${body}\n` : body === '' ? '[]\n' : `${body}\n[]\n`
   })
+  for (const id of ids) rowRevisions.delete(rowRevisionKey(home, profile, id))
   return { ok: true, removed }
 }

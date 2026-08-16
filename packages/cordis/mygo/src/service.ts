@@ -620,8 +620,8 @@ export class PluginManagerService extends Service implements PluginManager {
     return this.requireEngine().replace(id, source, options)
   }
 
-  updateConfig(id: string, patch: unknown): Promise<void> {
-    return this.requireEngine().updateConfig(id, patch)
+  updateConfig(id: string, patch: unknown, expectedRevision?: number): Promise<void> {
+    return this.requireEngine().updateConfig(id, patch, expectedRevision)
   }
 
   plugins(): readonly PluginHandleInfo[] {
@@ -630,6 +630,10 @@ export class PluginManagerService extends Service implements PluginManager {
 
   configOf(id: string): unknown | undefined {
     return this.requireEngine().configOf(id)
+  }
+
+  configRevisionOf(id: string): number | undefined {
+    return this.requireEngine().configRevisionOf(id)
   }
 
   async plan(operation: PluginOperation): Promise<PluginOperationPlan> {

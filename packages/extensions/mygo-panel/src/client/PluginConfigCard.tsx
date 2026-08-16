@@ -16,6 +16,7 @@ export interface MygoPluginCardSeed {
   readonly kind: 'bridge' | 'bundle'
   readonly rowId: string
   readonly packageName: string
+  readonly revision: number
   readonly enabled: boolean
 }
 
@@ -97,14 +98,18 @@ export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed 
           kind: seed.kind,
           ...(seed.kind === 'bundle' ? { rowId: seed.rowId } : {}),
           config: draft,
+          expectedRevision: row?.revision ?? seed.revision,
         },
       })
       if (!result.ok) throw new Error(result.error ?? '保存失败')
       setNotice(result.message ?? '已保存')
       await load()
     } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught)
+      // revision 冲突/拒绝后先重读到当前值，再保留失败文案供用户看到。
+      await load()
       setFailed(true)
-      setError(caught instanceof Error ? caught.message : String(caught))
+      setError(message)
     } finally {
       setSaving(false)
     }

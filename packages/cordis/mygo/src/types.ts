@@ -90,11 +90,13 @@ export interface PluginManager {
   /** Hot replacement seven-step protocol (HP:82-90). */
   replace(id: string, source: PluginSource, options?: { readonly force?: boolean; readonly config?: unknown }): Promise<PluginHandleInfo>
   /** Reuse the replace path with the same code (HP:98). */
-  updateConfig(id: string, patch: unknown): Promise<void>
+  updateConfig(id: string, patch: unknown, expectedRevision?: number): Promise<void>
   /** Read-only view of the current managed set, including static/quarantined/shadowed. */
   plugins(): readonly PluginHandleInfo[]
   /** Current resolved config of one managed plugin's live generation. */
   configOf(id: string): unknown | undefined
+  /** Current config revision; unknown id returns undefined. */
+  configRevisionOf(id: string): number | undefined
   /**
    * Evaluate one operation without changing state (PO:242). Async since
    * install/replace sources resolve through the manager's resolver; source

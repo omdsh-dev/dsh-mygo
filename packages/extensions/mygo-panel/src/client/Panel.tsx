@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import css from './Panel.module.css'
 import {
-  api, STATUS_LABEL, formatTime,
+  api, ApiError, STATUS_LABEL, formatTime,
   type HubCatalogResult, type MygoPluginRow, type RemoteUpdateRow, type StatusResult,
 } from './api'
 import type { ConfigFieldShape } from './ConfigFields'
@@ -156,6 +156,7 @@ export function Panel(): JSX.Element {
       setConfigDrawer({
         id: plugin.id,
         current: data.current ?? {},
+        revision: data.revision,
         ...(data.schema === undefined || data.schema.description === undefined
           ? {}
           : { description: data.schema.description }),
@@ -174,12 +175,31 @@ export function Panel(): JSX.Element {
     setConfigError(undefined)
     setConfigNotice(undefined)
     try {
-      const result = await api.saveConfig(drawer.id, config)
+      const result = await api.saveConfig(drawer.id, config, drawer.revision)
       setConfigNotice(result.message)
       setConfigDrawer({ ...drawer, current: config })
       void refresh()
     } catch (caught) {
-      setConfigError(caught instanceof Error ? caught.message : String(caught))
+      if (caught instanceof ApiError && caught.status === 409) {
+        setConfigError(caught.message)
+        try {
+          const fresh = await api.pluginConfig(drawer.id)
+          setConfigDrawer({
+            id: drawer.id,
+            current: fresh.current ?? {},
+            revision: fresh.revision,
+            ...(fresh.schema === undefined || fresh.schema.description === undefined
+              ? {}
+              : { description: fresh.schema.description }),
+            fields: fresh.schema?.fields ?? [],
+            ...(fresh.template === undefined ? {} : { template: fresh.template }),
+          })
+        } catch {
+          // 冲突后重读失败：保留原抽屉与错误文案
+        }
+      } else {
+        setConfigError(caught instanceof Error ? caught.message : String(caught))
+      }
     } finally {
       setConfigBusy(false)
     }
