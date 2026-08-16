@@ -129,7 +129,94 @@ export interface HelperStatus {
   readonly error?: string
 }
 
+/** hub catalog 的一条条目（P0 迁移自 plughub catalog 卡片）。 */
+export interface HubCatalogEntry {
+  readonly id: string
+  readonly displayName: string
+  readonly description: string
+  readonly kind: string
+  readonly tags: readonly string[]
+  readonly author: { readonly name: string; readonly url?: string }
+  readonly version: string | null
+  readonly license: string
+  readonly risk: {
+    readonly level: 'unknown' | 'low' | 'medium' | 'high' | 'critical'
+    readonly facts: {
+      readonly sourcePinned?: boolean
+      readonly vulnerabilityScan?: 'unknown' | 'passed' | 'findings'
+      readonly permissions?: 'unknown' | 'declared' | 'reviewed'
+      readonly nativeCode?: 'unknown' | 'present' | 'absent'
+      readonly installScripts?: 'unknown' | 'present' | 'absent'
+    }
+  }
+  readonly listing: {
+    readonly state: 'auto-listed' | 'review-required' | 'reviewed' | 'blocked'
+    readonly catalogStatus?: string
+    readonly trustedPublisher?: string
+  }
+  readonly maintenance: {
+    readonly state: 'active' | 'deprecated' | 'archived'
+    readonly notice?: string | null
+    readonly successor?: string | null
+  }
+  readonly latestRelease: string
+  readonly links?: { readonly atlas?: string; readonly repository?: string }
+  readonly installed?: {
+    readonly id: string
+    readonly rail: 'bridge' | 'bundle' | 'live'
+    readonly version?: string
+    readonly update: 'available' | 'current' | 'unknown'
+  }
+  readonly assessment: {
+    readonly installable: boolean
+    readonly blocks: readonly string[]
+    readonly advisories: readonly string[]
+  }
+}
+
+export interface HubCatalogSource {
+  readonly adapter: 'hub'
+  readonly schema: string
+  readonly revision: number
+  readonly generatedAt: string
+  readonly origins: readonly string[]
+  readonly snapshotId: string
+  readonly signature: { readonly algorithm: 'Ed25519'; readonly keyId: string; readonly value: string } | null
+}
+
+export interface HubCatalogResult {
+  readonly available: boolean
+  readonly source: HubCatalogSource
+  readonly entries: readonly HubCatalogEntry[]
+}
+
+export interface HubInstallResult {
+  readonly id: string
+  readonly entryId?: string
+  readonly message: string
+  readonly activated?: 'live' | 'pending-restart'
+  readonly plan?: PlanShape
+  readonly hostConflicts?: readonly string[]
+  readonly advisories?: readonly string[]
+  readonly experimental?: boolean
+}
+
 export const api = {
+  hubCatalog(): Promise<HubCatalogResult> {
+    return request<HubCatalogResult>('/hub')
+  },
+  hubInstall(id: string, releaseId?: string): Promise<HubInstallResult> {
+    return request<HubInstallResult>('/hub/install', {
+      method: 'POST',
+      body: { id, ...(releaseId === undefined || releaseId === '' ? {} : { releaseId }) },
+    })
+  },
+  hubUpdate(id: string, releaseId?: string): Promise<HubInstallResult> {
+    return request<HubInstallResult>('/hub/update', {
+      method: 'POST',
+      body: { id, ...(releaseId === undefined || releaseId === '' ? {} : { releaseId }) },
+    })
+  },
   status(): Promise<StatusResult> {
     return request<StatusResult>('/status')
   },

@@ -116,7 +116,10 @@ const MANIFEST = '.mygo-install.json'
 // rc.3：桥接行装配/可解析性校验收敛进 bridge-rows.ts（纯函数可测面）。
 import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
 // rc8：live rail 事件通道（SSE 端点 + 广播面）。
-import { broadcastLiveRail, liveRowUrlOf, registerLiveEventsRoute } from './live-events.js'
+import { beginPanelOperation, broadcastLiveRail, finishPanelOperation, liveRowUrlOf, registerLiveEventsRoute } from './live-events.js'
+// P0：plughub 迁移面（hub catalog + trust fence）。
+import { hubAdapterOf, hubCatalogDocument, resolveHubInstallTarget, type HubCatalogDocument, type HubInstalledFact } from './hub-catalog.js'
+import { isLoopbackRequest, isTrustedRequest, type TrustRequest } from './trust-fence.js'
 
 export const name = 'dsh-mygo-panel'
 export const inject = ['pluginManager', 'webServer']
@@ -309,6 +312,7 @@ type PanelContext = Context & {
 interface RawRequest {
   readonly method?: string
   readonly url?: string
+  readonly headers?: import('node:http').IncomingHttpHeaders
   on?(event: 'data' | 'end', listener: (chunk?: Buffer) => void): void
 }
 
@@ -316,6 +320,66 @@ interface RawResponse {
   statusCode: number
   setHeader(name: string, value: string): void
   end(body: string): void
+}
+
+/** 面板路由的读/写信任面（P0 迁移自 plughub trust-fence）。 */
+function panelTrustedHosts(ctx: PanelContext): readonly string[] {
+  const runtime = ctx.get('webRuntime') as { readonly trustedHosts?: readonly string[] } | undefined
+  return runtime?.trustedHosts ?? []
+}
+
+/** 读门：loopback 或部署显式 trusted-host，且 same-origin。 */
+function panelCanRead(req: RawRequest, ctx: PanelContext): boolean {
+  return isTrustedRequest(req as TrustRequest, panelTrustedHosts(ctx))
+}
+
+/** 写门：仅 loopback + same-origin，trusted-host 不豁免。 */
+function panelCanWrite(req: RawRequest): boolean {
+  return isLoopbackRequest(req as TrustRequest)
+}
+
+/** 面板所知的已安装事实（bridge + bundle/live 两轨合并）。 */
+function panelHubInstalled(ctx: PanelContext): HubInstalledFact[] {
+  const bridge = ctx.pluginManager.plugins().map((plugin: PluginHandleInfo): HubInstalledFact => ({
+    id: plugin.id,
+    ...(plugin.version === '' ? {} : { version: plugin.version }),
+    rail: 'bridge',
+  }))
+  const bundles = ctx.pluginManager.bundleList().map((member): HubInstalledFact => ({
+    id: member.id,
+    packageName: member.packageName,
+    ...(member.version === undefined || member.version === '' ? {} : { version: member.version }),
+    rail: member.live === true ? 'live' : 'bundle',
+  }))
+  return [...bridge, ...bundles]
+}
+
+/** 当前 bound hub adapter；无 loader-hub 时 undefined（目录页显示不可用）。 */
+function panelHubAdapter(ctx: PanelContext) {
+  return hubAdapterOf(ctx.pluginManager.loaderAdapters())
+}
+
+/** GET /api/mygo/hub 文档；无 hub adapter 时返回可用性说明。 */
+function panelHubDocument(ctx: PanelContext): HubCatalogDocument & { readonly available: boolean } {
+  const adapter = panelHubAdapter(ctx)
+  const document = hubCatalogDocument(adapter, panelHubInstalled(ctx))
+  return {
+    available: adapter !== undefined,
+    ...(document === undefined
+      ? {
+          source: {
+            adapter: 'hub' as const,
+            schema: 'unavailable',
+            revision: 0,
+            generatedAt: '',
+            origins: [],
+            snapshotId: '',
+            signature: null,
+          },
+          entries: [],
+        }
+      : document),
+  }
 }
 
 interface InstallManifest {
@@ -766,8 +830,10 @@ import {
   configSchemaInfoOf,
   configSchemaTemplateOf,
   CONFIG_EXPORT_FORMAT,
+  mergeSecretConfigWrite,
   parseConfigImport,
   partitionImportTargets,
+  redactSecretConfig,
   resolveConfigSchema,
   type ConfigFieldInfo,
   type ConfigSchemaInfo,
@@ -840,13 +906,15 @@ async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCar
       const manifest = JSON.parse(await readFile(join(INSTALL_DIR, dirName, MANIFEST), 'utf8')) as InstallManifest
       const schema = await readConfigSchemaInfo(join(INSTALL_DIR, dirName))
       if (schema === undefined) continue
+      const current = ctx.pluginManager.configOf(manifest.id) ?? manifest.config ?? {}
+      const redacted = redactSecretConfig(schema.fields, current)
       out.push({
         id: manifest.id,
         kind: 'bridge',
         rowId: manifest.id,
         packageName: bridgeNameOf(manifest.id),
-        schema,
-        config: ctx.pluginManager.configOf(manifest.id) ?? manifest.config ?? {},
+        schema: { ...schema, fields: redacted.fields },
+        config: redacted.config,
         enabled: managerPlugins.get(manifest.id)?.status === 'enabled',
       })
     } catch {
@@ -871,13 +939,14 @@ async function collectConfigCards(ctx: PanelContext): Promise<readonly ConfigCar
       // bundle 无 patch 文件：回退成员 id
     }
     const current = readRowConfig(HOME_ROOT, panelProfile(), rowId)
+    const redacted = redactSecretConfig(schema.fields, current.ok ? current.config : {})
     out.push({
       id: member.id,
       kind: 'bundle',
       rowId,
       packageName,
-      schema,
-      config: current.ok ? current.config : {},
+      schema: { ...schema, fields: redacted.fields },
+      config: redacted.config,
       enabled: member.enabled,
     })
   }
@@ -2937,6 +3006,98 @@ async function cleanupHelperDebugSessions(
   }
 }
 
+/**
+ * 执行一条 hub catalog 安装/更新（P0）：条目 id 经 bound registry 翻译成
+ * pnpm spec 后走 bundle rail；precondition 与 plughub 相反安装/更新语义一致。
+ */
+async function runHubBundleInstall(
+  ctx: PanelContext,
+  id: string,
+  releaseId: string | undefined,
+  op: 'install' | 'update',
+): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+  const adapter = panelHubAdapter(ctx)
+  if (adapter === undefined) {
+    return { status: 503, body: { ok: false, error: 'hub loader adapter 未注册（请确认已安装 dsh-mygo-loader-hub）' } }
+  }
+  const target = await resolveHubInstallTarget(adapter, id, releaseId)
+  if (!target.ok) {
+    return {
+      status: target.status,
+      body: {
+        ok: false,
+        error: target.error,
+        ...(target.entry?.id === undefined ? {} : { id: target.entry.id }),
+        ...(target.advisories.length === 0 ? {} : { advisories: target.advisories }),
+      },
+    }
+  }
+  const installed = hubCatalogDocument(adapter, panelHubInstalled(ctx))
+    ?.entries.find(entry => entry.id === id)?.installed
+  if (op === 'install' && installed !== undefined) {
+    return {
+      status: 409,
+      body: {
+        ok: false,
+        id,
+        error: `hub 条目 ${id} 已安装（${installed.rail} 轨${installed.version === undefined ? '' : ' v' + installed.version}），如需拉取最新版本请使用更新`,
+      },
+    }
+  }
+  if (op === 'update' && installed === undefined) {
+    return { status: 409, body: { ok: false, id, error: `hub 条目 ${id} 未安装，不能更新` } }
+  }
+  const operation = beginPanelOperation(op, id)
+  let result: Awaited<ReturnType<PanelContext['pluginManager']['bundleInstall']>>
+  try {
+    result = await ctx.pluginManager.bundleInstall(target.spec)
+  } catch (error) {
+    finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+    return {
+      status: 400,
+      body: {
+        ok: false,
+        id,
+        error: error instanceof Error ? error.message : String(error),
+        ...(target.assessment.advisories.length === 0 ? {} : { advisories: target.assessment.advisories }),
+      },
+    }
+  }
+  const needsRestart = result.activated !== 'live'
+  finishPanelOperation(operation, 'ok', undefined, needsRestart)
+  if (result.activated === 'live') {
+    const url = liveRowUrlOf(name => ctx.get(name), result.member.packageName)
+    broadcastLiveRail({
+      type: 'live-rail',
+      op: 'mount',
+      id: result.member.packageName,
+      ...(url === undefined ? {} : { url }),
+    })
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      id: result.member.id,
+      entryId: id,
+      message: result.activated === 'live'
+        ? `hub 条目 ${id} 已安装并激活（刷新页面后界面可见）`
+        : `hub 条目 ${id} 已安装（重启实例后生效）`,
+      activated: result.activated ?? 'pending-restart',
+      plan: {
+        accepted: result.plan.accepted,
+        ...(result.plan.error === undefined ? {} : { error: result.plan.error }),
+        ...(result.plan.warnings === undefined || result.plan.warnings.length === 0
+          ? {}
+          : { warnings: result.plan.warnings }),
+      },
+      ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
+      ...(target.assessment.advisories.length === 0 ? {} : { advisories: target.assessment.advisories }),
+      ...(target.experimental ? { experimental: true } : {}),
+    },
+  }
+}
+
 export function apply(ctx: PanelContext): void {
   // P4：profile 名运行时推导（DSH_PROFILE env → loader baseUrl 目录名），
   // 与 mygo service.ts 的 resolveProfileName 同源；后续 patch/桥接投影
@@ -2950,7 +3111,8 @@ export function apply(ctx: PanelContext): void {
     console.error('[dsh-mygo-panel] startup sync failed:', error)
   })
   // rc8：live rail 事件通道（exact 先于下面的 /api/mygo prefix 匹配）。
-  registerLiveEventsRoute(ctx.webServer)
+  // P0：SSE 走与 /api/mygo 相同的读门（exact route 不经过 prefix handler）。
+  registerLiveEventsRoute(ctx.webServer, req => panelCanRead(req as RawRequest, ctx))
   ctx.webServer.register({
     kind: 'prefix',
     path: '/api/mygo',
@@ -2967,6 +3129,18 @@ export function apply(ctx: PanelContext): void {
         // enable/disable state.
         res.setHeader('cache-control', 'no-store')
         res.end(JSON.stringify(body))
+      }
+      // P0 plughub trust-fence：读门先于任何 profile 读取；写门 loopback-only。
+      if (!panelCanRead(req, ctx)) {
+        json(403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (method !== 'GET' && method !== 'HEAD' && !panelCanWrite(req)) {
+        json(403, {
+          ok: false,
+          error: '该操作会改变本机或写入宿主状态，只允许从 loopback 页面发起',
+        })
+        return
       }
       try {
         if (method === 'GET' && (path === '/api/mygo/plugins' || path === '/api/mygo/plugins/')) {
@@ -3039,7 +3213,15 @@ export function apply(ctx: PanelContext): void {
           const body = JSON.parse(await readBody(req)) as { readonly spec?: string }
           const spec = body.spec?.trim()
           if (spec === undefined || spec.length === 0) throw new Error('缺少 bundle spec')
-          const result = await ctx.pluginManager.bundleInstall(spec)
+          const operation = beginPanelOperation('install', spec)
+          let result: Awaited<ReturnType<PanelContext['pluginManager']['bundleInstall']>>
+          try {
+            result = await ctx.pluginManager.bundleInstall(spec)
+          } catch (error) {
+            finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+            throw error
+          }
+          finishPanelOperation(operation, 'ok', undefined, result.activated !== 'live')
           // rc8：live 激活的包装卸即时性广播——打开中的页面页内挂载 client 行。
           if (result.activated === 'live') {
             const url = liveRowUrlOf(name => ctx.get(name), result.member.packageName)
@@ -3132,8 +3314,9 @@ export function apply(ctx: PanelContext): void {
         if (method === 'POST' && path === '/api/mygo/install') {
           const body2 = JSON.parse(await readBody(req)) as InstallRequest
           const prepared = await prepareInstallSource(body2)
+          const operation = beginPanelOperation('install', body2.path?.trim() || body2.url?.trim() || 'archive')
           try {
-            json(200, await installFromRoot(
+            const installed = await installFromRoot(
               ctx.pluginManager,
               prepared.root,
               body2.method as InstallManifest['method'],
@@ -3146,7 +3329,12 @@ export function apply(ctx: PanelContext): void {
               body2.installDeps === true,
               undefined,
               prepared.remote,
-            ))
+            )
+            finishPanelOperation(operation, 'ok', undefined, true)
+            json(200, installed)
+          } catch (error) {
+            finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+            throw error
           } finally {
             await prepared.cleanup()
           }
@@ -3206,15 +3394,21 @@ export function apply(ctx: PanelContext): void {
             throw new Error(`插件 ${id} 未安装或不是面板托管插件`)
           }
           const info = await buildConfigTemplate(join(INSTALL_DIR, id))
+          const current = ctx.pluginManager.configOf(id) ?? manifest.config ?? {}
+          const redacted = info === undefined
+            ? { config: current as Record<string, unknown>, fields: [] }
+            : redactSecretConfig(info.fields, current)
           json(200, {
             ok: true,
             id,
-            current: ctx.pluginManager.configOf(id) ?? manifest.config ?? {},
+            current: redacted.config,
             ...(info === undefined
               ? {}
               : {
-                  schema: { description: info.description, fields: info.fields },
-                  template: info.template,
+                  schema: { description: info.description, fields: redacted.fields },
+                  ...(typeof info.template !== 'object' || info.template === null || Array.isArray(info.template)
+                    ? {}
+                    : { template: redactSecretConfig(info.fields, info.template).config }),
                 }),
           })
           return
@@ -3225,7 +3419,12 @@ export function apply(ctx: PanelContext): void {
           if (typeof body.config !== 'object' || body.config === null || Array.isArray(body.config)) {
             throw new Error('config 必须是 JSON 对象')
           }
-          await ctx.pluginManager.updateConfig(id, body.config)
+          const info = await buildConfigTemplate(join(INSTALL_DIR, id))
+          const stored = ctx.pluginManager.configOf(id) ?? {}
+          const config = info === undefined
+            ? body.config as Record<string, unknown>
+            : mergeSecretConfigWrite(info.fields, body.config as Record<string, unknown>, stored)
+          await ctx.pluginManager.updateConfig(id, config)
           // Persist the updated config into the bridge row: the profile patch
           // is the boot-time authority, so a restart must see the new value.
           await syncBridgeRows({ [id]: ctx.pluginManager.configOf(id) })
@@ -3271,8 +3470,14 @@ export function apply(ctx: PanelContext): void {
             json(400, { ok: false, error: 'config 写入需要 id 与对象形态的 config' })
             return
           }
-          const config = body.config as Record<string, unknown>
+          const incoming = body.config as Record<string, unknown>
+          const cards = await collectConfigCards(ctx)
+          const card = cards.find(candidate => candidate.id === body.id && candidate.kind === body.kind)
           if (body.kind === 'bridge') {
+            const stored = ctx.pluginManager.configOf(body.id) ?? {}
+            const config = card === undefined
+              ? incoming
+              : mergeSecretConfigWrite(card.schema.fields, incoming, stored)
             await ctx.pluginManager.updateConfig(body.id, config)
             await syncBridgeRows({ [body.id]: ctx.pluginManager.configOf(body.id) })
             json(200, { ok: true, id: body.id, kind: 'bridge', message: `插件 ${body.id} 配置已更新（HMR 生效）` })
@@ -3282,6 +3487,10 @@ export function apply(ctx: PanelContext): void {
             body.id,
             ctx.pluginManager.bundleList().find(member => member.id === body.id)?.packageName,
           )
+          const current = readRowConfig(HOME_ROOT, panelProfile(), rowId)
+          const config = card === undefined
+            ? incoming
+            : mergeSecretConfigWrite(card.schema.fields, incoming, current.ok ? current.config : {})
           const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), rowId, config)
           if (!outcome.ok) {
             json(400, { ok: false, error: outcome.error })
@@ -3298,7 +3507,15 @@ export function apply(ctx: PanelContext): void {
         }
         if (method === 'GET' && path === '/api/mygo/config-export') {
           const configs = await exportProfileConfigs()
-          json(200, buildConfigExport(panelProfile(), configs, new Date().toISOString()))
+          const cards = await collectConfigCards(ctx)
+          const redactedConfigs: Record<string, Record<string, unknown>> = {}
+          for (const [id, config] of Object.entries(configs)) {
+            const card = cards.find(candidate => candidate.id === id || candidate.rowId === id)
+            redactedConfigs[id] = card === undefined
+              ? config
+              : redactSecretConfig(card.schema.fields, config).config
+          }
+          json(200, buildConfigExport(panelProfile(), redactedConfigs, new Date().toISOString()))
           return
         }
         if (method === 'PUT' && path === '/api/mygo/config-import') {
@@ -3308,19 +3525,29 @@ export function apply(ctx: PanelContext): void {
             return
           }
           const patchIds = new Set(listPatchRowIds(readProfilePatchText(HOME_ROOT, panelProfile())))
-          const cardIds = new Set((await collectConfigCards(ctx)).map(card => card.id))
+          const cards = await collectConfigCards(ctx)
+          const cardIds = new Set(cards.map(card => card.id))
           const bridgeIds = new Set(ctx.pluginManager.plugins().map(plugin => plugin.id))
           const partition = partitionImportTargets(parsed.configs, new Set([...patchIds, ...cardIds, ...bridgeIds]))
           const applied: string[] = []
           const failures: { readonly id: string; readonly reason: string }[] = [...partition.rejected]
           for (const id of partition.accepted) {
             try {
+              const card = cards.find(candidate => candidate.id === id || candidate.rowId === id)
               if (bridgeIds.has(id)) {
-                await ctx.pluginManager.updateConfig(id, parsed.configs[id])
+                const stored = ctx.pluginManager.configOf(id) ?? {}
+                const config = card === undefined
+                  ? parsed.configs[id]
+                  : mergeSecretConfigWrite(card.schema.fields, parsed.configs[id], stored)
+                await ctx.pluginManager.updateConfig(id, config)
                 applied.push(id)
                 continue
               }
-              const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), id, parsed.configs[id] as Record<string, unknown>)
+              const current = readRowConfig(HOME_ROOT, panelProfile(), id)
+              const config = card === undefined
+                ? parsed.configs[id] as Record<string, unknown>
+                : mergeSecretConfigWrite(card.schema.fields, parsed.configs[id], current.ok ? current.config : {})
+              const outcome = upsertRowConfig(HOME_ROOT, panelProfile(), id, config)
               if (outcome.ok) applied.push(id)
               else failures.push({ id, reason: outcome.error ?? '写入失败' })
             } catch (error) {
@@ -3500,7 +3727,16 @@ export function apply(ctx: PanelContext): void {
           const id = updateMatch[2]
           if (id === undefined) throw new Error('缺少更新目标 id')
           if (kind !== 'plugins') throw new Error(`不支持的更新目标类型：${kind}`)
-          json(200, await updatePluginFromRemote(ctx, id))
+          const operation = beginPanelOperation('update', id)
+          let updateResult: Awaited<ReturnType<typeof updatePluginFromRemote>>
+          try {
+            updateResult = await updatePluginFromRemote(ctx, id)
+          } catch (error) {
+            finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+            throw error
+          }
+          finishPanelOperation(operation, 'ok', undefined, updateResult.updated !== true)
+          json(200, updateResult)
           return
         }
         const match = /^\/api\/mygo\/plugins\/([^/]+)\/(enable|disable|uninstall)$/.exec(path)
@@ -3528,7 +3764,16 @@ export function apply(ctx: PanelContext): void {
               } catch {
                 // no body: keep the default
               }
-              const outcome = await routeBundleUninstall(ctx, id, force)
+              const operation = beginPanelOperation('uninstall', id)
+              let outcome: BundleUninstallOutcome
+              try {
+                outcome = await routeBundleUninstall(ctx, id, force)
+              } catch (error) {
+                finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+                throw error
+              }
+              const liveEffective = outcome.message?.includes('刷新页面后生效') === true
+              finishPanelOperation(operation, 'ok', undefined, !liveEffective)
               json(outcome.ok ? 200 : 400, outcome)
             }
             return
@@ -3545,6 +3790,8 @@ export function apply(ctx: PanelContext): void {
           if (action === 'enable') await ctx.pluginManager.enable(id)
           else if (action === 'disable') await ctx.pluginManager.disable(id, undefined, force)
           else {
+            const operation = beginPanelOperation('uninstall', id)
+            try {
             let skillFile: string | undefined
             try {
               const installed = JSON.parse(await readFile(join(INSTALL_DIR, id, MANIFEST), 'utf8')) as InstallManifest
@@ -3564,12 +3811,36 @@ export function apply(ctx: PanelContext): void {
             // provider row, so the manager automatically falls back to the
             // built-in sqlite registry route on the next boot.
             if (id === 'mygo-rdb') await removeStoreProviderRows()
+            } catch (error) {
+              finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
+              throw error
+            }
+            finishPanelOperation(operation, 'ok', undefined, true)
           }
           json(200, {
             ok: true,
             id,
             message: action === 'enable' ? '插件已启用' : action === 'disable' ? '插件已停用' : '插件已卸载',
           })
+          return
+        }
+        if (method === 'GET' && (path === '/api/mygo/hub' || path === '/api/mygo/hub/')) {
+          json(200, { ok: true, ...panelHubDocument(ctx) })
+          return
+        }
+        const hubInstallMatch = /^\/api\/mygo\/hub\/(install|update)$/.exec(path)
+        if (method === 'POST' && hubInstallMatch !== null) {
+          const op = hubInstallMatch[1]
+          if (op !== 'install' && op !== 'update') throw new Error(`不支持的 hub 操作：${op}`)
+          const body = JSON.parse(await readBody(req)) as { readonly id?: unknown; readonly releaseId?: unknown }
+          if (typeof body.id !== 'string' || body.id === '') throw new Error('hub 操作需要条目 id')
+          const outcome = await runHubBundleInstall(
+            ctx,
+            body.id,
+            typeof body.releaseId === 'string' && body.releaseId !== '' ? body.releaseId : undefined,
+            op,
+          )
+          json(outcome.status, outcome.body)
           return
         }
         json(404, { ok: false, error: 'not found' })

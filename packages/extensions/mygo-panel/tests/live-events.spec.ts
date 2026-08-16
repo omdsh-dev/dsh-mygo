@@ -7,10 +7,14 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  LIVE_EVENTS_PATH,
+  beginPanelOperation,
   broadcastLiveRail,
+  finishPanelOperation,
+  LIVE_EVENTS_PATH,
   liveEventsConnectionCount,
   liveRowUrlOf,
+  panelOperationsSnapshot,
+  panelRestartRequired,
   registerLiveEventsRoute,
 } from '../src/live-events.ts'
 
@@ -55,16 +59,17 @@ describe('live rail 事件通道（/api/mygo/events）', () => {
     const res = connect()
     expect(res.status).toBe(200)
     expect(res.chunks[0]).toBe(': connected\n\n')
+    expect(res.chunks[1]).toBe('data: {"type":"snapshot","operations":[],"restartRequired":false}\n\n')
     expect(liveEventsConnectionCount()).toBe(1)
     broadcastLiveRail({ type: 'live-rail', op: 'mount', id: '@test/pkg', url: '/plugins/@test/pkg/client.js?rev=abc' })
-    expect(res.chunks[1]).toBe('data: {"type":"live-rail","op":"mount","id":"@test/pkg","url":"/plugins/@test/pkg/client.js?rev=abc"}\n\n')
+    expect(res.chunks[2]).toBe('data: {"type":"live-rail","op":"mount","id":"@test/pkg","url":"/plugins/@test/pkg/client.js?rev=abc"}\n\n')
     broadcastLiveRail({ type: 'live-rail', op: 'unmount', id: '@test/pkg' })
-    expect(res.chunks[2]).toBe('data: {"type":"live-rail","op":"unmount","id":"@test/pkg"}\n\n')
+    expect(res.chunks[3]).toBe('data: {"type":"live-rail","op":"unmount","id":"@test/pkg"}\n\n')
     res.close()
     expect(liveEventsConnectionCount()).toBe(0)
     // 摘除后广播不再触达
     broadcastLiveRail({ type: 'live-rail', op: 'mount', id: '@test/pkg' })
-    expect(res.chunks).toHaveLength(3)
+    expect(res.chunks).toHaveLength(4)
   })
 
   it('非 GET/HEAD 拒绝 405 且不挂接', () => {
@@ -89,5 +94,21 @@ describe('live rail 事件通道（/api/mygo/events）', () => {
     expect(liveRowUrlOf(get, '@test/other')).toBeUndefined()
     expect(liveRowUrlOf(() => undefined, '@test/pkg')).toBeUndefined()
     expect(liveRowUrlOf(() => { throw new Error('no ctx') }, '@test/pkg')).toBeUndefined()
+  })
+})
+
+describe('P2 操作事件（/api/mygo/events）', () => {
+  it('snapshot 先行，begin/finish 广播 running/ok/failed 帧', () => {
+    const res = connect()
+    expect(res.chunks[1]).toContain('"type":"snapshot"')
+    const operation = beginPanelOperation('install', '@test/op')
+    expect(panelOperationsSnapshot().at(-1)).toMatchObject({ status: 'running' })
+    expect(res.chunks[2]).toContain('"status":"running"')
+    finishPanelOperation(operation, 'ok', undefined, true)
+    expect(panelRestartRequired()).toBe(true)
+    expect(panelOperationsSnapshot().at(-1)).toMatchObject({ status: 'ok' })
+    expect(res.chunks[3]).toContain('"status":"ok"')
+    expect(res.chunks[3]).toContain('"restartRequired":true')
+    res.close()
   })
 })

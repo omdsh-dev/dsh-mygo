@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import css from './Panel.module.css'
-import { ConfigFieldEditor, editableOf, isPlainObject, type ConfigFieldShape } from './ConfigFields'
+import { ConfigFieldEditor, editableOf, isDraftDirty, isPlainObject, type ConfigFieldShape } from './ConfigFields'
 
 /** config-cards API 返回的一张卡片（注册时捕获的种子信息）。 */
 export interface MygoPluginCardSeed {
@@ -48,23 +48,6 @@ async function fetchJson<T>(path: string, init?: { readonly method?: string; rea
   return (await res.json()) as T
 }
 
-/** JSON 安全深比较（draft 与当前配置的脏检查）。 */
-function isDeepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
-  if (Array.isArray(a) !== Array.isArray(b)) return false
-  if (Array.isArray(a)) {
-    if (a.length !== (b as unknown[]).length) return false
-    return a.every((entry, index) => isDeepEqual(entry, (b as unknown[])[index]))
-  }
-  const left = a as Record<string, unknown>
-  const right = b as Record<string, unknown>
-  const leftKeys = Object.keys(left)
-  const rightKeys = Object.keys(right)
-  if (leftKeys.length !== rightKeys.length) return false
-  return leftKeys.every(key => Object.prototype.hasOwnProperty.call(right, key) && isDeepEqual(left[key], right[key]))
-}
-
 /** 一张受管插件的官方折叠形态配置卡片（保存走 mygo 核心 API）。 */
 export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed }): JSX.Element {
   const { seed } = props
@@ -99,7 +82,7 @@ export function MygoPluginConfigCard(props: { readonly seed: MygoPluginCardSeed 
 
   useEffect(() => { void load() }, [load])
 
-  const dirty = row !== undefined && !isDeepEqual(draft, isPlainObject(row.config) ? row.config : {})
+  const dirty = row !== undefined && isDraftDirty(row.schema.fields, draft, row.config)
 
   const save = useCallback(async (): Promise<void> => {
     setSaving(true)

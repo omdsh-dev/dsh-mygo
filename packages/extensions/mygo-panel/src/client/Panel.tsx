@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import css from './Panel.module.css'
 import {
   api, STATUS_LABEL, formatTime,
-  type MygoPluginRow, type RemoteUpdateRow, type StatusResult,
+  type HubCatalogResult, type MygoPluginRow, type RemoteUpdateRow, type StatusResult,
 } from './api'
 import type { ConfigFieldShape } from './ConfigFields'
 import { PluginList } from './PluginList'
@@ -18,11 +18,12 @@ import { ConfigHelper, type HelperPanelState } from './ConfigHelper'
 import { ConfigEditor, type ConfigDrawerState } from './ConfigEditor'
 import { ConfigTransfer } from './ConfigTransfer'
 import { RegistriesPanel } from './RegistriesPanel'
+import { HubCatalog } from './HubCatalog'
 
 export type { ConfigFieldShape } from './ConfigFields'
 export type { MygoPluginRow, RemoteUpdateRow } from './api'
 
-type TabId = 'plugins' | 'install' | 'updates' | 'helper' | 'registries'
+type TabId = 'plugins' | 'install' | 'hub' | 'updates' | 'helper' | 'registries'
 
 interface NoticeState {
   readonly kind: 'error' | 'notice'
@@ -34,6 +35,7 @@ interface NoticeState {
 const TAB_LABEL: Record<TabId, string> = {
   plugins: '插件',
   install: '安装',
+  hub: '目录',
   updates: '更新',
   helper: '助手',
   registries: '源与凭据',
@@ -53,6 +55,9 @@ export function Panel(): JSX.Element {
   const [helper, setHelper] = useState<HelperPanelState | undefined>()
   const [helperBusy, setHelperBusy] = useState(false)
   const [helperContext, setHelperContext] = useState<string | undefined>()
+  const [hubCatalog, setHubCatalog] = useState<HubCatalogResult | null>(null)
+  const [hubBusy, setHubBusy] = useState(false)
+  const [hubFailed, setHubFailed] = useState(false)
   const helperTimer = useRef<ReturnType<typeof setInterval> | undefined>()
   useEffect(() => () => { if (helperTimer.current !== undefined) clearInterval(helperTimer.current) }, [])
 
@@ -93,6 +98,28 @@ export function Panel(): JSX.Element {
     }
   }, [])
 
+  const loadHubCatalog = useCallback(async (): Promise<void> => {
+    setHubBusy(true)
+    setHubFailed(false)
+    try {
+      setHubCatalog(await api.hubCatalog())
+    } catch (caught) {
+      setHubFailed(true)
+      setNotice({
+        kind: 'error',
+        title: 'Hub 目录加载失败',
+        text: caught instanceof Error ? caught.message : String(caught),
+      })
+    } finally {
+      setHubBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab !== 'hub' || hubCatalog !== null) return
+    void loadHubCatalog()
+  }, [tab, hubCatalog, loadHubCatalog])
+
   useEffect(() => { void refresh() }, [refresh])
 
   const reportError = useCallback((message: string, details?: Readonly<Record<string, unknown>>): void => {
@@ -102,6 +129,24 @@ export function Panel(): JSX.Element {
   const reportNotice = useCallback((message: string): void => {
     setNotice({ kind: 'notice', text: message })
   }, [])
+
+  const runHubAction = useCallback(async (id: string, action: 'install' | 'update'): Promise<void> => {
+    setHubBusy(true)
+    try {
+      const result = action === 'install' ? await api.hubInstall(id) : await api.hubUpdate(id)
+      const advisories = result.advisories ?? []
+      setNotice({
+        kind: 'notice',
+        text: result.message + (advisories.length === 0 ? '' : ' 提示：' + advisories.join('；')),
+      })
+      await loadHubCatalog()
+      void refresh()
+    } catch (caught) {
+      reportError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setHubBusy(false)
+    }
+  }, [loadHubCatalog, refresh, reportError])
 
   const openConfig = useCallback(async (plugin: MygoPluginRow): Promise<void> => {
     setConfigError(undefined)
@@ -413,6 +458,16 @@ export function Panel(): JSX.Element {
           onRefresh={() => void refresh()}
           onError={reportError}
           onNotice={reportNotice}
+        />
+      )}
+      {tab === 'hub' && (
+        <HubCatalog
+          catalog={hubCatalog}
+          loading={hubCatalog === null && !hubFailed}
+          busy={hubBusy}
+          onRefresh={() => void loadHubCatalog()}
+          onInstall={(id) => void runHubAction(id, 'install')}
+          onUpdate={(id) => void runHubAction(id, 'update')}
         />
       )}
       {tab === 'updates' && (
