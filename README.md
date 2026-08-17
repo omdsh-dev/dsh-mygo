@@ -94,7 +94,11 @@ mygo config <id> [--set '<json>']
 
 ## 整合包（mygo-pack/v1）
 
-把一组插件打成一个**确定性、可审计、可离线还原**的整合包：
+把一组插件打成一个**确定性、可审计、可离线还原**的整合包。格式仍为
+**v1**：引用式成员（`references[]`）是 v1 的兼容扩展（formatVersion
+仍为 1）——files/plugins 语义未变；旧还原端遇到含 references 的 pack
+以「一一对应」校验干净拒绝（fail closed），新还原端对无 references 键
+的旧 pack 逐字节兼容。
 
 | 成员形态 | 包体 | 还原 |
 |---|---|---|
