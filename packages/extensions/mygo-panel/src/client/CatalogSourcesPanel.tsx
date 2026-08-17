@@ -9,6 +9,7 @@ import type { HubSourceConfig, HubSourceReport } from './api'
 
 const KIND_LABEL: Record<HubSourceReport['kind'], string> = {
   local: 'local',
+  market: 'market',
   hub: 'hub',
   github: 'github',
 }
@@ -25,6 +26,8 @@ export function CatalogSourcesPanel(props: CatalogSourcesPanelProps): JSX.Elemen
   const [open, setOpen] = useState(false)
   const [localText, setLocalText] = useState('')
   const [originsText, setOriginsText] = useState('')
+  const [marketUrl, setMarketUrl] = useState('')
+  const [marketMaxPages, setMarketMaxPages] = useState(10)
   const [githubUpstream, setGithubUpstream] = useState('')
   const [maxRepos, setMaxRepos] = useState(30)
   const [timeoutMs, setTimeoutMs] = useState(10_000)
@@ -34,6 +37,8 @@ export function CatalogSourcesPanel(props: CatalogSourcesPanelProps): JSX.Elemen
     if (config === null) return
     setLocalText(config.localSources.join('\n'))
     setOriginsText(config.hubOrigins.join('\n'))
+    setMarketUrl(config.marketUrl)
+    setMarketMaxPages(config.marketMaxPages)
     setGithubUpstream(config.githubUpstream)
     setMaxRepos(config.maxRepos)
     setTimeoutMs(config.timeoutMs)
@@ -44,6 +49,8 @@ export function CatalogSourcesPanel(props: CatalogSourcesPanelProps): JSX.Elemen
     onSave({
       localSources: localText.split('\n').map(line => line.trim()).filter(line => line !== ''),
       hubOrigins: originsText.split('\n').map(line => line.trim()).filter(line => line.startsWith('https://')),
+      marketUrl: marketUrl.trim(),
+      marketMaxPages,
       githubUpstream: githubUpstream.trim(),
       maxRepos,
       timeoutMs,
@@ -92,8 +99,18 @@ export function CatalogSourcesPanel(props: CatalogSourcesPanelProps): JSX.Elemen
             <div className={css.fieldHint}>由 mygo-loader-hub 拉取/验签；全部失败时回落内置快照。</div>
           </div>
           <div className={css.fieldGroup}>
-            <div className={css.fieldLabel}>githubUpstream（留空关闭账号枚举）</div>
-            <input className={css.input} value={githubUpstream} onChange={event => setGithubUpstream(event.target.value)} placeholder="owner" />
+            <div className={css.fieldLabel}>marketUrl（默认插件市场端点）</div>
+            <input className={css.input} value={marketUrl} onChange={event => setMarketUrl(event.target.value)} placeholder="https://api.dshfind.com/v1/plugins" />
+          </div>
+          <div className={css.row}>
+            <div className={css.fieldGroup}>
+              <div className={css.fieldLabel}>marketMaxPages</div>
+              <input className={css.input} type="number" min={1} max={100} value={marketMaxPages} onChange={event => setMarketMaxPages(Number(event.target.value))} />
+            </div>
+            <div className={css.fieldGroup}>
+              <div className={css.fieldLabel}>githubUpstream</div>
+              <input className={css.input} value={githubUpstream} onChange={event => setGithubUpstream(event.target.value)} placeholder="留空关闭账号枚举" />
+            </div>
           </div>
           <div className={css.row}>
             <div className={css.fieldGroup}>

@@ -146,7 +146,7 @@ export interface HelperStatus {
 /** hub catalog 的一条条目。 */
 export interface HubCatalogEntry {
   /** 获胜目录源。 */
-  readonly source?: 'local' | 'hub' | 'github'
+  readonly source?: 'local' | 'market' | 'hub' | 'github'
   readonly id: string
   readonly displayName: string
   readonly description: string
@@ -209,7 +209,7 @@ export interface HubCatalogResult {
 
 /** 逐源解析报告。 */
 export interface HubSourceReport {
-  readonly kind: 'local' | 'hub' | 'github'
+  readonly kind: 'local' | 'market' | 'hub' | 'github'
   readonly origin: string
   readonly ok: boolean
   readonly count: number
@@ -220,6 +220,8 @@ export interface HubSourceReport {
 export interface HubSourceConfig {
   readonly localSources: readonly string[]
   readonly hubOrigins: readonly string[]
+  readonly marketUrl: string
+  readonly marketMaxPages: number
   readonly githubUpstream: string
   readonly maxRepos: number
   readonly timeoutMs: number

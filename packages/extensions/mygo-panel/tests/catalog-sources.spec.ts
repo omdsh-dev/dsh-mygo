@@ -27,10 +27,11 @@ describe('目录源配置读写', () => {
     await rm(home, { recursive: true, force: true })
   })
 
-  it('normalize 夹紧数值并清洗路径/URL', async () => {
+  it('normalize 夹紧数值并清洗路径/URL；空输入带默认市场端点', async () => {
     const config = await normalizeCatalogSourceConfig({
       localSources: ['', '/tmp/a', '/tmp/a'],
       hubOrigins: ['https://hub.example/registry-v1.json', 'not-a-url'],
+      marketMaxPages: 999,
       githubUpstream: ' owner ',
       maxRepos: 999,
       timeoutMs: 1,
@@ -39,6 +40,8 @@ describe('目录源配置读写', () => {
     expect(config.localSources).toEqual(['/tmp/a'])
     expect(config.hubOrigins).toEqual(['https://hub.example/registry-v1.json'])
     expect(config.githubUpstream).toBe('owner')
+    expect(config.marketUrl).toBe('https://api.dshfind.com/v1/plugins')
+    expect(config.marketMaxPages).toBe(100)
     expect(config.maxRepos).toBe(100)
     expect(config.timeoutMs).toBe(1_000)
     expect(config.cacheTtlMs).toBe(0)
@@ -103,16 +106,26 @@ describe('mergeEntries（local > hub > github）', () => {
     releases: [],
   } as unknown as HubEntry)
 
-  it('同 id 高优先级源胜出；败者仅补 repository 链接', () => {
+  it('同 id 高优先级源胜出：local > market > hub > github；败者补 repository', () => {
     const local = hub()
+    const market = hub()
     const github = hub()
     const merged = mergeEntries([
       { kind: 'hub', origin: 'hub', entries: [hub()] },
       { kind: 'github', origin: 'acme', entries: [{ ...github, links: { repository: 'https://github.com/acme/demo' } }] },
+      { kind: 'market', origin: 'https://api.dshfind.com/v1/plugins', entries: [market] },
       { kind: 'local', origin: '/tmp/checkouts', entries: [local] },
     ])
     expect(merged.entries).toHaveLength(1)
     expect(merged.sourceById.get('demo')).toBe('local')
     expect(merged.entries[0]?.links?.repository).toBe('https://github.com/acme/demo')
+  })
+
+  it('无 local 时 market 高于 hub', () => {
+    const merged = mergeEntries([
+      { kind: 'hub', origin: 'hub', entries: [hub()] },
+      { kind: 'market', origin: 'https://api.dshfind.com/v1/plugins', entries: [hub()] },
+    ])
+    expect(merged.sourceById.get('demo')).toBe('market')
   })
 })

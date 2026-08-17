@@ -43,7 +43,7 @@ export interface HubInstalledFact {
 /** One hub entry as served to the browser. */
 export interface HubCatalogRow extends HubEntry {
   /** 获胜目录源（local / hub / github）。 */
-  readonly source?: 'local' | 'hub' | 'github'
+  readonly source?: 'local' | 'market' | 'hub' | 'github'
   readonly installed?: {
     readonly id: string
     readonly rail: 'bridge' | 'bundle' | 'live'

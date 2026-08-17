@@ -22,21 +22,28 @@ import {
 } from '@r05en1cu/dsh-mygo-loader-hub'
 import { hubEntryRow, type HubCatalogDocument, type HubCatalogRow, type HubInstalledFact } from './hub-catalog.js'
 
-export type CatalogSourceKind = 'local' | 'hub' | 'github'
+export type CatalogSourceKind = 'local' | 'market' | 'hub' | 'github'
 
 /** 面板目录源配置（$DSH_HOME/mygo-panel/catalog-sources.json）。 */
 export interface CatalogSourceConfig {
   readonly localSources: readonly string[]
   readonly hubOrigins: readonly string[]
+  readonly marketUrl: string
+  readonly marketMaxPages: number
   readonly githubUpstream: string
   readonly maxRepos: number
   readonly timeoutMs: number
   readonly cacheTtlMs: number
 }
 
+/** 默认插件市场 API（dshfind 公开目录；REST snake_case）。 */
+export const DEFAULT_MARKET_URL = 'https://api.dshfind.com/v1/plugins'
+
 export const DEFAULT_CATALOG_SOURCE_CONFIG: CatalogSourceConfig = {
   localSources: [],
   hubOrigins: HUB_REGISTRY_ORIGINS,
+  marketUrl: DEFAULT_MARKET_URL,
+  marketMaxPages: 10,
   githubUpstream: '',
   maxRepos: 30,
   timeoutMs: 10_000,
@@ -97,6 +104,12 @@ export function readCatalogSourceConfig(home: string): CatalogSourceConfig {
     return {
       localSources: local,
       hubOrigins: origins,
+      marketUrl: typeof raw.marketUrl === 'string' && raw.marketUrl.trim() !== ''
+        ? raw.marketUrl.trim()
+        : DEFAULT_CATALOG_SOURCE_CONFIG.marketUrl,
+      marketMaxPages: typeof raw.marketMaxPages === 'number' && raw.marketMaxPages >= 1 && raw.marketMaxPages <= 100
+        ? Math.floor(raw.marketMaxPages)
+        : DEFAULT_CATALOG_SOURCE_CONFIG.marketMaxPages,
       githubUpstream: typeof raw.githubUpstream === 'string' ? raw.githubUpstream.trim() : '',
       maxRepos: typeof raw.maxRepos === 'number' && raw.maxRepos >= 1 && raw.maxRepos <= 100 ? Math.floor(raw.maxRepos) : DEFAULT_CATALOG_SOURCE_CONFIG.maxRepos,
       timeoutMs: typeof raw.timeoutMs === 'number' && raw.timeoutMs >= 1_000 && raw.timeoutMs <= 120_000 ? Math.floor(raw.timeoutMs) : DEFAULT_CATALOG_SOURCE_CONFIG.timeoutMs,
@@ -130,6 +143,10 @@ export async function normalizeCatalogSourceConfig(input: Partial<CatalogSourceC
   return {
     localSources: [...new Set(localSources)],
     hubOrigins: [...new Set(hubOrigins)],
+    marketUrl: typeof input.marketUrl === 'string' && input.marketUrl.trim() !== '' ? input.marketUrl.trim() : base.marketUrl,
+    marketMaxPages: typeof input.marketMaxPages === 'number'
+      ? Math.min(100, Math.max(1, Math.floor(input.marketMaxPages)))
+      : base.marketMaxPages,
     githubUpstream: typeof input.githubUpstream === 'string' ? input.githubUpstream.trim() : base.githubUpstream,
     maxRepos: typeof input.maxRepos === 'number' ? Math.min(100, Math.max(1, Math.floor(input.maxRepos))) : base.maxRepos,
     timeoutMs: typeof input.timeoutMs === 'number' ? Math.min(120_000, Math.max(1_000, Math.floor(input.timeoutMs))) : base.timeoutMs,
@@ -157,7 +174,7 @@ function pluginIdOf(pkg: { readonly name?: unknown; readonly dsh?: unknown }): s
   return /^[a-z][a-z0-9-]*$/.test(cleaned) ? cleaned : undefined
 }
 
-/** 最小 HubEntry 合成（local/github 包没有 hub 治理元数据，按 unknown 展示）。 */
+/** 最小 HubEntry 合成（market/local/github 包没有 hub 治理元数据，按 unknown 展示）。 */
 function syntheticEntry(input: {
   readonly id: string
   readonly packageName: string
@@ -165,14 +182,26 @@ function syntheticEntry(input: {
   readonly description?: string
   readonly spec: string
   readonly repo?: string
+  readonly tags?: readonly string[]
+  readonly kind?: string
+  readonly authorName?: string
+  readonly archived?: boolean
+  readonly installable?: boolean
 }): HubEntry {
+  const install = {
+    mode: 'profile-bundle',
+    adapter: 'official-profile/v1',
+    packageName: input.packageName,
+    spec: input.spec,
+  } as const
+  const blocked = input.installable === false
   return {
     id: input.id,
     displayName: input.id,
     description: input.description ?? '',
-    kind: 'bundle',
-    tags: [],
-    author: { name: input.repo ?? 'local' },
+    kind: input.kind ?? 'bundle',
+    tags: input.tags ?? [],
+    author: { name: input.authorName ?? input.repo ?? 'local' },
     version: input.version ?? null,
     license: 'unknown',
     risk: {
@@ -184,14 +213,9 @@ function syntheticEntry(input: {
         installScripts: 'unknown',
       },
     },
-    listing: { state: 'auto-listed' },
-    maintenance: { state: 'active' },
-    install: {
-      mode: 'profile-bundle',
-      adapter: 'official-profile/v1',
-      packageName: input.packageName,
-      spec: input.spec,
-    },
+    listing: { state: blocked ? 'blocked' : 'auto-listed' },
+    maintenance: { state: input.archived === true ? 'archived' : 'active' },
+    install,
     latestRelease: 'local',
     releases: [{
       id: 'local',
@@ -199,12 +223,7 @@ function syntheticEntry(input: {
       ref: 'local',
       updatedAt: '',
       channel: 'local',
-      install: {
-        mode: 'profile-bundle',
-        adapter: 'official-profile/v1',
-        packageName: input.packageName,
-        spec: input.spec,
-      },
+      install,
     }],
     ...(input.repo === undefined ? {} : { links: { repository: `https://github.com/${input.repo}` } }),
   } as unknown as HubEntry
@@ -244,6 +263,81 @@ export function scanLocalRoot(root: string): readonly HubEntry[] {
     } catch {
       // 非包目录/坏 package.json：跳过
     }
+  }
+  return out
+}
+
+/** dshfind 插件市场 REST 行（只消费目录字段）。 */
+interface MarketPluginRow {
+  readonly full_name?: unknown
+  readonly name?: unknown
+  readonly owner?: unknown
+  readonly repository_url?: unknown
+  readonly description?: unknown
+  readonly tags?: unknown
+  readonly language?: unknown
+  readonly archived?: unknown
+  readonly install?: {
+    readonly kind?: unknown
+    readonly pkg_name?: unknown
+    readonly npm_published?: unknown
+    readonly release_tgz_url?: unknown
+  }
+}
+
+/** 从市场行构造条目；无 npm/tarball 安装意图时展示但 blocked。 */
+function marketEntryOf(row: MarketPluginRow): HubEntry | undefined {
+  if (typeof row.full_name !== 'string' || row.full_name === '' || typeof row.name !== 'string') return undefined
+  const repo = row.full_name
+  const short = row.name
+  const id = short.replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+  if (!/^[a-z][a-z0-9-]*$/.test(id)) return undefined
+  const install = row.install
+  const npmInstallable = install?.npm_published === true
+  const pkgName = npmInstallable && typeof install.pkg_name === 'string' && install.pkg_name !== '' ? install.pkg_name : ''
+  const tgzUrl = typeof install?.release_tgz_url === 'string' && install.release_tgz_url.startsWith('https://')
+    ? install.release_tgz_url
+    : ''
+  const installable = pkgName !== '' || tgzUrl !== ''
+  const spec = pkgName !== '' ? pkgName : tgzUrl
+  return syntheticEntry({
+    id,
+    packageName: pkgName,
+    ...(typeof row.description === 'string' ? { description: row.description } : {}),
+    spec: installable ? spec : '',
+    repo,
+    ...(Array.isArray(row.tags) ? { tags: row.tags.filter((tag): tag is string => typeof tag === 'string') } : {}),
+    kind: typeof row.language === 'string' && row.language !== '' ? row.language : 'plugin',
+    authorName: typeof row.owner === 'string' ? row.owner : repo,
+    archived: row.archived === true,
+    installable,
+  })
+}
+
+/** 拉取插件市场（固定 data_version 的分页同步；页数受 marketMaxPages 限制）。 */
+async function fetchMarketEntries(url: string, maxPages: number, timeoutMs: number): Promise<readonly HubEntry[]> {
+  const perPage = 100
+  let dataVersion: string | undefined
+  const out: HubEntry[] = []
+  for (let page = 1; page <= maxPages; page += 1) {
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) })
+    if (dataVersion !== undefined) params.set('data_version', dataVersion)
+    const response = await fetchWithTimeout(`${url}${url.includes('?') ? '&' : '?'}${params.toString()}`, {}, timeoutMs)
+    if (!response.ok) throw new Error(`插件市场 HTTP ${response.status}`)
+    const doc = JSON.parse(await response.text()) as {
+      readonly data?: readonly MarketPluginRow[]
+      readonly data_version?: unknown
+      readonly total_pages?: unknown
+      readonly error?: { readonly code?: unknown }
+    }
+    if (doc.error?.code === 'stale_data') throw new Error('插件市场 data_version 已过期，请重试')
+    if (typeof doc.data_version === 'string') dataVersion = doc.data_version
+    for (const row of doc.data ?? []) {
+      const entry = marketEntryOf(row)
+      if (entry !== undefined) out.push(entry)
+    }
+    const totalPages = typeof doc.total_pages === 'number' ? doc.total_pages : page
+    if (page >= totalPages) break
   }
   return out
 }
@@ -310,7 +404,7 @@ export function mergeEntries(sources: readonly ResolvedSource[]): {
   readonly sourceById: ReadonlyMap<string, CatalogSourceKind>
 } {
   const byId = new Map<string, { readonly entry: HubEntry; readonly kind: CatalogSourceKind }>()
-  for (const kind of ['local', 'hub', 'github'] as const) {
+  for (const kind of ['local', 'market', 'hub', 'github'] as const) {
     for (const source of sources) {
       if (source.kind !== kind) continue
       for (const entry of source.entries) {
@@ -447,6 +541,21 @@ export class CatalogSourceService {
     if (config.localSources.length > 0) {
       sources.push({ kind: 'local', origin: config.localSources.join(', '), entries: localEntries })
       reports.unshift({ kind: 'local', origin: config.localSources.join(', '), ok: true, count: localCount })
+    }
+
+    // market：默认插件市场（dshfind REST），固定 data_version 分页。
+    try {
+      const entries = await fetchMarketEntries(config.marketUrl, config.marketMaxPages, config.timeoutMs)
+      sources.push({ kind: 'market', origin: config.marketUrl, entries })
+      reports.push({ kind: 'market', origin: config.marketUrl, ok: true, count: entries.length })
+    } catch (error) {
+      reports.push({
+        kind: 'market',
+        origin: config.marketUrl,
+        ok: false,
+        count: 0,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
 
     // hub：registry fetch/验签/降级交给 mygo-loader-hub。
