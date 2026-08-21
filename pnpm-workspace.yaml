@@ -3,6 +3,11 @@ packages:
   - packages/cordis/*
   - packages/extensions/*
   - packages/loaders/*
+# 统一 schemastery 单实例：@deepseek-ai/dsh-* 的 0.1.x 依赖声明 ^3.18.1，
+# 而本仓各包钉 3.18.1-rc.1——双实例会让 mygo 的 schema 推断类型无法命名
+# （tsc TS2883）。override 强制单版本，与仓内既有钉一致。
+overrides:
+  '@deepseek-ai/schemastery': '3.18.1-rc.1'
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-include@1.0.6'
   - '@deepseek-ai/cordis-plugin-loader@1.0.2'
