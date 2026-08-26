@@ -737,7 +737,6 @@ export interface LifecycleEngineOptions {
   readonly staticIds?: readonly string[]
   /** Slot classification for order neutrality (same input as #13). */
   readonly slotKinds?: ReadonlyMap<string, 'host-sorted' | 'chain-ordered'>
-  /** Preferred recovery mount order (dependencies first, from lockfile). */
   readonly recoverOrder?: readonly string[]
   /** Harness event vocabulary for mount validation (defaults to the generated one). */
   readonly eventVocabulary?: readonly PluginEventVocabularyEntry[]
@@ -1002,8 +1001,6 @@ export class LifecycleEngine {
     const definition = await this.resolveSource(source)
     return this.withLock(definition.id, 'install', async () => {
       this.validate(definition, origin, source)
-      // 范围重塑（2026-08-13）：激活求解器已删除，安装只做兼容预检
-      // （assertCompatibility）；depends 闭包连带启用不再发生。
       this.assertCompatibility(definition)
       await this.assertRegistryQuota(source, definition.id)
       const existing = this.records.get(definition.id)
@@ -1446,8 +1443,6 @@ export class LifecycleEngine {
       const record = this.requireRecord(id, 'disable')
       if (record.status === 'disabled') return
       if (record.status === 'shadowed') return
-      // 求解器级联停用已删除（2026-08-13 范围重塑）：有 requires 级下游时
-      // 只能显式 force 或先停用下游。
       const plan = planOperation({ op: 'disable', id, force }, this.planState())
       if (!plan.accepted) {
         const dependents = (plan.error?.details?.dependents as readonly string[] | undefined) ?? []
@@ -2090,11 +2085,6 @@ export class LifecycleEngine {
     this.bundleRail.writeManifest({ dependencies, bundles: [...bundles, packageName] })
   }
 
-  /**
-   * Pre-apply verify of one newly installed bundle member (2026-08-13 范围
-   * 重塑：激活求解器已删除，改用纯求值的 plan 预览——兼容预检 + 关系冲突，
-   * 无级联动作）。
-   */
   private verifyBundleInstall(member: BundleMember): PluginOperationPlan {
     const state = this.planState()
     const filtered: PlanState = {

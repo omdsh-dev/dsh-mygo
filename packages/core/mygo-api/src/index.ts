@@ -36,8 +36,6 @@ export type {
   CompatibilityWarning,
   CompositionFactProvider,
   Disposable,
-  FileAccessEntry,
-  FileAccessMode,
   InstallOptions,
   InstallOrigin,
   InterceptDeclaration,

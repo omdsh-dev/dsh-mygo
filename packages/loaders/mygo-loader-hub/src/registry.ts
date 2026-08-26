@@ -43,21 +43,13 @@ export const HUB_BUILTIN_KEYS: readonly HubRegistryKey[] = []
 // 类型面（只声明消费字段；其余字段透传宽容）
 // ---------------------------------------------------------------------------
 
-export type HubInstallIntent =
-  | {
-    readonly mode: 'profile-bundle'
-    readonly adapter: 'official-profile/v1'
-    readonly packageName: string
-    /** 精确 semver 或钉 40 位 commit 的 git spec（registry-core isExactPackageSpec）。 */
-    readonly spec: string
-  }
-  | {
-    readonly mode: 'repository-plugin'
-    readonly adapter: 'official-repository/v1'
-    /** `github:owner/repo#<40hex>[&path:/.../.dsh-plugin]`。 */
-    readonly spec: string
-  }
-  | { readonly mode: 'guided'; readonly method: string }
+export interface HubInstallIntent {
+  readonly mode: string
+  readonly adapter?: string
+  readonly packageName?: string
+  readonly spec?: string
+  readonly method?: string
+}
 
 export interface HubRelease {
   readonly id: string

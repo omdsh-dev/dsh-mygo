@@ -1,14 +1,3 @@
-/**
- * Type-only contract surface of `@r05en1cu/dsh-mygo-api`（P2 收敛版）：
- * 插件 manifest、compatibility 只读声明、事件词汇、`PluginEnv` 契约面与
- * 管理面句柄。能力载荷形状（fs/vars/llm/exec/http/skills/commands/tools/
- * prompt/settings）在 `env.ts`。本模块无运行时代码、不 import cordis。
- * 收敛口径（2026-08-13）：每个保留类型都有真实消费者（lifecycle 引擎 /
- * 零侵入桥接 facade / capabilities / 测试面）；求解/lockfile 残留类型已
- * 在 P1 随实现删除。
- * @module @r05en1cu/dsh-mygo-api/src/types
- */
-
 import type Schema from '@deepseek-ai/schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
@@ -62,20 +51,8 @@ export interface PluginDefinition {
   readonly permissions: PermissionsBlock
   /** Custom events: exact names or `namespace/*` patterns (observe/emit only). */
   readonly events?: readonly string[]
-  // 能力授权块（缺省 = 全拒）：fileAccess `write` 蕴含 `read`；各 allowlist 缺一
-  // 不可即拒绝对应 env 面。
-  readonly fileAccess?: FileAccessEntry[]
-  readonly networkAccess?: { readonly allow: string[] }
-  readonly varsAccess?: readonly string[]
-  readonly llmAccess?: { readonly models?: readonly string[] }
-  readonly execAccess?: { readonly allow: readonly string[] }
-  readonly httpAccess?: { readonly routes?: readonly string[] }
   /** Client-half declaration for UI plugins (browser bundle entry + host injections). */
   readonly client?: PluginClientDeclaration
-  // 授权标记（需同名 grant）：sessionWrite / hostPublish / dynamicInstall。
-  readonly sessionWriteAccess?: boolean
-  readonly hostPublishAccess?: boolean
-  readonly dynamicInstallAccess?: boolean
   /** Whether the plugin participates in capture/restore state handoff. */
   readonly stateful: boolean
   /** State-handoff quiescence policy for replace; the chain swap itself is always atomic. */
@@ -89,12 +66,6 @@ export interface PluginDefinition {
   /** Package-level constraints against sibling managed plugins (validation only; never selects versions). */
   readonly compatibility?: PluginCompatibility
 }
-
-/** File-access mode vocabulary: `write` implies `read` on the same path. */
-export type FileAccessMode = 'read' | 'write'
-
-/** One file-access entry `[mode, path]`. */
-export type FileAccessEntry = readonly [mode: FileAccessMode, path: string]
 
 /** Client-half declaration carried by the managed manifest. */
 export interface PluginClientDeclaration {
@@ -112,9 +83,7 @@ export type PluginEntrypointsDeclaration = Readonly<Record<string, readonly Plug
 /** Declared event permission block. */
 export interface PermissionsBlock {
   readonly observe: readonly string[]
-  /** Transform declarations on waterfall events (grant-gated). */
   readonly transform: readonly TransformDeclaration[]
-  /** Intercept declarations (grant-gated). */
   readonly intercept: readonly InterceptDeclaration[]
   /** Listener position; default is `derived`. */
   readonly position: 'outermost' | 'derived' | 'innermost'
@@ -284,13 +253,10 @@ export interface PluginEnv {
   readonly host: unknown
   /** Derive an agent-scoped env whose registrations are visible only to that agent. */
   scope(agentId: SessionId): PluginEnv
-  // 管理面：受管集只读视图 + 动态安装/卸载/热配置（需 dynamicInstall grant）。
   plugins(): readonly PluginHandleInfo[]
   install(source: PluginSource, options?: InstallOptions): Promise<PluginHandleInfo>
   uninstall(id: string): Promise<void>
   updateConfig(patch: unknown, expectedRevision?: number): Promise<void>
-  // 能力面（grant 把关，拒绝先于任何真实操作）：fs/vars/fetch 直通宿主，
-  // llm/exec 无宿主 seam 时 fail-loud；http/skills/commands 随世代暂存与撤销。
   readonly fs: PluginFs
   fetch(url: string, init?: RequestInit): Promise<Response>
   readonly vars: PluginVars
@@ -310,12 +276,10 @@ export type PluginSource =
   | { readonly type: 'inline'; readonly code: string }
   | { readonly type: 'npm'; readonly package: string }
 
-/** Channel identity used for ceiling evaluation. */
 export type InstallOrigin = 'model' | 'runtime-api'
 
 /** Options for a dynamic plugin install. */
 export interface InstallOptions {
-  /** Channel origin; defaults to `runtime-api` and selects the permission ceiling. */
   readonly origin?: InstallOrigin
   /** Initial config validated against the manifest config schema. */
   readonly config?: unknown

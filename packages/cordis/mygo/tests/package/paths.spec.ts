@@ -1,6 +1,5 @@
 /**
  * 路径测试：统一分配在 $DSH_HOME/mygo，不依赖 cwd / dsh 安装位置。
- * （2026-08-13 范围重塑：lockfile 目录/路径随 dsh.lock/v1 删除。）
  */
 
 import { describe, expect, it } from 'vitest'

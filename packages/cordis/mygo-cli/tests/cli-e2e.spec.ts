@@ -121,7 +121,7 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
     else process.env.DSH_CORE_VERSION = ORIGINAL_DSH_CORE_VERSION
   })
 
-  it('T44：真实语料 pack → 空 profile restore → lockfile 语义载荷逐字节一致', async () => {
+  it('T44：真实语料 pack → 空 profile restore → 清单语义载荷逐字节一致', async () => {
     const home = await mkdtemp(join(tmpdir(), 'mygo-cli-t44-'))
     process.env.DSH_HOME = home
     process.env.DSH_CORE_VERSION = '0.0.1-rc.1'
@@ -155,8 +155,6 @@ describe('CLI E2E（T44/T45/T47/T49）', () => {
       expect(restoreJson.warnings.some(warning => warning.includes('社区依赖'))).toBe(true)
 
       const packManifest = await readPackManifest(packPath)
-      // RT1 口径（2026-08-13 重塑）：无 lockfile——还原侧 (id, version) 集合
-      // 与 pack 清单声明逐条一致。
       const pathsR = resolveMygoPaths('cli-r', process.env)
       const restored: string[] = []
       const { readdir } = await import('node:fs/promises')

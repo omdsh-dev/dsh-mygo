@@ -1,16 +1,3 @@
-/**
- * 面板事件通道（rc8 + P2 plughub operation 体验）：`/api/mygo/events`
- * SSE 端点承载 live rail 装卸帧与安装/更新/卸载操作状态帧。连接时先发
- * snapshot，之后每次操作状态变化广播。帧格式为 `data: <json>\n\n`。
- * live 轨装卸成功（含运行期 dispose 验证通过）后向打开中的页面推
- * `{ type: 'live-rail', op, id, url? }` 帧——浏览器半据此页内挂载/拆卸
- * client 行，打开中的页面免刷新。帧格式与 host `/plugins/events` 同款
- * （`data: <json>\n\n`）；host graph 帧不广播（EXT-4 提案未合入），本通道
- * 只承载 mygo 自己 live 轨的操作，与 EXT-4 合入后的 graph 帧并存不冲突
- * （graph 帧管全量图，本帧只管 live 轨操作）。
- * @module @r05en1cu/dsh-mygo-ext-panel/live-events
- */
-
 /** 一帧 live rail 事件（id = graph 行 id = 包名；url = client bundle 地址）。 */
 export interface LiveRailFrame {
   readonly type: 'live-rail'

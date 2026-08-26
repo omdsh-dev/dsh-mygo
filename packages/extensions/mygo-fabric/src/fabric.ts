@@ -4,10 +4,6 @@
  * 执行面安装 fabric 包 + 向目标 profile 的 cordis.patch.yml 写受管块
  * （幂等标记块，P3 启停块同机制）；停用 = 移除受管块（包仍在
  * dependencies，卸载经 profile loader 另行执行）。
- *
- * 三条硬缝（profile-boot 挂钩 / clientBundle transform / api-catalog）
- * 不在本面包内——它们是 host 补丁提案（dsh-mygo/patches/fabric-host.patch）
- * 的内容；runtime 激活依赖 host 合入提案。
  * @module @r05en1cu/dsh-mygo-ext-fabric/fabric
  */
 
@@ -26,10 +22,6 @@ export const FABRIC_BLOCK_END = `# --- end mygo managed extension (id:${FABRIC_E
 /** fabric 扩展的 profile 包清单（cordis-fabric-api 为 peer-only，不直接装）。 */
 export const FABRIC_PACKAGES = ['cordis-fabric', 'cordis-fabric-dsh'] as const
 
-/**
- * 默认分发 spec（git 子目录 spec 白名单过渡，守则例外登记；push 禁令未
- * 解除期间验证一律用本地路径 spec 覆盖，见 enableFabric options.specs）。
- */
 export const FABRIC_DEFAULT_SPECS = [
   'github:omdsh-dev/fabric#main&path:/packages/cordis-fabric',
   'github:omdsh-dev/fabric#main&path:/packages/cordis-fabric-dsh',
@@ -40,10 +32,10 @@ export function fabricExtensionRegistration(): ExtensionRegistration {
   return {
     id: FABRIC_EXTENSION_ID,
     kind: 'extension',
-    source: 'github:omdsh-dev/fabric（git 子目录 spec 白名单过渡）',
+    source: 'github:omdsh-dev/fabric',
     blockMarker: FABRIC_BLOCK_BEGIN,
     packages: FABRIC_PACKAGES,
-    description: 'Fabric/Mixin 扩展层（组合缝两行由 mygo 治理层接管；硬缝走 host 补丁提案）',
+    description: 'Fabric/Mixin 扩展层（组合缝两行由 mygo 治理层接管）',
   }
 }
 

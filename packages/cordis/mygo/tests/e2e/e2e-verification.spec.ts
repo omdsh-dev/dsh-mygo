@@ -21,7 +21,7 @@ import { resolvePluginManagerConfig } from '../../src/config.ts'
 import { InMemoryRegistryStore } from '../../src/store.ts'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
 import { readRestoredPackage } from '../../src/package/package-restore.ts'
-import { preGate, captureExports } from '../../src/package/fine-epoch.ts'
+import { preGate } from '../../src/package/fine-epoch.ts'
 import { detectDualPresence } from '../../src/package/dual-presence.ts'
 import { harvestPackageMetadata } from '../../src/package/harvester.ts'
 import { checkTemplateAlignment } from '../../src/package/template-align.ts'
@@ -39,12 +39,8 @@ import {
   installCorpusToStore,
   mountComposition,
   expandBundlePatch,
-  mapLegacyPluginFile,
   type PackedPackage,
 } from './harness.ts'
-
-// ---------------- 性能记录（S3/S6/S2 实测值，写入 docs/e2e-verification.md） ----------------
-export const PERF: Record<string, number> = {}
 
 // ---------------- 单元级引擎 harness（B8 同款，供 S3-S7 使用） ----------------
 function fixture(id: string, overrides: Partial<PluginDefinition> = {}): PluginDefinition {
@@ -183,9 +179,9 @@ describe('T21 S1 快乐路径：六类夹具混装安装→落盘→挂载全通
     expect(h.logs.join('\n')).not.toContain('ERROR')
   })
 
-  it('直连运行面：真实 F2/F5/F6 入口经原生 loader 挂载（direct path），无 dispose-abandoned / 无 ERROR', async () => {
+  it('直连运行面：真实 F2/F6 入口经原生 loader 挂载（direct path），无 dispose-abandoned / 无 ERROR', async () => {
     const modules = await loadableModules()
-    const direct = CORPUS.filter(plugin => ['F2', 'F5', 'F6'].includes(plugin.category) && plugin.entry !== '')
+    const direct = CORPUS.filter(plugin => ['F2', 'F6'].includes(plugin.category) && plugin.entry !== '')
     const stub = {
       name: 'session-projections-stub',
       apply(owner: Context) {
@@ -210,15 +206,11 @@ describe('T21 S1 快乐路径：六类夹具混装安装→落盘→挂载全通
 })
 
 describe('T22 S2 确定性复验：同一输入两次安装落盘集合一致', () => {
-  it('同输入两次安装产物 (id, version) 集合与内容哈希一致，并记录安装耗时', async () => {
+  it('同输入两次安装产物 (id, version) 集合与内容哈希一致', async () => {
     const bridge = packed.filter(item => ['F1', 'F3', 'F4'].includes(item.plugin.category))
-    const t0 = performance.now()
     // 同一 profile、不同隔离还原根（resolveMygoPaths 每次用新 DSH_HOME）。
     const first = await installCorpusToStore(bridge, registry.url, 'e2e-det')
     const second = await installCorpusToStore(bridge, registry.url, 'e2e-det')
-    PERF.s2SolveMs = (performance.now() - t0) / 2
-    // 确定性口径（2026-08-13 范围重塑）：无 lockfile/求解器，比较两次还原的
-    // (id, version, entrySha256) 事实集合。
     const snapshotOf = async (paths: typeof first.paths): Promise<readonly string[]> => {
       const { readdir } = await import('node:fs/promises')
       const out: string[] = []
@@ -267,7 +259,6 @@ describe('T23 S3 符号缺失：pre-gate 同步拦截 + symbol-missing 报告 + 
     const t0 = performance.now()
     const gate = preGate(['ghost'], snapshot)
     const elapsedMs = performance.now() - t0
-    PERF.s3PreGateMs = elapsedMs
     expect(gate.ok).toBe(false)
     expect(gate.missing).toEqual(['ghost'])
     expect(elapsedMs).toBeLessThan(1)
@@ -394,7 +385,6 @@ describe('T26 S6 dispose 悬挂：5000ms 超时 → dispose-abandoned + 队列�
     h.definitions.set('p2', fixture('p', { version: '2.0.0' }))
     await h.engine.replace('p', source('p2'))
     const elapsed = performance.now() - t0
-    PERF.s6DisposeTimeoutMs = elapsed
     expect(elapsed).toBeGreaterThanOrEqual(4000)
     expect(elapsed).toBeLessThan(8000)
     expect(h.engine.plugins()[0]?.generation).toBe(2)
@@ -491,22 +481,13 @@ describe('T29 S9 社区零阻断：F2 全样本挂载 + 收割器告警可出、
   }, 60_000)
 })
 
-describe('T30 语料侧断言：F3 模板对齐 / F5 legacy 映射 / F6 bundle 展开', () => {
+describe('T30 语料侧断言：F3 模板对齐 / F6 bundle 展开', () => {
   it('F3 官方模板 package.json 对齐（B16 真实闭环）', async () => {
     const template = corpusOf('F3')[0] as CorpusPlugin
     const pkg = JSON.parse(await readFile(join(template.dir, 'package.json'), 'utf8'))
     const result = checkTemplateAlignment(pkg)
     expect(result.aligned).toBe(true)
     expect(result.gaps).toEqual([])
-  })
-
-  it('F5 真实 dsh.plugin.json 只读映射 + 迁移警告', async () => {
-    const f5 = corpusOf('F5')[0] as CorpusPlugin
-    const legacy = JSON.parse(await readFile(join(f5.dir, 'dsh.plugin.json'), 'utf8'))
-    const mapped = mapLegacyPluginFile(legacy)
-    expect(mapped.value?.id).toBe('dsh-pty-windows')
-    expect(mapped.value?.entry).toBe('index.mjs')
-    expect(mapped.warnings.some(line => line.includes('legacy dsh.plugin.json'))).toBe(true)
   })
 
   it('F6 真实 dsh.bundle.patch 展开为 entry 行（dsh-101 主流形态）', async () => {
@@ -593,5 +574,4 @@ describe('T31 F1 fabric mixin 插件真实路径（loader:mixin + patches → �
 
 afterAll(async () => {
   await registry.close()
-  console.log('[E2E-PERF]', JSON.stringify(PERF))
 })

@@ -372,8 +372,6 @@ describe('bundle rail unified graph', () => {
     })
     await engine.install(source('alpha'))
     await engine.bundleSetEnabled('test-bundle', false, true)
-    // 求解器级联已删除（2026-08-13 范围重塑）：bundle 停用不连带停用 alpha，
-    // 显式停用后 enable 预览按兼容预检拒绝（depends 目标已停用）。
     await engine.disable('alpha')
     const plan = await engine.plan({ op: 'enable', id: 'alpha' })
     expect(plan.accepted).toBe(false)
@@ -415,7 +413,6 @@ describe('bundle rail unified graph', () => {
     })
     await engine.bundleSetEnabled('test-bundle', false, true)
     expect(f.rail.members()[0]?.enabled).toBe(false)
-    // 级联停用已删除：下游保持 enabled，由调用方显式处理。
     expect(engine.plugins().find(handle => handle.id === 'alpha')?.status).toBe('enabled')
     rmSync(f.dshHome, { recursive: true, force: true })
     rmSync(f.checkout, { recursive: true, force: true })

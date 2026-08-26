@@ -1,11 +1,3 @@
-/**
- * 单插件确定性版本选择（范围重塑裁决 2026-08-13：替代已删除的跨插件约束
- * 求解器 resolver）。安装/还原不再做插件图求解：在「带有效 manifest 的候选
- * 版本」内按确定性全序取最高版本；profile 钉定（pins）为精确版本硬选择；
- * `core` 区间只作告警不阻断。同输入必同输出。
- * @module @r05en1cu/dsh-mygo/src/package/version-select
- */
-
 import { compareVersions, matchesVersionRange, parseVersion } from '../semver-range.ts'
 import type { PluginManifestV2 } from './manifest-v2.ts'
 
@@ -31,7 +23,6 @@ export type VersionSelectOutcome =
   | { readonly ok: true; readonly version: string; readonly warnings: readonly string[] }
   | { readonly ok: false; readonly reasons: readonly string[] }
 
-/** 确定性降序：semver 降序 + 字符串字典序兜底（与旧 resolver 同口径）。 */
 function compareVersionsDesc(left: string, right: string): number {
   const l = parseVersion(left)
   const r = parseVersion(right)
@@ -40,10 +31,6 @@ function compareVersionsDesc(left: string, right: string): number {
   return base !== 0 ? base : left < right ? -1 : left > right ? 1 : 0
 }
 
-/**
- * 选择版本：钉定优先（精确匹配 + 区间过滤均须满足），否则区间过滤后取
- * 确定性最高版本。`core` 区间不满足只告警（硬约束已删除）。
- */
 export function selectVersion(input: VersionSelectInput): VersionSelectOutcome {
   const { candidates, range, pin, coreVersion } = input
   const warnings: string[] = []

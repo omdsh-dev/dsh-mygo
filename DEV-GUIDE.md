@@ -2,14 +2,7 @@
 
 > 面向要在 mygo 上开发插件、改 mygo 核心或接入生态接口的开发者。
 > 本文拆解 mygo 在 Cordis 之上补充的全部逻辑：依赖管理、停用/启用、符号快照、
-> 打包分发、报告、运行期治理、持久化与扩展点。事实以本仓库当前 HEAD 为准；
-> 冻结基线见 `expected-behavior.md`（FROZEN，只追加修订）。
-
-> **next 分支（2026-08-13 范围重塑）**：强耦合依赖分析体系已退役——
-> resolver（跨插件约束求解）、dsh.lock/v1 lockfile、不可变 package-store、
-> 激活求解器（solveActivation 级联启停）均已删除；pnpm 安装状态是唯一真相源，
-> mygo 账本降级为治理视图（P3 落地）。本文 §3/§6 已按新口径改写；
-> 旧体系存档见 main 分支 `43bb296`。
+> 打包分发、报告、运行期治理、持久化与扩展点。
 
 ## 0. 一句话模型
 
@@ -25,7 +18,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
    │  SHOULD 只依赖
    ▼
 @r05en1cu/dsh-mygo-api（契约层，Cordis-free）
-   │  fromCordisPlugin / toCordisPlugin / PluginError / definePlugin
+   │  fromCordisPlugin / PluginError / definePlugin
    ▼
 @r05en1cu/dsh-mygo（实现层，Cordis 桥接）
    ├── package/*       包治理：manifest/版本选择/还原/扫描/打包
@@ -37,8 +30,7 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
    ▲                        ▲
 扩展：mygo-cli（命令面）   扩展：dsh-mygo-panel（web 面板）、
       loaders/mygo-loader-profile（P5 默认执行面）、
-      loaders/mygo-loader-hub（P5 hub 市场适配器）、
-                             extension/mygo-rdb（外部存储）
+      loaders/mygo-loader-hub（P5 hub 市场适配器）
 ```
 
 ### 1.1 模块地图
@@ -59,7 +51,6 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `package/symbol-verify.ts` | 符号级校验（导入投影 vs 运行时 exports） | `verifyPluginSymbols` |
 | `package/harvester.ts` | npm 元数据信号归一（B11） | `harvestPackageMetadata` |
 | `package/dual-presence.ts` | 双存在告警（B12） | `detectDualPresence` |
-| `package/legacy-mapping.ts` | `dsh.plugin.json` 只读映射（B15） | `mapLegacyPluginFile` |
 | `package/template-align.ts` | 官方模板对齐检查（B16） | `checkTemplateAlignment` |
 | `package/bundle-expand.ts` | `dsh.bundle.patch` 展开（B14） | `expandBundlePatch` |
 | `package/loader-registry.ts` | loader 契约注册表（v1: standard/mixin） | `BUILTIN_LOADERS` |
@@ -91,8 +82,8 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 
 ## 2. 插件契约（manifest v3）
 
-插件作者只需在 `package.json` 写 `dsh.mygo` 块（或 legacy
-`dsh.mygo.compatibility`），并 import `@r05en1cu/dsh-mygo-api`：
+插件作者只需在 `package.json` 写 `dsh.mygo` 块，并 import
+`@r05en1cu/dsh-mygo-api`：
 
 ```jsonc
 "dsh": { "mygo": {
@@ -102,13 +93,9 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
   "compatibility": { "depends": { "other-plugin": "^1.0.0" }, "breaks": { "legacy": "<2.0.0" } },
   "requires": { "voice-chat": "^1.0.0" },     // 服务级（运行期政策闸，INACTIVE）
   "core": "^0.0.1-rc.1", "loader": { "id": "standard", "range": "^1.0.0" },
-  "provides": ["my-capability"], "grants": { "fs": "..." }
+  "provides": ["my-capability"]
 }}
 ```
-
-顶层 `depends` / `breaks` 已从 manifest v3 移除（安装期约束求解已删除）：
-存量声明会被显式拒绝（`dsh.mygo.depends` / `dsh.mygo.breaks` 问题项），
-请改写为 `compatibility` 块或删除。
 
 运行期 `PluginEnv`（mygo-api `PluginEnv`，types.ts:247）给插件：`on/onHost/emit`、
 `effect/hostEffect`、`provide/get`（服务隔离，未声明返回 undefined）、
@@ -125,14 +112,12 @@ Cordis 给你 fiber/effect/事件/服务注入/loader 组合；**mygo 在这之�
 | `patches` | mixin loader 的 patch 目标声明（module/filePath/symbol/operation） | `"patches": [{ "id": "p1", "target": { "module": "host", "symbol": "run", "operation": "around" }, "file": "patch.js" }]` |
 | `symbolAliases` | 符号别名/兼容映射（`b: alias of c`，EB-D19）：改名可经别名解析，未声明别名按破坏性变更走删除路径 | `"symbolAliases": { "oldName": "newName" }` |
 | `environment` | 只读环境元数据（如 `{platform:"web"}`）：不设硬门、仅报告展示（design-r3 §2.5） | `"environment": { "platform": "cli" }` |
-| `grants` | 能力授权表达式（fs/network/vars/llm/exec/http 等）；默认拒绝 | `"grants": { "fs": "..." }` |
 | `provides` / `loader` / `shared` / `entrypoints` | 服务能力声明 / loader 契约（v1: standard/mixin）/ 显式共享状态标记 / 入口贡献表 | — |
 
 ## 3. 依赖管理（mygo 在 Cordis 之上补充的核心之一）
 
 Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校验 + 确定性
-版本选择 + 落盘还原 + 扫描/符号校验」。**pnpm 安装状态是唯一真相源**
-（2026-08-13 范围重塑）：mygo 不再做跨插件约束求解、不写 lockfile。
+版本选择 + 落盘还原 + 扫描/符号校验」。
 
 ### 3.1 单插件版本选择（`package/version-select.ts`）
 
@@ -147,7 +132,6 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
 还原原子化（staging → rename），事实文件 `.mygo-package.json`
 （`dsh.mygo-package/v1`，含 manifest 快照与内容哈希）供幂等复用与 BOM/治理
 视图消费。路径安全（B10）：entry/bundles/patches 禁逃逸，安装期校验。
-已无「store 唯一真相」语义（目录生命周期归调用方）。
 
 ### 3.3 扫描与收割
 
@@ -224,7 +208,7 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
 ### 4.4 恢复（T4）
 
 启动 `recover()`：读注册表行 → 校验 → `restored` / `quarantined`（损坏/不可解析）
-→ GC 孤儿代；恢复顺序按注册表行序（lockfile 拓扑序已随 dsh.lock/v1 删除）。
+→ GC 孤儿代；恢复顺序按注册表行序。
 
 ## 5. 挂载时符号快照与反应式 reload
 
@@ -232,7 +216,7 @@ Cordis 的组合是「行 + patch 层」；mygo 在其上补充「manifest 校�
 
 `FineEpochRegistry`：能力 → 提供者符号投影快照（挂载时缓存导出键集 +
 `symbolAliases`），纯内存比较（EB-D20：微秒~亚毫秒预算，reload 路径禁磁盘
-I/O）。独立细 epoch 指纹函数已删除（无生产消费者，2026-08-13）。
+I/O）。
 
 ### 5.2 notify 双源与前置门
 
@@ -245,13 +229,11 @@ I/O）。独立细 epoch 指纹函数已删除（无生产消费者，2026-08-13
 
 - 桥接路径：provide/ctx.get 处 Proxy 包装（原始对象不逃逸），
   `set/deleteProperty` 拒绝（exports 冻结）；
-- 直连路径：契约外行为（后果自负），定期快照传感器为后续候选（本轮不实现）。
 
 ### 5.4 失败策略（P1/P2）
 
 失败策略为两档：**P1-global 默认**（回滚 MUST 产与 P2 同规格结构化报告：
-失败过渡、原因、回到哪一代）、**P2 硬约束**（不可回滚的强约束）。P1-local
-已按裁决删除（正确性依赖内存管理行为，悬空风险堵不死）。
+失败过渡、原因、回到哪一代）、**P2 硬约束**（不可回滚的强约束）。
 
 ## 6. 打包与分发（pack 体系）
 
@@ -265,8 +247,7 @@ I/O）。独立细 epoch 指纹函数已删除（无生产消费者，2026-08-13
 
 清单：`format/formatVersion/name/version/generated/plugins（id+version+
 packageName）/files（pluginId+version+sha512+fileSize+integrity）/
-communityDeps/manifestSha256`（2026-08-13 起不再内嵌 dsh.lock/v1 载荷，
-版本钉死在 plugins[]/files[] 上）。
+communityDeps/manifestSha256`。
 `manifestSha256` 对规范键序语义 JSON 计算；`generated.at` 归一 `<t>`。
 
 **P8 成员二态（兼容扩展，formatVersion 仍为 1）**：新增可选顶层
@@ -293,7 +274,7 @@ manifestSha256 验证口径逐字节不变（空数组不落盘）。
 `installPluginPack`：清单自校验 → 自实现 tar 头部预检（精确成员集白名单，
 防换行文件名绕过）→ vendored sha512+fileSize 校验 → 内层 tarball 预检 →
 普通落盘还原（原子、可回滚）。一坏多好 → 整体拒绝、零写盘（T42）。
-无求解、无 lockfile 读写。P8：references[] 成员在落盘前统一在线拉取
+P8：references[] 成员在落盘前统一在线拉取
 （fetch 注入面 `fetchImpl`；integrity 与清单固化值不符硬失败），拉取/
 校验全部先于任何写入，失败点名缺失成员并整体拒绝（离线 fail-loud）；
 落盘与内嵌成员同路径同语义，事实文件尾部记 `origin:
@@ -316,34 +297,10 @@ B1 + `checkTemplateAlignment` 双校验（含 7 skills + lockfile，
 P7 新增 `config <id> [--set '<json>']`（patch 层行 config 整行读写，
 见 §16.1-2）。
 
-> 已知宿主限制（P3 实测）：web profile 的 web-startup 参数解析器为严格
-> 模式，`dsh --profile web mygo ...` 的内层参数目前到不了 cmdlineArgs
-> 消费方（host 缝隙，待 host 补丁提案）；CLI 面语义由 cli-e2e 进程内测试
-> 覆盖。
-
 ## 7. 报告与错误
-
-CD-1 已裁决统一（2026-08-13）：**一套词汇**——mygo-api `PluginError` 闭表
-39 码七组；结构化报告（`package/report.ts`）的 `code` 直接取自该表
-（组 7 报告码：`resolve-failed / bundle-invalid / symbol-missing /
-policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
-特指 mount 期 schema 校验（安装期 bundles 声明问题改名 `bundle-invalid` 消歧）。
-
-- **结构化报告**（`package/report.ts`）：`ResolutionReport` 含 `scope`
-  （package/service/pack）、`cycles`、`conflicts`（约束/链路/候选集/建议动作）；
-  `generation` 字段与 `lockfile-mismatch / dependency-cycle / dispose-timeout`
-  三码随求解/lockfile 体系删除。
-- **PluginError**（mygo-api error.ts）：挂载/权限/运行时接线/配额/能力拒绝 +
-  组 7 报告码；零生产者死码（grant-missing / install-denied / ceiling-exceeded /
-  source-not-allowed / provenance-rejected / fs-denied / network-denied /
-  vars-denied / http-denied / emit-denied）已删除。
 
 ## 8. 运行期治理
 
-- **能力面**（`capabilities.ts`）：fs/vars/llm/exec/http/fetch 都由
-  `grants` 授权表达式把关，拒绝 → 对应 `*-denied`；配额：cpuBudgetMs
-  （服务配置默认 100ms，超限自动禁用）、限流日志 1000 行/分钟、code/registry
-  字节上限（config.ts 默认）。
 - **事件派发**（`dispatch.ts` + `event-vocabulary.ts`）：`emit | waterfall |
   parallel | serial` 四模式；`@mode` 上限（`mode-ceiling-exceeded`）、分支
   （`undeclared-branch`）与否决（`undeclared-veto`）由词汇表管辖。
@@ -352,72 +309,40 @@ policy-rejected / pack-invalid / pack-hash-mismatch`），`manifest-invalid`
 - **审计**：`AuditLog` 追加式，容量/保留可配（50MB / 5 文件），面板可读
   `auditSince/auditByPlugin/auditTail`。
 
-## 9. 持久化与外部存储
+## 9. 持久化
 
 - `RegistryStore` 契约（store.ts）：`listIds/readGenerations/writeGeneration/
   deleteGeneration/readStatus/writeStatus/deletePlugin/usage/check?`。
 - 内置：storage-domain sqlite（unit `plugin_registry_<profile>`，表
   `u_plugin_registry_web_gens/status`）。
-- 外部：`extension/mygo-rdb` 经 `mygoRegistryStore` 宿主服务注入（根上下文），
-  支持 sqlite/postgres；`check()` 启动自检。
-- 迁移：外部 store 提供 `migrated_from_sqlite` 标记，manager init 做一次性
-  sqlite→rdb 迁移（面板/扩展约定）。
 
 ## 10. 扩展点
 
 | 扩展面 | 契约 | 现有实现 |
 |---|---|---|
 | loader | `LoaderDeclaration {id, range}`（v1: standard/mixin） | mixin-engine |
-| 存储 | `RegistryStore` | sqlite 内置 / mygo-rdb |
+| 存储 | `RegistryStore` | sqlite 内置 |
 | CLI 命令 | `ctx.cmdlineArgs`/`appExit`（L0） | mygo-cli |
 | web 面板 | `ctx.httpServer` 路由 + `settings.section` 客户端槽 | dsh-mygo-panel |
-| 配置卡片 | `settings.plugin.item` 槽聚合卡片（r6：有 Config schema 的受管插件通用配置表单） | dsh-mygo-panel（ConfigCards + config-cards.ts 内省面；槽契约本地声明合并镜像） |
 
 ## 11. 测试与开发纪律
 
-- 套件：`tests/`（T1-T51，含 e2e 真实语料 + T50/T51 webui spike）、
-  `test/eb/`（EB 假设 13 项，独立 vitest config）。
-- 计数口径（2026-08-15 rc8 npmrc auth 后）：全量 86 文件 / 782 用例
-  （mygo-api 6/39 + mygo 63/644 + mygo-cli 10/50 + mygo-loader-profile
-  3/14 + mygo-loader-hub 3/25 + mygo-ext-fabric 1/10；含 mygo-rdb 本地
-  未提交修正，见 docs/next 备忘录）；EB 套件 11 文件 / 13 用例；
-  面板套件 7 文件 / 45 用例（rc8 起计：live-events / client-live-rail /
-  credential-route）。
 - 测试池实务（2026-08-13 实录）：本机 vitest forks 池在 54 文件规模下
   间歇挂起/崩溃（基线 stash 复核同现象，环境性）；`--pool=threads` 同
   负载稳定全绿。串行分包纪律不变，包内可加 `--pool=threads`。
-- 面板包测试（rc.3 起）：`packages/extensions/mygo-panel` 不装 vitest
-  （dsh-client-* devDeps 的传递依赖 404 未公开发布，任何解析变动都会
-  撞墙），test 脚本走根级提升的 vitest 二进制 shim，vitest.config.ts
-  为 plain object（不 import 'vitest/config'——面板解析链无 vitest
-  顶层链接）。纯函数面（bridge-rows.ts 桥接装配、workspace-packages.ts
-  整仓枚举/构建形态、config-cards.ts 内省与导入导出，r6）直测；
-  卸载路由经 routeBundleUninstall 导出函数 + 临时 profile fixture 测。
-  面板模块 HOME_ROOT 在 import 时定型——测试须先于动态 import 设
-  临时 DSH_HOME（r6 实测事故：先 import 后设 env 会打到真实实例，已修复）。
 - 离线：全量回归在 `NODE_OPTIONS=--require block-net.cjs` 下（仅放行
   127.0.0.1/localhost）；确定性断言字节级（T19/T22）。
-- 故障分类：impl-bug / design-gap / fixture-issue 三分类，验证文档记录。
-- vendor 零补丁（PATCHES.md 登记制度随 install.sh 一并退役，2026-08-13；
-  host 补丁提案仍走 `patches/`）。
-- 冻结文档（expected-behavior / design-r3 / two-tier）只追加修订记录。
 
 ## 12. 发布与安装形态
 
-- `scripts/publish-mygo.mjs`：仓内构建 + prepack 自检 + dry-run 门禁；发布面
-  mygo-api / mygo / mygo-cli / mygo-panel。包均为 `publishConfig.access:
-  restricted`（发布留作 handoff）。
 - 仓库自包含（P3）：pnpm workspace + 根 tsconfig.base.json；`@deepseek-ai/*`
   依赖全部从公开 registry 解析（cordis ^4.0.1 / loader ^1.0.2 / dsh-*
-  0.0.1-rc.1 线 / dsh-home-paths 0.1.0-rc.x）；内部包间维持 `workspace:^`
-  （守则例外 #2 过渡态）。
+  0.0.1-rc.1 线 / dsh-home-paths 0.1.0-rc.x）；内部包间维持 `workspace:^`。
 - 安装形态（P3 落地）：mygo / mygo-cli 是标准 `dsh.bundle` 包（包内
   cordis.patch.yml 层，profile 名由服务从 loader baseUrl 推导）；安装 =
   `dsh plugin --profile <p> add <tarball|git-spec>`（profile 目录 pnpm +
   dsh.profile.bundles 对账）；`mygo install/uninstall/enable/disable`
   命令面同语义（enable/disable 写 profile patch 层 id 定向 disabled 块）。
-  install.sh 已退役（2026-08-13）；开发验证全部在仓库内进行，不再同步
-  任何 checkout。
 
 ## 13. 多实例接管与 HOME 隔离（P4）
 
@@ -541,11 +466,7 @@ dsh-hub 市场（`omdsh-registry/v1` 静态 JSON）适配器：
   快照（远程使用直接报错）。
 - **intent 翻译**（intent.ts）：`profile-bundle` → pnpm intent（精确
   semver 归一 `name@version`；钉 40 位 commit git spec 原样）交 profile
-  执行面；`guided/*` → display（无可执行 intent，拒绝安装并说明）；
-  `repository-plugin` → 默认拒绝（该安装轨 0812 已删除，待官方态度），
-  除非探针（raw.githubusercontent 钉 commit 取 .dsh-plugin/package.json）
-  发现 `dsh.bundle` 声明 → 实验性放行（标注 warn，走 git 子目录 spec）。
-  本地快照（离线验证/内网镜像）额外允许 file:/绝对路径 spec。
+  执行面；`guided/*` → display（无可执行 intent，拒绝安装并说明）。
 - **可安装判定**（assess.ts）：`listing.state === 'blocked'` 或 release
   缺失为硬门；risk 分级 / vulnerabilityScan / nativeCode / installScripts /
   maintenance / relations / capabilities 进安装前提示（建议式，不强制；
@@ -558,17 +479,7 @@ dsh-hub 市场（`omdsh-registry/v1` 静态 JSON）适配器：
   `hub install <id>[@release]`（id 命中 collection 时整组原子安装）/
   `hub collections`；`--json` 信封对齐现有命令风格。
 
-### 14.4 P4 遗留 #3 评估登记：clone 不提升到 InstallIntent 语义
-
-评估结论（2026-08-14）：**不提升**。理由：InstallIntent/InstallTarget
-契约是 profile 粒度的单实例语义；clone 的目标面是另一实例的 mygo 还原
-根（`$DSH_HOME/mygo/packages/`，installPluginPack 承担），且必须过
-InstanceRegistry 登记闸与 HOME 隔离闸——适配器契约的 sync
-`resolve(spec)` 与单实例 target 模型装不下跨实例对账。clone 维持 P4
-形态（mygo-cli install.ts 自有实现），复用 pack/共享缓存原语已足够。
-若 P6/P7 出现第三个跨实例搬运面，再评估抽象。
-
-## 15. fabric 安装层 extension 化与 host 补丁提案（P6）
+## 15. fabric 安装层 extension 化（P6）
 
 ### 15.1 extension 登记表
 
@@ -589,24 +500,10 @@ profile patch 层受管块标记推导，版本取 profile dependencies 子集
   `disableFabric(target)` = 移除受管块（包保留在 dependencies，卸载经
   profile loader 另行执行）。patch 路径前做 profile 名硬校验 +
   assertInsideHome 隔离闸。
-- 依赖形态：默认 git 子目录 spec 白名单过渡（守则例外 #6 登记）；push
-  禁令未解除，验证一律用本地路径 spec（pnpm link 安装，零网络）。
+- 依赖形态：默认 git 子目录 spec；验证使用本地路径 spec。
 - 包根是 mygo 受管插件形态（bundle 行）：挂载即登记，fiber 清理注销。
 
-### 15.3 host 补丁提案（patches/fabric-host.patch）
-
-从 fabric 仓 patch（17 文件，baseline 0812 快照）收编，剔除两条组合缝
-（web-app 插行 + app-boot profile init 模板预声明），只留三条硬缝 +
-必需接线（15 文件）；基线重钉公开版 deepseek-harness-public @ 47f9438，
-`git apply --check` 干净通过。逐文件漂移表与再生成步骤见
-patches/README.md。fabric 仓的 patch 不动（独立演进），差异在
-patches/README.md 说明。
-
-> runtime 激活依赖 host 合入提案（profile-boot 挂钩安装必须早于目标
-> 模块 import）；P6 验收口径 = 受管块写入正确 + 提案 apply --check
-> 干净 + fabric 包自身测试在 fabric 仓内绿。
-
-## 16. P7：0812 机会面落地与遗留收口
+## 16. P7：0812 机会面落地
 
 ### 16.1 机会面五项
 
@@ -635,46 +532,7 @@ patches/README.md 说明。
    `preserveStateAcrossUpdate(ctx, {key, capture, restore})` 收敛该模式
    （重启失败回滚时暂存槽回补）。真实 cordis 用例坐实。
 
-### 16.2 遗留收口六项
-
-- **B6 fine-epoch 定论**：保持独立模块不并入 requires-gate（消费方不止
-  政策闸，lifecycle 同时持有注册表所有权；requires-gate 是纯求值面）。
-  模块头 TODO 已改写为定论。
-- **B7 F1 语料**：e2e corpus F1 从 fabric 根载包遗留 lib 切到
-  `fabric/packages/cordis-fabric`（包内 lib + node_modules 自包含），
-  versionOverride 钉 0.0.2 保持语料契约。
-- **B8 fabric 去重**：enableFabric 写块前检测层内不受管的 fabric 载体行
-  （`findStrayFabricRow`），命中即拒绝（重复插行互斥）。
-- **B9 blockExoticSubdeps**：并入 16.1-1 的一键放行（git 子依赖拦截检测
-  + 按需写 `blockExoticSubdeps: false`）。
-- **B10 InstanceRegistry 并发**：mkdir 自旋锁（等待上限 2s / 陈旧 30s
-  接管 / 超时 fail-open——登记处只是发现面，不允许残留锁砖掉启动）。
-  P4 的 last-writer-wins 已知限制随之收窄为 fail-open 窗口。
-- **B11 mygo-rdb 归属定论**：extension/mygo-rdb 维持用户既有 ignore
-  裁决（三件套永不提交、不打包）；定位 = 外部存储扩展的本地演进线，
-  收口条件 = 用户决定是否纳入主线（进 packages/extensions 并补三件套）
-  或拆独立仓。当前不进发布面、不进计数口径说明之外的任何承诺。
-
 ## 17. 配置注入与面板功能面定型（r6）
-
-### 17.1 配置注入（webui 插件页）
-
-- **卡片枚举**（面板 node half `/api/mygo/config-cards`）：bridge 轨
-  （mygo-plugins 安装物，fresh import 读 `Config` 导出）+ bundle 轨
-  （profile bundle 成员，包目录经 profile node_modules / 兜底链解析）；
-  schema 走 config-cards.ts 的结构化内省（ConfigSchemaLike →
-  ConfigSchemaInfo{description, fields, template}，JSON 安全）；无 Config
-  的插件静默跳过。bundle 行 id = bundle 自带 cordis.patch.yml 首个
-  insert 行 id（bundleRowIdOf），回退成员 id。
-- **读写**：`/api/mygo/config` GET/PUT——bridge 经
-  `pluginManager.updateConfig` + 桥接行回写（HMR 生效）；bundle 经
-  `upsertRowConfig` 写 profile 用户 patch 层（行不存在则追加 id 定向
-  覆盖行，宿主 watchUserPatches 重载生效）。row-config 基础设施在 mygo
-  核心 `src/row-config.ts`（cli `mygo config` 共用，re-export 兼容）。
-- **卡片呈现**：client half 聚合卡片（`settings.plugin.item` 槽，id
-  `mygo-configs`）逐插件渲染通用表单（ConfigFields 共享组件，Panel 的
-  配置编辑器提取面）。槽契约以官方 slot-contract 同形状本地声明合并
-  承载（dsh-client-ui-settings-plugins 暂不作 devDep，解析墙见 §11）。
 
 ### 17.2 配套配置导入导出（整 profile 粒度）
 
@@ -682,14 +540,13 @@ patches/README.md 说明。
 导出 = patch 全部行 id 的 config 快照；导入 = parseConfigImport 格式
 校验 + partitionImportTargets 受管集分面（patch 行 ∪ 卡片 ∪ bridge
 集外 id 拒绝并指认）→ bridge 经 updateConfig、其余经
-upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
+  upsertRowConfig。
 
 ### 17.3 面板功能面定型与 bundle 卸载路由
 
 - 定型三区：bundle 插件安装（npm/git/hub/pack 引用式）、整合包导入
   导出、配套配置导入导出；版本获取/更新/自更新保留。面板安装面收敛见
   §17.6（npm bundle 默认 / 单个 tar 包；整合包安装预留卡片）。
-- 已退役：外部应用管理全部面（API/函数/类型/UI）。
 - 卸载路由（routeBundleUninstall）：bundle 轨 → profileUninstall
   （pnpm remove + reconcile，官方同路径）；守卫 = 面板自身拒绝、
   dsh-mygo 需 force、plan 预览前置；桥接轨维持引擎 uninstall。
@@ -715,10 +572,7 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
 
 ### 17.5 插件配置合并（r7.1/r7.2）
 
-- **决策**：受管插件配置与默认插件配置层（官方 settings.plugin.item 卡片 +
-  settings-file 写路径）存在重复定义/修改风险，统一按 mygo 核心方法为准。
-- **实现**：撤销 settings.plugin.item 的聚合卡片（mygo-configs），改为
-  轮询 /api/mygo/config-cards（8s）差异注册——每个受管插件一张独立卡片
+- **实现**：轮询 /api/mygo/config-cards（8s）差异注册——每个受管插件一张独立卡片
   （id mygo-config-<pluginId>，order 70，排在官方 bash/agent-loop/
   web-search 之后）；schema/当前配置读 config-cards，保存经
   PUT /api/mygo/config（bridge 轨 HMR、bundle 轨 patch 层），
@@ -729,10 +583,6 @@ upsertRowConfig。pack 清单可选 configs[]（--with-config）为后续项。
   类型，无法直接复用组件，形态为自实现对齐（字段区沿用 ConfigFields
   通用编辑器）。动态集合由轮询拾取，注入回调返回组合 disposer 随声明
   生命周期/插件卸载整体拆除。
-- **配套**：整 profile 配置导入/导出从聚合卡片迁入 mygo 面板头部
-  （ConfigTransfer：导出下载 /api/mygo/config-export，导入弹窗
-  PUT /api/mygo/config-import）；ConfigCards.tsx 移除。
-
 ### 17.6 安装面收敛与整合包预留（r7.3）
 
 - **插件安装收敛为两方式**：npm bundle（默认，引用式安装，spec 如

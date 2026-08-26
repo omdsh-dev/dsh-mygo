@@ -1,12 +1,3 @@
-/**
- * design-r4 单元测试（2026-08-13 范围重塑口径）：pack 清单/规范哈希/tar
- * 成员解析鲁棒性 + 还原路径加固。dsh.lock/v1 载荷与求解器已删除：清单只
- * 携带 (id, version) 钉死声明，还原为普通落盘（installRoot），成员级
- * sha512/fileSize 校验为 pack 自身完整性服务（保留）。
- * 字节级确定性断言与真实往返在 tests/e2e/pack-verification.spec.ts（T32+）。
- * @module @r05en1cu/dsh-mygo/tests/package/pack
- */
-
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
@@ -192,12 +183,6 @@ describe('KF-1 分类修正（design-r4 §9 / B26）', () => {
     expect(problems).toEqual([])
   })
 })
-
-// ---------------------------------------------------------------------------
-// installPluginPack 还原路径加固（修复批次 1：A4 / A18 / A7 / A5-pack；
-// 2026-08-13 重塑：落盘目录取代 store/lockfile 断言）
-// 合成 fixture 全部在本测试自建目录内；不触碰真实第三方语料。
-// ---------------------------------------------------------------------------
 
 const sha256Text = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 const sha512Bytes = (bytes: Uint8Array): string => createHash('sha512').update(bytes).digest('hex')

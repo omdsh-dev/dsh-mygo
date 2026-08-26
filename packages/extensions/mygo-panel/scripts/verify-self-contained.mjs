@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-/**
- * verify:self-contained —— 官方 plugin-template 脚本的 dsh-mygo 框架适配版
- * （panel 为 UI 客户端包，无 tests 布局，布局契约只要求 src/README.md）。
- * 其余豁免与 mygo/mygo-api/mygo-cli 版一致：workspace:^ 仅允许
- * @deepseek-ai/* 与 @r05en1cu/*（AGENTS.md #2）；tsconfig references 不检查越界（#5）。
- */
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,7 +81,7 @@ for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 
       failures.push(`package.json: ${field}.${name} uses non-registry spec ${spec}`)
     }
     if (/^workspace:/i.test(spec) && !name.startsWith('@deepseek-ai/') && !name.startsWith('@r05en1cu/')) {
-      failures.push(`package.json: ${field}.${name} uses workspace spec outside the documented @deepseek-ai transition exemption`)
+      failures.push(`package.json: ${field}.${name} uses an unsupported workspace spec`)
     }
   }
 }

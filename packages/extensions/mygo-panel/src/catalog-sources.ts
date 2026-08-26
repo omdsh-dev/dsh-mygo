@@ -10,17 +10,16 @@
 import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   HUB_REGISTRY_ORIGINS,
   loadHubRegistry,
   pickHubRelease,
   translateHubInstall,
   type HubEntry,
-  type HubRegistry,
   type HubRegistrySource,
 } from '@r05en1cu/dsh-mygo-loader-hub'
-import { hubEntryRow, type HubCatalogDocument, type HubCatalogRow, type HubInstalledFact } from './hub-catalog.js'
+import { hubEntryRow, type HubCatalogDocument, type HubInstalledFact } from './hub-catalog.js'
 
 export type CatalogSourceKind = 'local' | 'market' | 'hub' | 'github'
 
@@ -78,7 +77,6 @@ export type CatalogInstallTarget =
     readonly ok: true
     readonly id: string
     readonly spec: string
-    readonly experimental: boolean
     readonly advisories: readonly string[]
   }
   | {
@@ -475,10 +473,12 @@ export class CatalogSourceService {
     if (release === undefined) {
       return { ok: false, id, error: `条目 ${id} 没有可用 release`, advisories: [] }
     }
-    if ((source === 'local' || source === 'github') && release.install.mode === 'profile-bundle') {
+    if ((source === 'local' || source === 'github')
+      && release.install.mode === 'profile-bundle'
+      && typeof release.install.spec === 'string') {
       // local/github 是 mygo 自己的执行面 spec：绝对路径或 github ref，
       // 不走 hub registry 的精确 semver/钉 commit 翻译门。
-      return { ok: true, id, spec: release.install.spec, experimental: false, advisories: [] }
+      return { ok: true, id, spec: release.install.spec, advisories: [] }
     }
     const translated = await translateHubInstall(release.install, { allowFileSpec: false })
     if (translated.kind === 'display') {
@@ -488,7 +488,6 @@ export class CatalogSourceService {
       ok: true,
       id,
       spec: translated.spec,
-      experimental: translated.experimental,
       advisories: [],
     }
   }

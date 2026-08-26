@@ -1,9 +1,3 @@
-/**
- * profile 版本钉定测试（2026-08-13 范围重塑）：跨插件求解器已删除，钉定
- * 语义由单插件确定性版本选择（version-select）承担——钉定 = 精确版本硬
- * 选择（不在候选集 → 失败），请求区间与钉定同时约束。
- */
-
 import { describe, expect, it } from 'vitest'
 import { selectVersion, type VersionCandidate } from '../../src/package/version-select.ts'
 

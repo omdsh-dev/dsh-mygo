@@ -1,12 +1,5 @@
 # live rail：运行期装卸（r7）
 
-> 范围：mygo 面板/CLI 安装卸载 bundle 插件从「重启实例生效」升级为
-> 「运行期生效」。机制依据：2026-08-15 spike 实证（往 profile
-> `cordis.patch.yml` 写 `- insert:` 行，host `watchUserPatches` 事务性
-> live 重放；删行即活卸载）+ P6 端到端真机验证（五场景全过）。
-> 实现落点：mygo 核心 `src/live-rail.ts` / `src/patch-io.ts`，接入
-> `lifecycle.ts` / `loader-profile/src/face.ts` / 面板卸载路由。
-
 ## 1. 双轨制：boot rail 与 live rail 互斥
 
 - **boot rail** = profile manifest 的 `dsh.profile.bundles`（boot 时
@@ -16,8 +9,7 @@
   （`# >>> mygo live block: <pkg>` / `# <<< ...` 包裹）内嵌的 bundle
   patch 行原文。mygo 面板在实例运行时装的新插件走这里。
 - **单轨规则（硬）**：一个包同一时刻只能在一轨。同 id 双 insert 在
-  boot 是 exit=1 致命错误（spike D1），在 live 会毒化整次重放
-  （spike D2）。因此：
+  boot 是 exit=1 致命错误，在 live 会毒化整次重放。因此：
   - live 安装的包在写块**之前**先退出 `dsh.profile.bundles`
     （`LifecycleEngine.removeFromBootRail`；先于预检——否则离线组合树
     含新包自己的行，预检自撞假阳性，P6 e2e 实测抓出并修复）；
@@ -30,7 +22,7 @@
   profile patch 与 home patch。所以「先移出 bundles 再写块」的顺序下，
   运行期永远不会双物化；崩溃窗口只丢激活不毁 boot。
 
-## 2. 装卸顺序约束（spike 硬证据）
+## 2. 装卸顺序约束
 
 - **安装**：pnpm 落盘（`dsh plugin add`）→ 移出 bundles → 离线组合预检
   → 写受管块 → 轮询验证激活。反了会 import 失败连坐整次重放回滚。
@@ -88,11 +80,8 @@
 
 ## 6. 免刷新 UI（rc8）
 
-live 装卸后，打开中的页面免刷新看到插件 UI 出现/消失。host 现状：node
-半 client-modules 图随 `internal/plugin` 事件自动更新（新插件的
-`/plugins/<id>/client.js` 立即可服务），但 graph 帧只在 SSE 连接时推
-一次、client-hmr 浏览器半显式忽略 graph 帧（EXT-4 提案未合入）。mygo
-侧自建一条通道：
+live 装卸后，打开中的页面免刷新看到插件 UI 出现/消失。mygo
+侧通道如下：
 
 - **node 半（面板）**：live 轨装卸成功（安装验证激活 / 卸载验证
   dispose）后，`/api/mygo/events` SSE 广播
@@ -106,22 +95,13 @@ live 装卸后，打开中的页面免刷新看到插件 UI 出现/消失。host
   drain inertia → 清 fiber → 撤 `style[data-plugin]` → `loader.remove`。
   loader/modules 不可达（headless）时不订阅、不报错；帧处理失败 warn
   并提示刷新页面兜底。
-- **与 EXT-4 的关系**：EXT-4 合入后两通道并存不冲突——host graph 帧
-  管全量图（含非 mygo 来源的图变化），mygo 帧只管自己 live 轨的操作；
-  两侧 mount/unmount 均幂等（已挂载/未挂载 no-op），重复帧无害。
 
 ## 7. 已知限制
 
 - **冻结层守卫**：boot 轨已物化（frozen bundlePatches 在实例存活期
   不变）的包再经面板安装时，保持 boot 轨不写 live 块（写块会构成运行
   期同 id 双 insert 毒化后续每次重放；rc8 e2e 实测抓出）。
-- **client 图行免刷新仅限新面板 bundle 页面**：rc8 通道由面板 client
-  半承载，老 bundle 打开的页面仍需刷新一次拿到新面板代码。EXT-4 合入
-  后由 host graph 帧统一接管。
 - live 块内容不随 CLI 升级自动刷新（块内是安装时 bundle patch 原文；
-  行 id 漂移时由 P5 启动对账剥块让 bundle 层接管）。块刷新机制留后续。
+  行 id 漂移时由 P5 启动对账剥块让 bundle 层接管）。
 - pack 整合包不做 live 安装（pack restore 仍走注册进 profile 的既有
   路径）。
-- `BundleRail.install` 在 CLI add 成功但 member 解析失败时无回滚
-  （pre-existing；P6 e2e 经 fixture exports 缺陷踩到，会在
-  deps/bundles 留残，需手工 `dsh plugin remove`）。

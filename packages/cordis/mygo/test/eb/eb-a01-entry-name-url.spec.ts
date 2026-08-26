@@ -1,9 +1,3 @@
-/**
- * A1：paper 的 entry url 与 dsh entry name 的等价性。
- * 源码核验：EntryOptions 只有 name（模块说明符），无 url 字段；
- * tree.import(name) 用该说明符加载模块（vendor/loader/src/config/tree.ts:145-161）。
- */
-
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'

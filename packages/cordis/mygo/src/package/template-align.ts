@@ -1,11 +1,3 @@
-/**
- * 官方模板对齐工具（design-r3 §5.5，B16）：以 plugin-template package.json
- * 形态为参考输入，生成/校验 manifest（mygo init 候选，本轮不实现安装）。
- * 参考形态：exports `.`/`./invariant`/`./src/*`、peers `cordis`+`schemastery`、
- * `dsh.bundle.patch`、自包含 prepare 构建、`private→false` 发布门（Rev-6）。
- * @module @r05en1cu/dsh-mygo/src/package/template-align
- */
-
 /** 模板参考形态（npm 强兼容，census §1.2/D7）。 */
 export const TEMPLATE_REFERENCE = {
   peers: {

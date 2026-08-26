@@ -1,17 +1,3 @@
-/**
- * 挂载时导出快照注册表 + 前置门（design-r3 §1.1/§4.1，B13）：挂载时缓存的
- * 导出快照、纯内存比较、禁磁盘 I/O（EB-D20）。
- *
- * 定论（P7-B6 复核，2026-08-14）：**保持独立模块，不并入 requires-gate**。
- * 复核面：消费方不止政策闸——lifecycle.ts 的挂载/替换链路同时持有
- * FineEpochRegistry（快照生命周期随 fiber）并直接调 preGate/captureExports；
- * requires-gate.ts 只消费 preGate 与快照类型。并入会把「快照注册表 +
- * 捕获」的运行时所有权语义塞进纯求值的政策闸模块，违反两者既定分层
- * （requires-gate 是纯函数面，fine-epoch 是带所有权的注册表）。独立细
- * epoch 指纹函数（fineEpoch）无生产消费者，已删除（P1）。
- * @module @r05en1cu/dsh-mygo/src/package/fine-epoch
- */
-
 /** 提供者符号投影快照（挂载时缓存；纯内存）。 */
 export interface ProviderSymbolSnapshot {
   readonly pluginId: string

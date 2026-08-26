@@ -1,11 +1,4 @@
-/**
- * 假设验证实验共享夹具（只读使用 vendored cordis/loader，不修改其源码）。
- * 运行时解析到 @deepseek-ai/cordis 的 lib 产物（vendor/cordis/lib），
- * 与生产 npm lib 模式一致。
- */
-
 import { Context } from '@deepseek-ai/cordis'
-// P3 自包含：经 node_modules 解析公开包的 lib 产物（lib 模式语义不变）。
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 
 /** Entry 的结构化视图（避免依赖 loader 包的类型导出形态）。 */

@@ -1,9 +1,3 @@
-/**
- * Mount-time acceptance: manifest/declaration checks (events, vocabulary,
- * property names, mode ceilings) and protected-field enforcement. Permission
- * grants are gone.
- */
-
 import { describe, expect, it } from 'vitest'
 import { PluginError, definePlugin } from '@r05en1cu/dsh-mygo-api'
 import {
@@ -84,11 +78,6 @@ describe('validateMount group 1 (manifest and declarations)', () => {
     }))
     expect(observeOnly.code).toBe('manifest-invalid')
     expect(observeOnly.details).toMatchObject({ field: 'events' })
-  })
-
-  it('accepts dynamicInstallAccess without any deployment grant', () => {
-    const result = validateMount(fixturePlugin({ dynamicInstallAccess: true }), BASE_OPTIONS)
-    expect(result.warnings).toEqual([])
   })
 
   it('names the manifest root for a non-object manifest', () => {

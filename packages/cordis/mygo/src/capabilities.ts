@@ -1,11 +1,3 @@
-/**
- * Capability surfaces for managed plugin generations. The permission-gate
- * layer is removed: filesystem, network, env-var, model, subprocess, and
- * http-route surfaces are direct host passthroughs. Registration surfaces
- * still stage through the manager so HMR can swap/dispose them atomically.
- * @module @r05en1cu/dsh-mygo/src/capabilities
- */
-
 import { appendFile, lstat, readdir as fsReaddir, readFile, writeFile, realpath as fsRealpath } from 'node:fs/promises'
 import { PluginError, formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type {
@@ -22,7 +14,6 @@ import type {
   PluginModelResponse,
 } from '@r05en1cu/dsh-mygo-api'
 
-/** Host I/O seam backing the ungated `env.fs` surface. */
 export interface PluginIo {
   /** Read one file's bytes. */
   read(path: string): Promise<Uint8Array>
@@ -135,13 +126,6 @@ export function createRateLimitedLogger(raw: Logger, now: () => number): Logger 
   }
 }
 
-/**
- * Build the `env.fs` surface for one plugin: a direct host I/O passthrough
- * (no path grants).
- * @param _pluginId - owning plugin id (kept for surface parity).
- * @param io - host I/O seam.
- * @returns the ungated fs surface.
- */
 export function createPluginFs(_pluginId: string, io: PluginIo): PluginEnv['fs'] {
   return {
     read: (path: string): Promise<Uint8Array> => io.read(path),
@@ -158,23 +142,12 @@ export function createPluginFs(_pluginId: string, io: PluginIo): PluginEnv['fs']
   }
 }
 
-/**
- * Build the `env.fetch` boundary for one plugin: a direct host fetch
- * passthrough (no URL allowlist).
- * @param fetchImpl - host fetch.
- * @returns the ungated fetch function.
- */
 export function createNetworkFetch(
   fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
 ): (url: string, init?: RequestInit) => Promise<Response> {
   return (url, init) => fetchImpl(url, init)
 }
 
-/**
- * Build the `env.vars` surface for one plugin: a direct host process-env
- * passthrough (no variable allowlist).
- * @returns the ungated vars surface.
- */
 export function createPluginVars(): PluginEnv['vars'] {
   return {
     get: (name: string): string | undefined => process.env[name],
@@ -184,13 +157,6 @@ export function createPluginVars(): PluginEnv['vars'] {
   }
 }
 
-/**
- * Build the `env.llm` surface for one plugin: a direct host LLM passthrough.
- * A missing host seam still fails loudly (`llm-denied`, host-unavailable).
- * @param pluginId - owning plugin id for error attribution.
- * @param host - host completion seam, or `undefined` when none is wired.
- * @returns the ungated model surface.
- */
 export function createModelCall(
   pluginId: string,
   host: ((request: PluginModelRequest) => Promise<PluginModelResponse>) | undefined,
@@ -209,14 +175,6 @@ export function createModelCall(
   }
 }
 
-/**
- * Build the `env.exec` surface for one plugin: a direct host subprocess
- * passthrough. A missing host seam still fails loudly (`exec-denied`,
- * host-unavailable).
- * @param pluginId - owning plugin id for error attribution.
- * @param host - host subprocess seam, or `undefined` when none is wired.
- * @returns the ungated exec surface.
- */
 export function createExecBoundary(
   pluginId: string,
   host: ((request: PluginExecRequest) => Promise<PluginExecResult>) | undefined,

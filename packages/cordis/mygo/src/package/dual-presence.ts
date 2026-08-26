@@ -12,7 +12,6 @@ export interface DualPresenceInput {
   readonly dependencies?: Readonly<Record<string, string>>
   /** 当前已知插件 id 集（loader 注册面）。 */
   readonly registeredIds: ReadonlySet<string>
-  /** 当前已知服务需求（canonical requires + legacy service: 前缀）。 */
   readonly serviceRequirements?: Readonly<Record<string, unknown>>
 }
 

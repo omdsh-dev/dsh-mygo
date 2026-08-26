@@ -2,11 +2,6 @@
  * Message-template contract: every §16.2 code's message must name every
  * "naming X" entity the spec attaches to that code. Each case supplies those
  * entities as details and asserts each appears in the generated message.
- *
- * CD-1 统一（2026-08-13）：零生产者死码（grant-missing / install-denied /
- * ceiling-exceeded / source-not-allowed / provenance-rejected / fs-denied /
- * network-denied / vars-denied / http-denied / emit-denied）已删除；
- * ResolutionReport 的报告码（组 7）并入本表。
  */
 
 import { describe, expect, it } from 'vitest'

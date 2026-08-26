@@ -1,11 +1,3 @@
-/**
- * mygo 插件包管理体系公共面（2026-08-13 范围重塑）：dsh.lock/v1 lockfile、
- * 跨插件约束求解（resolver）、不可变 package-store 语义已退役；pnpm 安装
- * 状态为唯一真相源。保留面：manifest 解析、确定性 mygo-pack 打包/还原
- * （普通落盘）、单插件版本选择、符号/bundle 校验、requires 政策闸。
- * @module @r05en1cu/dsh-mygo/src/package
- */
-
 export { extractPlugin, loadPluginEntry } from './entry-loader.ts'
 export { scanBundles, detectUndeclaredBundles, sourceCallsDshCore, dshCoreSpecifiers, packageNameOfSpecifier } from './bundle-scan.ts'
 export type { BundleScanResult, ScannedBundle } from './bundle-scan.ts'
@@ -80,8 +72,6 @@ export { detectDualPresence } from './dual-presence.ts'
 export type { DualPresenceInput, DualPresenceWarning } from './dual-presence.ts'
 export { expandBundlePatch } from './bundle-expand.ts'
 export type { ExpandedEntryRow } from './bundle-expand.ts'
-export { mapLegacyPluginFile } from './legacy-mapping.ts'
-export type { LegacyMappingResult, LegacyPluginFile } from './legacy-mapping.ts'
 export { checkTemplateAlignment, TEMPLATE_REFERENCE } from './template-align.ts'
 export type { TemplateAlignResult } from './template-align.ts'
 export { selectVersion } from './version-select.ts'

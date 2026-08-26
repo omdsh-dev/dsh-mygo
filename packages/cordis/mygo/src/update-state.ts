@@ -1,17 +1,3 @@
-/**
- * 热重载状态保持（P7-A5）：0812 `entry.update` 事务化重放路径的插件层
- * 接线。评估结论：**无需 host 缝**——cordis `fiber.update()` 在重启前先
- * 跑 `internal/update` 瀑布（vendor/cordis fiber.ts:728-752，注释明示
- * 「update hooks can veto or replace the restart」），插件在瀑布里
- * capture → next()（默认重启）→ 新代 apply 从暂存槽 restore 即可保有
- * 状态。本模块把该模式收敛为一个 helper。
- *
- * 适用面：config-only 更新（fiber.update 路径，模块不重新 import，
- * 模块级暂存槽有效）；name/inject/group 变更走 entry 的 dispose+start
- * 全替换路径，loader 按 URL 缓存模块时同样有效。
- * @module @r05en1cu/dsh-mygo/src/update-state
- */
-
 /** 状态交接钩子：capture 在重启前调用，restore 在新代 apply 时调用。 */
 export interface UpdateStateHooks<T> {
   /** 暂存槽键（插件 id；同一模块实例内唯一）。 */

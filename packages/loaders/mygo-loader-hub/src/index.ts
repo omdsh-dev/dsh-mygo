@@ -1,15 +1,3 @@
-/**
- * dsh-hub 市场 LoaderAdapter（P5）：registry 拉取/验签/降级、可安装判定
- * 与治理元数据评估、install intent 翻译（profile-bundle → profile 执行面；
- * guided 只展示；repository-plugin 默认拒绝 + 启发式实验放行）、
- * collections 原子安装。
- *
- * 包根同时是 mygo 受管插件形态（name/inject/apply）：挂载时把绑定
- * vendored 快照的 hub adapter 注册进 `pluginManager` 的 loader 注册面，
- * 卸载随 fiber 清理注销（发现/启停走 mygo 治理面）。
- * @module @r05en1cu/dsh-mygo-loader-hub
- */
-
 import type { LoaderAdapter } from '@r05en1cu/dsh-mygo-api'
 import { createHubLoaderAdapter } from './adapter.ts'
 import { loadVendoredHubSnapshot } from './registry.ts'
@@ -44,14 +32,9 @@ export type {
 } from './registry.ts'
 export { assessHubEntry, pickHubRelease } from './assess.ts'
 export type { HubAssessment } from './assess.ts'
-export {
-  REPOSITORY_TRACK_REMOVED,
-  createRepositoryBundleProbe,
-  translateHubInstall,
-} from './intent.ts'
+export { translateHubInstall } from './intent.ts'
 export type {
   HubTranslatedInstall,
-  RepositoryBundleProbe,
   TranslateHubInstallOptions,
 } from './intent.ts'
 export { createHubLoaderAdapter } from './adapter.ts'

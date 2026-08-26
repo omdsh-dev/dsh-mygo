@@ -274,8 +274,6 @@ describe('transitive closure and soft vocabulary', () => {
     definitions.set('alpha', plugin('alpha', { compatibility: { depends: { beta: '>=1.0.0' } } }))
     await engine.install(source('beta'))
     await engine.disable('beta')
-    // 求解器已删除（2026-08-13 范围重塑）：plan 只求值——depends 目标 disabled
-    // 即 compatibility-conflict，不再提级联启用动作。
     const plan = await engine.plan({ op: 'install', source: source('alpha') })
     expect(plan.accepted).toBe(false)
     expect(plan.error?.code).toBe('compatibility-conflict')

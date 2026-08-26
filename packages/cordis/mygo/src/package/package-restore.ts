@@ -1,11 +1,3 @@
-/**
- * 插件包还原（普通落盘语义，2026-08-13 范围重塑）：把一个 npm 插件版本
- * 下载/校验/解包到**调用方指定目录**，并写入 `.mygo-package.json` 事实文件
- * （manifest + 内容哈希）。不再承诺「不可变 store / 唯一真相」：目标目录的
- * 布局与生命周期由调用方（package-manager / pack 还原）决定。
- * @module @r05en1cu/dsh-mygo/src/package/package-restore
- */
-
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'

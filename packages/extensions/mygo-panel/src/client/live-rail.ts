@@ -1,22 +1,3 @@
-/**
- * live rail 页内图变更（rc8）：订阅面板 SSE（/api/mygo/events），把
- * mount/unmount 帧页内应用为 client 行的挂载/拆卸——打开中的页面免刷新
- * 看到 live 装卸的插件 UI。动词全部复用 client-hmr 同款（reload 的
- * invalidate/prefetch 序与 registry-first 拆卸；EXT-4 提案同口径）：
- *
- * - mount：invalidate（清陈旧工厂/记录）→ prefetch（boot 图表内行）或
- *   直接 script 加载 bundle 注册工厂（新行不在 boot 图表——运行期新增的
- *   图行进不了浏览器静态表，工厂注册后 loader.create 经 internal.import
- *   的已注册工厂分支物化）→ `loader.create({ name })`（boot 路径同款）；
- * - unmount：registry-first 删 callback（避免 Loader 自处置分支把条目标
- *   disabled）→ drain inertia → 清 fiber → removeOwnedStyles（
- *   `style[data-plugin]` 属性逐字比较）→ `loader.remove`；
- * - 串行 queue（client-hmr 同款），失败 warn 并提示刷新页面兜底。
- *
- * loader/modules 服务不可达（headless 等环境）时不订阅、不报错。
- * @module @r05en1cu/dsh-mygo-ext-panel/client/live-rail
- */
-
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 
 /** 一帧 live rail 事件（与 node 半 live-events.ts 同形，跨端各自声明）。 */

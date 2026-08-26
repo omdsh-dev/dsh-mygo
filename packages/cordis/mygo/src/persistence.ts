@@ -57,10 +57,6 @@ export class RegistryPersistence {
    * propagates loudly instead of discarding the medium (T4-5 adapted).
    * @param facility - the mounted domain facility.
    * @param options - profile and policy knobs.
-   * @param externalStore - optional backend-agnostic registry store provided
-   * by a host composition row (e.g. mygo-rdb over postgres). When present the
-   * manager uses it instead of opening the built-in sqlite registry domain;
-   * audit and snapshots stay file-backed.
    * @returns the composed persistence facade.
    */
   static async open(

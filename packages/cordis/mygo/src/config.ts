@@ -40,8 +40,6 @@ export const PluginManagerConfigSchema = z.object({
  * @returns the fully resolved Config.
  */
 export function resolvePluginManagerConfig(input?: unknown): PluginManagerConfig {
-  // Schemastery's tuple/dict inference is looser than the FileAccessEntry
-  // tuple contract, so the normalized output crosses through `unknown`.
   const parsed = PluginManagerConfigSchema(input ?? {}) as unknown as ParsedConfig
   return parsed.stateRoot === undefined
     ? { ...parsed, stateRoot: dshHomePath('plugin-state') }

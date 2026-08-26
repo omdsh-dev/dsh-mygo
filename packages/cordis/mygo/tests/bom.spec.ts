@@ -1,9 +1,3 @@
-/**
- * P4 BOM（Plan B）：导出、只读对账、target 校验、Markdown 渲染、脚手架
- * 数据读取。全部为纯函数/文件测试，不启动 manager。
- * @module @deepseek-ai/dsh-mygo/tests/bom.spec
- */
-
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -42,7 +36,6 @@ describe('BOM build (export)', () => {
         },
       ],
       bundles: [{ id: 'dsh-tool-json', version: '0.0.1' }],
-      apps: [{ id: 'whale-girl', version: '1.2.3' }],
     })
     expect(bom.format).toBe('dsh.bom/v1')
     const selfIntent = bom.intent.members.find(memberEntry => memberEntry.id === MYGO_MANAGER_ID)
@@ -52,7 +45,7 @@ describe('BOM build (export)', () => {
     const selfLock = bom.lock.members.find(memberEntry => memberEntry.id === MYGO_MANAGER_ID)
     expect(selfLock?.version).not.toContain('^')
     expect(bom.intent.members.map(memberEntry => memberEntry.id)).toEqual(
-      expect.arrayContaining(['dsh-better-sidebar', 'dsh-tool-json', 'whale-girl']),
+      expect.arrayContaining(['dsh-better-sidebar', 'dsh-tool-json']),
     )
   })
 
@@ -159,7 +152,7 @@ describe('BOM check (read-only reconcile)', () => {
       profile: 'web',
       bridgePlugins: [
         {
-          id: 'mygo-rdb',
+          id: 'storage-extension',
           version: '0.1.0',
           generation: 1,
           origin: 'static',
@@ -175,7 +168,7 @@ describe('BOM check (read-only reconcile)', () => {
     })
     // 调用方（service）会显式带上 self；即使漏带，checkBom 的回退 self 也
     // 必须能解析 service:mygo-core，否则 extension 的 depends 全部误报未安装。
-    const report = checkBom(locked, [member('mygo-rdb', '0.1.0')])
+    const report = checkBom(locked, [member('storage-extension', '0.1.0')])
     expect(report.violations).toEqual([])
     expect(report.missing).toContain(MYGO_MANAGER_ID)
   })

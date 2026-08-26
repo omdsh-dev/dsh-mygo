@@ -1,10 +1,3 @@
-/**
- * 端到端包管理测试（2026-08-13 范围重塑口径）：
- * 干净目录 + 本地假 registry，覆盖 安装→落盘→加载运行、确定性版本选择
- * （区间过滤，registry 有更新版本也不漂移）、还原产物独立于 dsh 本体目录、
- * 失败报告格式。dsh.lock/v1 环节已删除（pnpm 安装状态为唯一真相源）。
- */
-
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
@@ -188,7 +181,6 @@ describe('plugin package manager (fake registry e2e)', () => {
 
   it('reports candidates without a valid manifest with structured fields', async () => {
     versions.length = 0
-    // 顶层 depends 已按 2026-08-13 裁决从 manifest v3 移除：存量声明 = 非法 manifest。
     versions.push({ version: '1.0.0', extraManifestKeys: { depends: { 'missing-base': '>=2.0.0' } } })
     await refreshTarballs()
     const manager = createManager()

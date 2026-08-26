@@ -103,7 +103,7 @@ describe('author-guide examples', () => {
     expect((globalThis as { __authorHello?: { count: number } }).__authorHello?.count).toBe(1)
   })
 
-  it('Example B: intercept declarations mount without any grants entry', async () => {
+  it('Example B: intercept declarations mount', async () => {
     const ctx = await boot(managerRow([]))
     await ctx.pluginManager.install({ type: 'inline', code: GUARD_PLUGIN_CODE })
     expect(ctx.pluginManager.plugins().find(handle => handle.id === 'guard-plugin')?.status).toBe('enabled')

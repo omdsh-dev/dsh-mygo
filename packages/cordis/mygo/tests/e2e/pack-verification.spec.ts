@@ -11,7 +11,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
-import { performance } from 'node:perf_hooks'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PluginPackageManager } from '../../src/package/package-manager.ts'
 import { resolveMygoPaths } from '../../src/package/paths.ts'
@@ -38,10 +37,6 @@ let packer: PluginPackageManager
 let packerPaths: ReturnType<typeof resolveMygoPaths>
 let packPath: string
 let packPath2: string
-
-/** 实测记录（写入 docs/plugin-pack-verification.md §4）。 */
-export const PACK_PERF: Record<string, number> = {}
-export const PACK_ARTIFACT: Record<string, string | number> = {}
 
 function freshManager(home: string, profile = 'e2e'): PluginPackageManager {
   return new PluginPackageManager({
@@ -183,21 +178,13 @@ beforeAll(async () => {
   packerPaths = installed.paths
   packPath = join(root, 'first.mygo-pack')
   packPath2 = join(root, 'second.mygo-pack')
-  const firstStart = performance.now()
   const built = await packer.buildPack({ output: packPath })
-  PACK_PERF['buildPack-first'] = performance.now() - firstStart
   if (!built.ok) throw new Error(`buildPack 失败：${built.report.summary}`)
-  const secondStart = performance.now()
   const built2 = await packer.buildPack({ output: packPath2 })
-  PACK_PERF['buildPack-deterministic'] = performance.now() - secondStart
   if (!built2.ok) throw new Error(`buildPack 第二次失败：${built2.report.summary}`)
-  const firstBytes = new Uint8Array(await readFile(packPath))
-  PACK_ARTIFACT['packBytes'] = firstBytes.length
-  PACK_ARTIFACT['packSha256'] = sha256Hex(firstBytes)
 }, 120_000)
 
 afterAll(async () => {
-  console.log(`[pack-perf] ${JSON.stringify({ perf: PACK_PERF, artifact: PACK_ARTIFACT })}`)
   await registry?.close()
   await rm(root, { recursive: true, force: true })
 })
@@ -215,9 +202,7 @@ describe('T33 RT1 打包→还原往返', () => {
   it('全新空 installRoot 还原后 (id, version) 集合与打包方一致', async () => {
     const home = join(root, 'rt1-home')
     const receiver = freshManager(home)
-    const start = performance.now()
     const outcome = await receiver.installPack(packPath)
-    PACK_PERF['installPack-fresh'] = performance.now() - start
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
     const packerHome = dirname(packerPaths.base)

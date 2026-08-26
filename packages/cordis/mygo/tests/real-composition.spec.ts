@@ -805,11 +805,8 @@ describe('Proposal A: tools.register bridge (F1/F2 REAL)', () => {
   })
 
   it('pre-baked race: raw-held tool names reject loudly and a later raw registration cannot win', async () => {
-    const { ctx } = await loadComposition(bootRoot => toolCompositionRows('<root>', 'race', [
-      '    grants:',
-      '      race-claimant:',
-      '        claims: true',
-    ]).map(line => line.replace('<root>', bootRoot)))
+    const { ctx } = await loadComposition(bootRoot => toolCompositionRows('<root>', 'race')
+      .map(line => line.replace('<root>', bootRoot)))
 
     // Raw first, managed claimant later: claims on a raw-held slot is loud.
     ctx.tools.register(rawToolShape('race_held', 'raw'))

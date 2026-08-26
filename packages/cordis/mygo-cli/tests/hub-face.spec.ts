@@ -1,11 +1,3 @@
-/**
- * `mygo hub` 命令面测试（P5）：args 解析 + search/info/collections（真实
- * hub 快照 fixture）+ install 本地快照端到端（file: 包装置，临时 HOME）
- * + repository-plugin 拒绝文案 + collection 原子安装。全程离线
- * （--snapshot 本地源；block-net 拦截远程）。
- * @module @r05en1cu/dsh-mygo-cli/tests/hub-face
- */
-
 import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -169,26 +161,13 @@ describe('mygo hub 命令面', () => {
     expect(manifest.dsh?.profile?.bundles).toContain('@test/hub-cli-bundle')
   }, 60_000)
 
-  it('hub install：repository-plugin 默认拒绝（安装轨 0812 已删除）', async () => {
-    const snapshot = join(root, 'snapshot.json')
-    await writeFile(snapshot, buildSnapshot([entryFixture('repo-x', {
-      mode: 'repository-plugin',
-      adapter: 'official-repository/v1',
-      spec: `github:owner/repo#${'1'.repeat(40)}&path:/plugins/x/.dsh-plugin`,
-    })]))
-    const out = capture()
-    const code = await invokeCli(ctxWithProfile('web'), ['hub', 'install', 'repo-x', '--snapshot', snapshot])
-    expect(code).toBe(1)
-    expect(out.stderr.text()).toContain('安装轨在 0812 已删除')
-  }, 60_000)
-
   it('hub install：guided 条目拒绝安装并说明；条目不存在明确报错', async () => {
     const snapshot = join(root, 'snapshot.json')
     await writeFile(snapshot, buildSnapshot([entryFixture('guided-x', { mode: 'guided', method: 'manual' })]))
     let out = capture()
     let code = await invokeCli(ctxWithProfile('web'), ['hub', 'install', 'guided-x', '--snapshot', snapshot])
     expect(code).toBe(1)
-    expect(out.stderr.text()).toContain('guided/manual')
+    expect(out.stderr.text()).toContain('没有可执行安装意图')
     out = capture()
     code = await invokeCli(ctxWithProfile('web'), ['hub', 'install', 'missing', '--snapshot', snapshot, '--json'])
     expect(code).toBe(1)

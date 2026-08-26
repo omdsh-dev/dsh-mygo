@@ -24,7 +24,7 @@ function fixture(id: string): PluginDefinition {
   }
 }
 
-describe('definePlugin mount surface (P2 merged toCordisPlugin)', () => {
+describe('definePlugin mount surface', () => {
   it('produces a ctx.plugin-consumable module that only self-adopts', async () => {
     const definition = fixture('managed')
     const shape = definePlugin(definition)

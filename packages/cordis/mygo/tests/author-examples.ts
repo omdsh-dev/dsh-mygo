@@ -25,7 +25,6 @@ export const MINIMAL_PLUGIN_CODE = `module.exports = {
   },
 }`
 
-/** Example B: the permissions + grants guard from the tutorial. */
 export const GUARD_PLUGIN_CODE = `module.exports = {
   id: 'guard-plugin',
   version: '1.0.0',

@@ -236,7 +236,6 @@ export interface HubInstallResult {
   readonly plan?: PlanShape
   readonly hostConflicts?: readonly string[]
   readonly advisories?: readonly string[]
-  readonly experimental?: boolean
 }
 
 export const api = {
@@ -249,16 +248,16 @@ export const api = {
   saveHubSources(config: Partial<HubSourceConfig>): Promise<{ readonly config: HubSourceConfig; readonly message: string }> {
     return request('/hub/sources', { method: 'PUT', body: config })
   },
-  hubInstall(id: string, releaseId?: string): Promise<HubInstallResult> {
+  hubInstall(id: string): Promise<HubInstallResult> {
     return request<HubInstallResult>('/hub/install', {
       method: 'POST',
-      body: { id, ...(releaseId === undefined || releaseId === '' ? {} : { releaseId }) },
+      body: { id },
     })
   },
-  hubUpdate(id: string, releaseId?: string): Promise<HubInstallResult> {
+  hubUpdate(id: string): Promise<HubInstallResult> {
     return request<HubInstallResult>('/hub/update', {
       method: 'POST',
-      body: { id, ...(releaseId === undefined || releaseId === '' ? {} : { releaseId }) },
+      body: { id },
     })
   },
   status(): Promise<StatusResult> {

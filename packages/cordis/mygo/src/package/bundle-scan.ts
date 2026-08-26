@@ -1,9 +1,3 @@
-/**
- * 嵌套包（bundled dependencies）治理（《第二轮增强》1–4 条）：
- * 递归扫描 bundles 声明、校验声明与实际一致、检测“求解器不可见”打包。
- * @module @r05en1cu/dsh-mygo/src/package/bundle-scan
- */
-
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { parsePackageManifest, type PluginManifestV2 } from './manifest-v2.ts'
@@ -120,12 +114,6 @@ export function packageNameOfSpecifier(specifier: string): string {
     : (parts[0] as string)
 }
 
-/**
- * Detect “求解器不可见”打包：未在 bundles 声明、但满足以下任一条件的嵌套包：
- * 1) 本身是插件（有 dsh.mygo）；2) import 任何 @deepseek-ai/*（调用 dsh 核心
- * API）；3) 显式 `dsh.mygo.shared === true`（共享状态）。
- * 纯叶子库（三者皆否）允许内联。
- */
 export async function detectUndeclaredBundles(
   root: string,
   declaredPaths: readonly string[],

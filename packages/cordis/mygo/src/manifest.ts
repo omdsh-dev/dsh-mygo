@@ -28,7 +28,6 @@ const interceptDeclaration = z.object({
 })
 
 const permissionLevel = z.enum(['outermost', 'derived', 'innermost'])
-const fileAccessMode = z.enum(['read', 'write'])
 const entrypointContribution = z.union([
   z.string().min(1),
   z.object({ value: z.unknown() }).strict(),
@@ -63,21 +62,12 @@ export const MANIFEST_SCHEMA = z.object({
     position: permissionLevel,
     claims: z.array(z.string()),
   }),
-  fileAccess: z.array(z.tuple([fileAccessMode, z.string()])).optional(),
-  networkAccess: z.object({ allow: z.array(z.string()) }).optional(),
-  varsAccess: z.array(z.string()).optional(),
-  llmAccess: z.object({ models: z.array(z.string()) }).optional(),
-  execAccess: z.object({ allow: z.array(z.string()) }).optional(),
-  httpAccess: z.object({ routes: z.array(z.string()) }).optional(),
   client: z.object({
     main: z.string().min(1),
     inject: z.array(z.string()).optional(),
   }).optional(),
   entrypoints: z.record(z.string().min(1), z.array(entrypointContribution)).optional(),
   compatibility: compatibilityBlock.optional(),
-  sessionWriteAccess: z.boolean().optional(),
-  hostPublishAccess: z.boolean().optional(),
-  dynamicInstallAccess: z.boolean().optional(),
   stateful: z.boolean(),
   swapPolicy: z.enum(['immediate', 'drain', 'next-idle']),
   config: z.custom(value => typeof value === 'function', 'schemastery schema'),

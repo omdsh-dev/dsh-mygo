@@ -24,9 +24,6 @@ export default defineConfig({
   test: {
     root: here('.'),
     include: ['tests/**/*.spec.ts'],
-    // extension-mygo-rdb.spec.ts 以 process.cwd() 拼接临时目录，仅仓库根
-    // 运行成立（mygo-rdb 本地修正文件，按用户裁决不修改）；全量套件仍覆盖。
-    exclude: ['tests/extension-mygo-rdb.spec.ts'],
     environment: 'node',
     pool: 'forks',
     // P4：服务 init 会写用户级实例登记处（~/.dsh-mygo）；测试统一把

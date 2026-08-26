@@ -48,8 +48,6 @@ mygo pack -o out.mygo-pack --ref dsh-cc-tui   # 指定成员改引用式（可�
 mygo pack -o out.mygo-pack --ref=all          # 全部引用式（与 --ref <id> 互斥）
 ```
 
-- 打包源 = mygo store（`$DSH_HOME/mygo/packages/`）；store 对无 `dsh.mygo`
-  声明的普通社区包经 legacy manifest 推导开放（npm 源安装即可入 store）。
 - 引用式打包从 registry 元数据固化 `dist.integrity` / `dist.tarball`；
   缺 integrity 的包拒绝打包并指认。
 - **确定性**：GNU tar `--sort=name --mtime=@0`，同输入连打两次字节一致

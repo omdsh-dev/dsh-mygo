@@ -11,7 +11,7 @@ function fabricRegistration(): ExtensionRegistration {
   return {
     id: 'fabric',
     kind: 'extension',
-    source: 'github:dsh-external/fabric（git 子目录 spec 白名单过渡）',
+    source: 'github:dsh-external/fabric',
     blockMarker: '# --- mygo managed extension (id:fabric) ---',
     packages: ['cordis-fabric', 'cordis-fabric-dsh'],
   }

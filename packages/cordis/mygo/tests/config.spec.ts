@@ -1,8 +1,3 @@
-/**
- * Manager Config contract: T6 defaults, the stateRoot harness default, and
- * loud rejection of invalid input. Permission grants are gone.
- */
-
 import { describe, expect, it } from 'vitest'
 import { resolvePluginManagerConfig } from '@r05en1cu/dsh-mygo'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'

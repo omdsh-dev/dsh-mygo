@@ -1,7 +1,3 @@
-/**
- * manifest v2 测试：五字段、预发布版本、区间强制、裸包名拒绝、legacy 别名。
- */
-
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { parsePackageManifest } from '../../src/package/manifest-v2.ts'
@@ -41,7 +37,7 @@ describe('manifest v2', () => {
     expect(result.value).toMatchObject({ id: 'x', version: '1.2.3', entry: 'main.js', core: '>=1.0.0' })
   })
 
-  it('rejects legacy top-level depends/breaks with rewrite guidance (2026-08-13 字段移除)', () => {
+  it('rejects unsupported top-level depends/breaks with rewrite guidance', () => {
     const result = parsePackageManifest({
       name: 'x',
       version: '1.0.0',
@@ -121,7 +117,7 @@ describe('manifest v2', () => {
     expect(result.problems.some(problem => problem.path.includes('path'))).toBe(true)
   })
 
-  it('parses the v3 field set (formatVersion/requires/recommends/symbolAliases/grants/environment)', () => {
+  it('parses the v3 field set', () => {
     const result = parsePackageManifest({
       name: '@dsh-external/v3',
       version: '1.0.0',
@@ -134,7 +130,6 @@ describe('manifest v2', () => {
           recommends: { 'nice-to-have': '^0.1.0' },
           provides: ['alias-id'],
           symbolAliases: { b: 'c' },
-          grants: { intercept: true, networkAccess: { allow: ['https://ok.dev'] } },
           environment: { platform: 'web' },
         },
       },
@@ -146,7 +141,6 @@ describe('manifest v2', () => {
       recommends: { 'nice-to-have': '^0.1.0' },
       provides: ['alias-id'],
       symbolAliases: { b: 'c' },
-      grants: { intercept: true, networkAccess: { allow: ['https://ok.dev'] } },
       environment: { platform: 'web' },
     })
   })
@@ -225,13 +219,12 @@ describe('manifest v2', () => {
     expect(result.problems.some(problem => problem.path === 'dsh.mygo.patches.p1.file')).toBe(true)
   })
 
-  it('rejects the legacy top-level depends in the dsh-vibe-mode reference implementation (T18/B2)', async () => {
+  it('rejects top-level depends in the dsh-vibe-mode reference implementation (T18/B2)', async () => {
     const raw = await readFile(
       '/home/rosen/workspace/dsh_dev/dsh-external-src/dsh-vibe-mode/package.json',
       'utf8',
     )
     const result = parsePackageManifest(JSON.parse(raw))
-    // 存量语料的顶层 depends 按 2026-08-13 字段移除裁决显式拒绝（不改语料）。
     expect(result.value).toBeUndefined()
     expect(result.problems.some(problem => problem.path === 'dsh.mygo.depends')).toBe(true)
   })

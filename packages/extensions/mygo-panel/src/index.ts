@@ -8,10 +8,10 @@
  * from the bridge and enters the client roster via a profile patch row.
  * @module @r05en1cu/dsh-mygo-ext-panel
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, openSync } from 'node:fs'
-import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { basename, delimiter, dirname, join, relative, resolve, sep } from 'node:path'
@@ -67,7 +67,6 @@ const HOME_ROOT = process.env.DSH_HOME !== undefined && process.env.DSH_HOME !==
   : join(homedir(), '.dsh')
 const INSTALL_DIR = join(HOME_ROOT, 'mygo-plugins')
 
-/** mygo 自身安装状态（install.sh 写入，供检查/热更新自身）。 */
 const SELF_STATE = join(HOME_ROOT, 'mygo-self.json')
 
 /** User skill root scanned by dsh-skill-local (flat `name.md` skills). */
@@ -109,10 +108,6 @@ function profilePatchPath(): string {
 /** Per-plugin manifest file inside each installed directory. */
 const MANIFEST = '.mygo-install.json'
 
-/** Per-app manifest file inside each installed external-app directory. */
-
-/** Append-only operation log for external apps (best-effort records). */
-
 // rc.3：桥接行装配/可解析性校验收敛进 bridge-rows.ts（纯函数可测面）。
 import { buildProfilePatchText, filterResolvableRows, isBridgeRowResolvable } from './bridge-rows.js'
 // rc8：live rail 事件通道（SSE 端点 + 广播面）。
@@ -134,18 +129,6 @@ export interface BundleUninstallOutcome {
   readonly warning?: string
 }
 
-/**
- * bundle 轨成员的卸载（r6 路由修正；r7 live rail 重排）：profile 执行面
- * （pnpm remove + reconcile，与官方 dsh plugin remove 同路径），带守卫——
- * 面板自身（dsh-mygo-ext-panel）拒绝经自身卸载；dsh-mygo 核心需 force 确认
- * （管理面中断警告）；卸载前跑 plan 预览（dependent-exists 等拒绝）。
- * r7 运行期顺序（spike 硬约束「先删行后 pnpm」）：live rail 包先剥受管
- * live 块 + 验证 dispose 再 pnpm remove；boot rail 包且实例在跑先写受管
- * disable 块 live 摘 fiber + 验证再走现流程。最后清理该成员在用户 patch
- * 层的 config 覆盖行与受管块（rc.6 残留 bugfix；rowId 先于卸载推导；
- * removePatchRows 兼作 live 块崩溃残留兜底）。桥接轨成员不经此路由
- * （维持引擎 uninstall 语义）。
- */
 export async function routeBundleUninstall(
   ctx: PanelContext,
   id: string,
@@ -413,7 +396,6 @@ interface InstallRequest {
   readonly installDeps?: boolean
 }
 
-/** Remote repository provenance recorded for GitHub-installed plugins/apps. */
 interface RemoteRef {
   readonly url: string
   /** Git ref checked at install (`HEAD` when no branch was given). */
@@ -502,12 +484,6 @@ async function resolveEntry(root: string): Promise<string> {
   throw new Error('未找到插件入口（package.json main / lib/index.js / src/index.ts）')
 }
 
-/**
- * Resolve a plugin entry from the package's declared surface, even before the
- * build artifact exists: the official repository-plugin format
- * (`package.json#dsh.entry`) ships source only and must be built during
- * install, so the declared path is the install-time contract.
- */
 async function resolveEntryDeclared(root: string): Promise<string> {
   try {
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
@@ -825,14 +801,10 @@ import {
   buildConfigExport,
   bundleRowIdOf,
   configSchemaInfoOf,
-  configSchemaTemplateOf,
-  CONFIG_EXPORT_FORMAT,
   mergeSecretConfigWrite,
   parseConfigImport,
   partitionImportTargets,
   redactSecretConfig,
-  resolveConfigSchema,
-  type ConfigFieldInfo,
   type ConfigSchemaInfo,
   type ConfigSchemaLike,
 } from './config-cards.js'
@@ -1160,77 +1132,6 @@ async function linkFrameworkDependencies(target: string): Promise<void> {
   }
 }
 
-/** Bounded scan for nested package.json manifests (old monorepo-style repos). */
-async function findNestedPackageManifests(
-  tree: string,
-  maxDepth = 4,
-): Promise<Array<{
-  readonly dir: string
-  readonly pkg: {
-    readonly name?: unknown
-    readonly private?: unknown
-    readonly devDependencies?: Record<string, unknown>
-  }
-}>> {
-  const found: Array<{
-    readonly dir: string
-    readonly pkg: {
-      readonly name?: unknown
-      readonly private?: unknown
-      readonly devDependencies?: Record<string, unknown>
-    }
-  }> = []
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth) return
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
-    try {
-      entries = await readdir(dir, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
-        await walk(join(dir, entry.name), depth + 1)
-      } else if (entry.isFile() && entry.name === 'package.json') {
-        try {
-          const pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8')) as {
-            readonly name?: unknown
-            readonly private?: unknown
-            readonly devDependencies?: Record<string, unknown>
-          }
-          found.push({ dir, pkg })
-        } catch {
-          // unreadable manifest: skip
-        }
-      }
-    }
-  }
-  await walk(tree, 1)
-  return found
-}
-
-/**
- * Detect an old (0804/0805-era) dsh workspace plugin: a nested private
- * `@deepseek-ai/dsh-*` package whose devDependencies use the pnpm
- * `workspace:` protocol. Such plugins must live inside the dsh monorepo and
- * often ship a core UI patch; the panel deliberately does not support them.
- */
-async function detectOldWorkspacePlugin(tree: string): Promise<string | undefined> {
-  const manifests = await findNestedPackageManifests(tree)
-  for (const { dir, pkg } of manifests) {
-    if (typeof pkg.name !== 'string' || !pkg.name.startsWith('@deepseek-ai/dsh-')) continue
-    const devDependencies = pkg.devDependencies ?? {}
-    const hasWorkspaceProtocol = Object.values(devDependencies)
-      .some(spec => typeof spec === 'string' && spec.startsWith('workspace:'))
-    if (pkg.private === true && hasWorkspaceProtocol) {
-      return `仓库包含旧版 dsh 工作区插件 ${pkg.name}（${dir}）：`
-        + '这是 0804/0805 时代需要放进 dsh 源码仓库并打补丁的 monorepo 插件，版本过老，'
-        + '面板不支持直接安装。请改用作者提供的新版独立包，或按仓库 README 的官方方式安装。'
-    }
-  }
-  return undefined
-}
-
 /**
  * Run one install command against a manifest stripped of pnpm `link:` specs
  * (npm rejects those protocols outright), restoring the original manifest
@@ -1311,7 +1212,6 @@ async function withInstallableManifest(
  */
 async function installRuntimeDependencies(
   target: string,
-  dependencies: Record<string, string>,
   allDependencies: Record<string, string>,
   buildClientTarget?: string,
   options: { readonly ignoreScripts?: boolean; readonly buildTarget?: string } = {},
@@ -1412,9 +1312,6 @@ async function locatePluginRoot(tree: string): Promise<string> {
     await resolveEntry(tree)
     return tree
   } catch {
-    // Official repository-plugin format: the actual package lives in the
-    // `.dsh-plugin` subdirectory and may ship source only (`dsh.entry` is
-    // the declared build target), so accept the manifest even without lib.
     const official = join(tree, '.dsh-plugin')
     if (await isRepositoryPluginPackage(official)) return official
     const entries = (await readdir(tree, { withFileTypes: true })).filter(entry => entry.isDirectory())
@@ -1428,8 +1325,6 @@ async function locatePluginRoot(tree: string): Promise<string> {
         if (await isRepositoryPluginPackage(innerOfficial)) return innerOfficial
       }
     }
-    const unsupported = await detectOldWorkspacePlugin(tree)
-    if (unsupported !== undefined) throw new Error(unsupported)
     throw new Error('未找到插件入口（package.json main / lib/index.js / src/index.ts）')
   }
 }
@@ -1629,39 +1524,6 @@ async function removeProjectedBridge(id: string): Promise<void> {
     force: true,
     recursive: false,
   })
-}
-
-/**
- * Remove the `mygo-rdb-store` composition row from the profile patch. Called
- * when the owning extension (mygo-rdb) is uninstalled: without the store
- * provider row, the manager automatically falls back to the built-in sqlite
- * registry route on the next boot.
- */
-async function removeStoreProviderRows(): Promise<void> {
-  let text = ''
-  try {
-    text = await readFile(profilePatchPath(), 'utf8')
-  } catch {
-    return
-  }
-  const lines = text.split('\n')
-  const out: string[] = []
-  let inEntry = false
-  for (const line of lines) {
-    if (!inEntry && /^\s*- id:\s+mygo-rdb-store\s*$/.test(line)) {
-      inEntry = true
-      continue
-    }
-    if (inEntry) {
-      // Entry body is indented deeper than the sibling `- id:` rows; stop at
-      // the next sibling row or any top-level line.
-      if (/^    - id:/.test(line) || /^[^\s]/.test(line)) inEntry = false
-      else continue
-    }
-    out.push(line)
-  }
-  const next = out.join('\n')
-  if (next !== text) await writeFile(profilePatchPath(), next)
 }
 
 /** One profile bridge row plus the ordering facts needed for dependency-first layout. */
@@ -1954,11 +1816,6 @@ async function remoteInstallEntries(): Promise<Array<{
   return entries.sort((a, b) => a.id.localeCompare(b.id))
 }
 
-/**
- * Scan every installed plugin/app whose manifest carries remote provenance
- * and compare the installed commit against the remote ref. Folder/archive
- * installs have no remote and are skipped by design.
- */
 async function listUpdates(): Promise<readonly RemoteUpdateStatus[]> {
   const results: RemoteUpdateStatus[] = []
   const self = await readMygoSelfState()
@@ -2025,7 +1882,7 @@ async function updateMygoFromRemote(
     throw new Error('源码自更新仅支持 checkout 安装；npm 安装请通过包管理器更新 mygo')
   }
   const self = await readMygoSelfState()
-  if (self === undefined) throw new Error('未记录 mygo 自身安装信息（请用 install.sh 安装）')
+  if (self === undefined) throw new Error('未记录 mygo 自身安装信息')
   const latestCommit = await remoteLatest(self.url, self.ref)
   if (latestCommit === self.commit) {
     return { ok: true, id: 'dsh-mygo', updated: false, message: 'mygo 已是最新' }
@@ -2105,10 +1962,9 @@ async function updatePluginFromRemote(
       ? await (async () => {
         // Official `.dsh-plugin` sources ship uncompiled: build the fresh
         // tree in the temp checkout before the HMR swap imports the entry.
-        const dependencies = await runtimeDependenciesOf(root)
         const allDependencies = await allDependenciesOf(root)
         const clientTarget = await clientTargetOf(root)
-        await installRuntimeDependencies(root, dependencies, allDependencies, clientTarget, {
+        await installRuntimeDependencies(root, allDependencies, clientTarget, {
           ignoreScripts: true,
           buildTarget: relative(root, entry),
         })
@@ -2159,11 +2015,6 @@ async function updatePluginFromRemote(
   }
 }
 
-/**
- * Update one remote-installed external app: stop it (if running), replace the
- * app tree keeping `state/` and `logs/`, re-run setup/build, restart if it
- * was running before.
- */
 async function preparePluginFiles(
   root: string,
   target: string,
@@ -2180,12 +2031,12 @@ async function preparePluginFiles(
     // The official format requires a build: install devDependencies with
     // lifecycle scripts disabled (the repo's `prepare` needs the unpublished
     // dsh-plugin-prepare helper), then run the declared build.
-    await installRuntimeDependencies(target, dependencies, allDependencies, clientTarget, {
+    await installRuntimeDependencies(target, allDependencies, clientTarget, {
       ignoreScripts: true,
       ...(entry === undefined ? {} : { buildTarget: relative(root, entry) }),
     })
   } else if (installDeps && (Object.keys(dependencies).length > 0 || clientTarget !== undefined)) {
-    await installRuntimeDependencies(target, dependencies, allDependencies, clientTarget)
+    await installRuntimeDependencies(target, allDependencies, clientTarget)
   } else {
     await ensureNodeModulesLink(target)
     if (clientTarget !== undefined && !(await fileExists(join(target, clientTarget)))) {
@@ -2322,8 +2173,6 @@ async function installFromRoot(
     }
     const declarative = await readDeclarativeManifest(target)
     const declaration = toDeclaration(declarative)
-    // P1 起求解器级联动作已删除：安装前做 plan 预览（求值，拒绝即报错），
-    // 不再连带启用下游。
     {
       // Compatibility preflight against the live managed set before any bridge
       // row is written: a broken combination is refused with the constraint
@@ -3030,7 +2879,6 @@ async function cleanupHelperDebugSessions(
 async function runHubBundleInstall(
   ctx: PanelContext,
   id: string,
-  releaseId: string | undefined,
   op: 'install' | 'update',
 ): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
   if (panelCatalogSources === undefined) {
@@ -3109,7 +2957,6 @@ async function runHubBundleInstall(
       },
       ...(result.member.hostConflicts.length === 0 ? {} : { hostConflicts: result.member.hostConflicts }),
       ...(target.advisories.length === 0 ? {} : { advisories: target.advisories }),
-      ...(target.experimental ? { experimental: true } : {}),
     },
   }
 }
@@ -3880,10 +3727,6 @@ export function apply(ctx: PanelContext): void {
               await rm(skillFile, { force: true })
             }
             await syncBridgeRows()
-            // Uninstalling the mygo-rdb extension also removes its store
-            // provider row, so the manager automatically falls back to the
-            // built-in sqlite registry route on the next boot.
-            if (id === 'mygo-rdb') await removeStoreProviderRows()
             } catch (error) {
               finishPanelOperation(operation, 'failed', error instanceof Error ? error.message : String(error))
               throw error
@@ -3922,12 +3765,11 @@ export function apply(ctx: PanelContext): void {
         if (method === 'POST' && hubInstallMatch !== null) {
           const op = hubInstallMatch[1]
           if (op !== 'install' && op !== 'update') throw new Error(`不支持的 hub 操作：${op}`)
-          const body = JSON.parse(await readBody(req)) as { readonly id?: unknown; readonly releaseId?: unknown }
+          const body = JSON.parse(await readBody(req)) as { readonly id?: unknown }
           if (typeof body.id !== 'string' || body.id === '') throw new Error('hub 操作需要条目 id')
           const outcome = await runHubBundleInstall(
             ctx,
             body.id,
-            typeof body.releaseId === 'string' && body.releaseId !== '' ? body.releaseId : undefined,
             op,
           )
           json(outcome.status, outcome.body)

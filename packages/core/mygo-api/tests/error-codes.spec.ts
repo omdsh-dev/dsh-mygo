@@ -1,11 +1,3 @@
-/**
- * Code-table completeness: the §16.2 table after the CD-1 unification
- * (2026-08-13). Zero-producer dead codes were removed and the ResolutionReport
- * codes merged in (group 7); the literal lists below are the spec
- * transcription, `satisfies` keeps them in sync with the closed union at
- * compile time, and the runtime loop proves every code has a message template.
- */
-
 import { describe, expect, it } from 'vitest'
 import { formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
@@ -20,7 +12,7 @@ const SPEC_GROUPS = {
     'non-payload-name',
     'unsupported-event-option',
   ] as const satisfies readonly PluginErrorCode[],
-  permissionsAndGrants: [
+  fieldProtection: [
     'protected-field',
   ] as const satisfies readonly PluginErrorCode[],
   relationshipConflicts: [

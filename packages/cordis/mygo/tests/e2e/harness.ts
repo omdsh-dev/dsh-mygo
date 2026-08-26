@@ -25,7 +25,6 @@ import PluginManagerService from '@r05en1cu/dsh-mygo'
 import { PluginPackageManager } from '../../src/package/package-manager.ts'
 import { resolveMygoPaths } from '../../src/package/paths.ts'
 import { expandBundlePatch } from '../../src/package/bundle-expand.ts'
-import { mapLegacyPluginFile } from '../../src/package/legacy-mapping.ts'
 import type { CorpusPlugin } from './corpus.ts'
 
 const execFileAsync = promisify(execFile)
@@ -48,7 +47,7 @@ export async function packCorpus(plugin: CorpusPlugin): Promise<PackedPackage> {
     await mkdir(pkgRoot, { recursive: true })
     // 选择性复制：真实仓库动辄数十~上百 MB（node_modules/assets），
     // 只取 npm 包形态需要的面（package.json / src / lib / 清单文件）。
-    const candidateParts = plugin.packParts ?? ['package.json', 'src', 'lib', 'cordis.patch.yml', 'dsh.plugin.json', 'index.mjs', 'scripts']
+    const candidateParts = plugin.packParts ?? ['package.json', 'src', 'lib', 'cordis.patch.yml', 'index.mjs', 'scripts']
     for (const part of candidateParts) {
       const source = join(plugin.dir, part)
       const target = join(pkgRoot, part)
@@ -65,8 +64,6 @@ export async function packCorpus(plugin: CorpusPlugin): Promise<PackedPackage> {
       }
     }
     const real = JSON.parse(await readFile(join(plugin.dir, 'package.json'), 'utf8')) as Record<string, unknown>
-    // 打包时以语料登记的 registry 身份为准（name = plugin.name）：真实仓库改名/漂移
-    // 时保持 corpus 契约（lockfile.packageName 与内层 package.json 身份一致）。
     real.name = plugin.name
     if (plugin.versionOverride !== undefined) real.version = plugin.versionOverride
     if (plugin.packageJsonOverlay !== undefined) Object.assign(real, plugin.packageJsonOverlay)
@@ -164,7 +161,6 @@ export async function startOfflineRegistry(packed: readonly PackedPackage[]): Pr
   }
 }
 
-/** 安装语料到全新隔离还原根（真实 tarball → 普通落盘；2026-08-13 起无 lockfile）。 */
 export async function installCorpusToStore(
   packed: readonly PackedPackage[],
   registryUrl: string,
@@ -293,4 +289,4 @@ export async function mountComposition(
   return { ctx, warns, bootRoot }
 }
 
-export { expandBundlePatch, mapLegacyPluginFile }
+export { expandBundlePatch }

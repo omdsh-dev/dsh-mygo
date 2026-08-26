@@ -157,7 +157,6 @@ export function isBuildPolicyBlock(output: string): boolean {
   return /ERR_PNPM_IGNORED_BUILDS|ERR_PNPM_STRICT_DEP_BUILDS/.test(output)
 }
 
-/** 检测 git 子依赖拦截（blockExoticSubdeps 门槛；P6 遗留 #4）。 */
 export function isExoticSubdepBlock(output: string): boolean {
   return /blockExoticSubdeps|exotic subdep/i.test(output)
 }

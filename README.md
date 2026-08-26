@@ -46,8 +46,6 @@ dsh web   # profile 组合自动挂载
 - 面板安装 bundle 在实例**运行期即刻激活**（live rail），无需重启；
 - 官方 CLI 旁路 add 同包 → 运行期对账当场剥 live 块，消弭下次 boot 的
   同 id 双 insert 致命撞车；
-- headless profile 下 `mygo ...` 命令面完整可用（web profile 严格参数
-  解析的宿主缝隙见 `patches/`，host 补丁提案不 apply）。
 
 ## 快速开始
 
@@ -158,11 +156,7 @@ pnpm -r run verify:self-contained && pnpm -r run typecheck && pnpm -r run build
 pnpm --filter @r05en1cu/dsh-mygo exec vitest run --maxWorkers=2 --pool=threads
 ```
 
-测试口径（2026-08-15 rc8 起）：全量 86 文件 / 782 用例 + EB 13 项（无网
-拦截、确定性断言字节级）；面板套件 7 文件 / 45 用例（live-events /
-client-live-rail / 安装面等）。架构与验证入口见
-[`DEV-GUIDE.md`](DEV-GUIDE.md) 与 `docs/`；仓库布局、发布流水线
-（`scripts/publish-mygo.mjs`）与 host 补丁提案（`patches/`）随仓维护。
+架构与验证入口见 [`DEV-GUIDE.md`](DEV-GUIDE.md) 与 `docs/`。
 
 ## License
 

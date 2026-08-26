@@ -1,9 +1,3 @@
-/**
- * PluginEnv capability surfaces after the permission-gate removal: every
- * surface is a host passthrough, registration quotas and the rate-limited
- * logger keep their §18/SEC:71 behavior, and missing host seams fail loudly.
- */
-
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

@@ -92,7 +92,6 @@ describe('swapTreeIntoPlace（安装树原子换入，R2）', () => {
     await seed(target, 'old')
     await swapTreeIntoPlace(staging, target)
     expect(await readFile(join(target, 'marker.txt'), 'utf8')).toBe('new')
-    // 备份已删除，目录下只留正式树
     const entries = await readdirOf(root)
     expect(entries.filter(name => name.includes('.bak-'))).toEqual([])
     expect(entries).toContain('plugin')

@@ -201,9 +201,6 @@ export class PluginManagerService extends Service implements PluginManager {
       auditMaxBytes: this.resolved.auditMaxBytes,
       auditKeepFiles: this.resolved.auditKeepFiles,
     }, externalStore)
-    // P3：pnpm 安装状态为唯一真相源——启动时从 profile 实际安装状态重建
-    // 治理视图（RegistryStore 降级为运行时缓存）；并补写 mygo-self.json
-    // 自身事实（bundle 安装路径，install.sh 退役后的写入者补位）。
     const governance = this.governanceView()
     ctx.logger.info(
       `[dsh-mygo] 治理视图：profile ${governance.profile}，依赖 ${Object.keys(governance.dependencies).length} 项，`
@@ -883,7 +880,6 @@ function resolveDshInstallDir(): string | undefined {
   }
 }
 
-/** 源码 checkout（legacy）：向上找 checkout 标记，找不到返回 undefined。 */
 function resolveSourceCheckout(): string | undefined {
   let dir = dirname(fileURLToPath(import.meta.url))
   for (let depth = 0; depth < 8; depth++) {

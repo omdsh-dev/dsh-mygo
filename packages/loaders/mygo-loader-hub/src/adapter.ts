@@ -1,13 +1,3 @@
-/**
- * hub LoaderAdapter（P5）：dsh-hub 市场来源适配器。`resolve` 接受
- * `hub:<id>` / `hub:<id>@<releaseId>` spec；profile-bundle 翻译为 pnpm
- * intent；guided/repository-plugin 为 display（拒绝并说明；repository
- * 启发式放行属异步探针，sync resolve 契约装不下，统一由 CLI install 面
- * 处理）。`list` 提供本地检索面。install 委托 profile 执行面（最终
- * 执行面语义）。
- * @module @r05en1cu/dsh-mygo-loader-hub/adapter
- */
-
 import type {
   InstallIntent,
   InstallReceipt,
@@ -54,16 +44,15 @@ export function createHubLoaderAdapter(options: CreateHubLoaderAdapterOptions): 
         return { kind: 'display', reason: `hub 条目 ${entry.id} 没有 release ${match[2] ?? entry.latestRelease}` }
       }
       const install = release.install
-      if (install.mode === 'profile-bundle') {
+      if (install.mode === 'profile-bundle'
+        && typeof install.packageName === 'string'
+        && typeof install.spec === 'string') {
         return {
           kind: 'pnpm',
           spec: /^(?:v)?\d+\.\d+\.\d+/.test(install.spec) ? `${install.packageName}@${install.spec}` : install.spec,
         }
       }
-      if (install.mode === 'repository-plugin') {
-        return { kind: 'display', reason: 'repository-plugin 安装轨 0812 已删除（待官方态度）' }
-      }
-      return { kind: 'display', reason: `guided/${install.method} 条目只展示，不可安装` }
+      return { kind: 'display', reason: 'hub 条目没有可执行安装意图' }
     },
     async install(intent: InstallIntent, target: InstallTarget): Promise<InstallReceipt> {
       if (options.execute === undefined) {

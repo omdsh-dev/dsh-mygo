@@ -1,16 +1,3 @@
-/**
- * Plugin manifest v3（design-r3 §2 字段全集，2026-08-13 范围重塑修订）：
- * formatVersion / id / version / entry / requires / core / recommends /
- * bundles / loader / patches / grants / provides / symbolAliases /
- * environment / entrypoints / shared / compatibility。
- * 安装期约束求解已删除（裁决 2026-08-13）：`depends` / `breaks` 不再属于
- * schema（存量声明显式拒绝，改写为 `compatibility` 或删除）；插件级兼容
- * 词汇经 `compatibility` 块只读直通（告警/预检面，不参与安装求解）。
- * 纯函数、零运行时依赖；`compatibility.requires` 中 `service:` 前缀键 →
- * 服务级 requires（去前缀）。
- * @module @r05en1cu/dsh-mygo/src/package/manifest-v2
- */
-
 import { isValidRange } from '../semver-range.ts'
 import type { PluginCompatibility } from '@r05en1cu/dsh-mygo-api'
 
@@ -23,7 +10,6 @@ export interface PluginManifestV3 {
   readonly entry: string
   /** 服务级依赖（裸服务名；规范内禁止 `service:` 前缀）。仅运行期政策闸。 */
   readonly requires: Readonly<Record<string, string | readonly string[]>>
-  /** dsh core compatibility range; missing legacy manifests normalize to `*`. */
   readonly core: string
   /** 可选推荐依赖：只校验不选择、只警告不阻断、永不自动安装（design-r3 §2.6）。 */
   readonly recommends: Readonly<Record<string, string | readonly string[]>>
@@ -37,8 +23,6 @@ export interface PluginManifestV3 {
   readonly shared?: boolean
   /** mixin patch 目标声明（loader=mixin 时使用）。 */
   readonly patches?: readonly PatchDeclaration[]
-  /** 政策授权（capability → 授权表达式）；默认拒绝（design-r3 §2.2）。 */
-  readonly grants?: Readonly<Record<string, unknown>>
   /** 符号别名/兼容映射：别名 → 规范符号（EB-D19；前置门管辖）。 */
   readonly symbolAliases?: Readonly<Record<string, string>>
   /** 只读环境元数据（如 {platform:"web"}）；不设硬门、不阻断（design-r3 §2.5）。 */
@@ -225,7 +209,6 @@ export function parsePackageManifest(
   const dshBlock = isRecord(pkg.dsh) && isRecord(pkg.dsh.mygo) ? pkg.dsh.mygo : undefined
   const compat = isRecord(dshBlock?.compatibility) ? dshBlock.compatibility : undefined
 
-  // formatVersion：显式声明只接受当前值 1；legacy manifest（未声明）默认 1 并告警。
   const formatVersionRaw = dshBlock?.formatVersion
   let formatVersion = 1
   if (formatVersionRaw === undefined) {
@@ -256,18 +239,16 @@ export function parsePackageManifest(
     problems.push({ path: 'dsh.mygo.entry', message: `entry 不得逃出包目录（${entry}）` })
   }
 
-  // 字段移除裁决（2026-08-13）：安装期约束求解已删除，depends/breaks 不再属于
-  // manifest v3 schema；存量声明显式拒绝（manifest-invalid），指引改写。
   if (dshBlock?.depends !== undefined) {
     problems.push({
       path: 'dsh.mygo.depends',
-      message: 'depends 已从 manifest v3 移除（安装期约束求解已删除）；请改写为 dsh.mygo.compatibility 或删除本字段',
+      message: 'depends 不是 manifest v3 顶层字段；请放入 dsh.mygo.compatibility 或删除本字段',
     })
   }
   if (dshBlock?.breaks !== undefined) {
     problems.push({
       path: 'dsh.mygo.breaks',
-      message: 'breaks 已从 manifest v3 移除（安装期约束求解已删除）；请改写为 dsh.mygo.compatibility 或删除本字段',
+      message: 'breaks 不是 manifest v3 顶层字段；请放入 dsh.mygo.compatibility 或删除本字段',
     })
   }
 
@@ -277,7 +258,7 @@ export function parsePackageManifest(
   // 保留（消费方经 normalizeCompatibility 归一）。未知键告警不阻断。
   const compatKeys = ['depends', 'breaks', 'requires', 'recommends', 'suggests', 'conflicts'] as const
   const compatPassthrough: Record<string, unknown> = {}
-  const legacyRequires: Record<string, string> = {}
+  const compatibilityRequires: Record<string, string> = {}
   if (compat !== undefined) {
     for (const [key, raw] of Object.entries(compat)) {
       if ((compatKeys as readonly string[]).includes(key)) {
@@ -290,7 +271,7 @@ export function parsePackageManifest(
           const bare: Record<string, string> = {}
           for (const [target, range] of Object.entries(map)) {
             if (target.startsWith(SERVICE_PREFIX)) {
-              legacyRequires[target.slice(SERVICE_PREFIX.length)] = range
+              compatibilityRequires[target.slice(SERVICE_PREFIX.length)] = range
             } else {
               bare[target] = range
             }
@@ -315,7 +296,7 @@ export function parsePackageManifest(
     problems.push({ path: 'dsh.mygo.requires', message: 'requires 必须是 服务名 → semver 区间 的映射（值可为区间数组 OR）' })
   } else {
     if (requiresRaw !== undefined) Object.assign(requires, requiresRaw)
-    for (const [key, range] of Object.entries(legacyRequires)) {
+    for (const [key, range] of Object.entries(compatibilityRequires)) {
       if (requires[key] !== undefined) {
         problems.push({ path: `dsh.mygo.requires.${key}`, message: 'requires 与 compatibility.requires 同时声明同名服务，禁止二义' })
       } else {
@@ -365,18 +346,6 @@ export function parsePackageManifest(
   const symbolAliasesRaw = readRangeMap(dshBlock?.symbolAliases)
   if (dshBlock?.symbolAliases !== undefined && symbolAliasesRaw === undefined) {
     problems.push({ path: 'dsh.mygo.symbolAliases', message: 'symbolAliases 必须是 别名 → 规范符号 的字符串映射' })
-  }
-
-  // grants：capability → 授权表达式；默认拒绝（design-r3 §2.2）。
-  const grants = readUnknownMap(dshBlock?.grants)
-  if (dshBlock?.grants !== undefined && grants === undefined) {
-    problems.push({ path: 'dsh.mygo.grants', message: 'grants 必须是 能力名 → 授权表达式 的映射' })
-  } else if (grants !== undefined) {
-    for (const capability of Object.keys(grants)) {
-      if (capability.trim() === '') {
-        problems.push({ path: 'dsh.mygo.grants', message: '能力名不能为空' })
-      }
-    }
   }
 
   // environment：只读元数据对象；不设硬门、不阻断（design-r3 §2.5）。
@@ -444,7 +413,6 @@ export function parsePackageManifest(
       ...(loader === undefined ? {} : { loader }),
       ...(shared ? { shared: true } : {}),
       ...(patches === undefined || patches.length === 0 ? {} : { patches }),
-      ...(grants === undefined || Object.keys(grants).length === 0 ? {} : { grants }),
       ...(symbolAliasesRaw === undefined || Object.keys(symbolAliasesRaw).length === 0 ? {} : { symbolAliases: symbolAliasesRaw }),
       ...(environment === undefined || Object.keys(environment).length === 0 ? {} : { environment }),
       ...(compatibility === undefined ? {} : { compatibility }),

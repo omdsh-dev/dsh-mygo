@@ -3,11 +3,6 @@
  * table, and message templates that name every machine entity the spec
  * §16.2 attaches to each code.
  *
- * CD-1 统一（2026-08-13，next 分支）：ResolutionReport 的有生产者码并入本表
- * （组 7），两侧的码表从此同源；零生产者的死码已删除（grant-missing /
- * install-denied / ceiling-exceeded / source-not-allowed / provenance-rejected
- * / fs-denied / network-denied / vars-denied / http-denied / emit-denied），
- * 求解体系退役带走 lockfile-mismatch / dependency-cycle / dispose-timeout。
  * @module @r05en1cu/dsh-mygo-api/src/error
  */
 
@@ -34,8 +29,6 @@ export type PluginErrorCode =
   | 'non-payload-name'
   /** direct EventOptions (e.g. prepend) passed where manifest position is the only entry; details: option */
   | 'unsupported-event-option'
-  // 组 2：权限与授权（mount 期）
-  /** writes hits a protected field; details: field */
   | 'protected-field'
   // 组 3：关系冲突（install/replace 期，对当前 peer 集求值）
   /** two plugins write the same property on intersecting scopes; details: a + b + property + scope */
@@ -88,10 +81,7 @@ export type PluginErrorCode =
   | 'quota-cpu-exceeded'
   /** registration quotas (100 listeners / 50 tools / 20 services) exceeded; details: kind + limit */
   | 'quota-effects-exceeded'
-  // 组 6：能力拒绝（env.* 边界，同步 throw，先于任何实际操作）
-  /** model call outside llmAccess grants or with no host seam; details: plugin + model */
   | 'llm-denied'
-  /** subprocess command outside execAccess grants or with no host seam; details: plugin + command */
   | 'exec-denied'
   // 组 7：包治理报告（CD-1 并入：ResolutionReport 码，summary 为自由文本报告）
   /** registry 候选集内没有可安装版本；details: package + reasons */
@@ -215,9 +205,9 @@ const MESSAGE_TEMPLATES: Record<PluginErrorCode, (details: Record<string, unknow
   'quota-effects-exceeded': details =>
     `registration quota exceeded for ${render(details.kind)}: limit ${render(details.limit)}`,
   'llm-denied': details =>
-    `model call denied for plugin ${render(details.plugin)}: model ${render(details.model)} is outside llmAccess`,
+    `model service unavailable for plugin ${render(details.plugin)}: model ${render(details.model)}`,
   'exec-denied': details =>
-    `subprocess execution denied for plugin ${render(details.plugin)}: command ${render(details.command)} is outside execAccess`,
+    `subprocess service unavailable for plugin ${render(details.plugin)}: command ${render(details.command)}`,
   'resolve-failed': details =>
     `resolve failed for ${render(details.package)}: ${render(details.reasons)}`,
   'bundle-invalid': details =>

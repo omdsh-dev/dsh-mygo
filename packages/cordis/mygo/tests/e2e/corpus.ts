@@ -1,10 +1,3 @@
-/**
- * E2E 夹具语料库注册表（验证轮 §1）：六类真实来源 + 信任分级 + 人工审阅记录。
- * 来源根默认 `$DSH_DEV/dsh-external-src`（可用 DSH_E2E_CORPUS_ROOT 覆盖）。
- * 体系外仓库（F2/F5/F6）已人工审阅入口文件；MUST NOT 执行其 install 脚本。
- * @module @r05en1cu/dsh-mygo/tests/e2e/corpus
- */
-
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 
@@ -21,7 +14,7 @@ export function devRoot(): string {
   return fileURLToPath(new URL('../../../../../../', import.meta.url)).replace(/\/$/, '')
 }
 
-export type CorpusCategory = 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6'
+export type CorpusCategory = 'F1' | 'F2' | 'F3' | 'F4' | 'F6'
 
 export interface CorpusPlugin {
   readonly category: CorpusCategory
@@ -51,15 +44,11 @@ function base(): string {
   return corpusRoot()
 }
 
-/** 语料库（F1-F6）。人工审阅记录见 reviewNote。 */
 export const CORPUS: readonly CorpusPlugin[] = [
   {
     category: 'F1',
     id: 'dsh-cordis-fabric',
     name: '@deepseek-ai/dsh-cordis-fabric',
-    // P7-B7：从根载包（三包拆分前的遗留 lib 构建，依赖 node_modules 遗留
-    // 提升链接解析，脆弱）切到 cordis-fabric 包自身——包内 lib 与
-    // node_modules 自包含，解析不依赖仓根状态。
     dir: `${devRoot()}/fabric/packages/cordis-fabric`,
     entry: 'lib/index.js',
     packParts: ['package.json', 'lib', 'src'],
@@ -73,7 +62,7 @@ export const CORPUS: readonly CorpusPlugin[] = [
       requires: {},
     },
     trust: 'trusted',
-    reviewNote: '朋友的 fabric/mixin 插件仓库（cordis-fabric 包：lib 产物 + node_modules 齐备）；trusted 直接运行；P7 起语料指到包自身（根载包遗留 lib 废弃）',
+    reviewNote: '朋友的 fabric/mixin 插件仓库（cordis-fabric 包：lib 产物 + node_modules 齐备）；trusted 直接运行',
   },
   {
     category: 'F2',
@@ -182,15 +171,6 @@ export const CORPUS: readonly CorpusPlugin[] = [
     manifestOverlay: { entry: 'src/index.ts', core: '*' },
     trust: 'trusted',
     reviewNote: 'voice-chat 0.1.0 历史版本（T22 多候选确定性：真实图出现同 id 多版本裁决）',
-  },
-  {
-    category: 'F5',
-    id: 'dsh-pty-windows',
-    name: '@dsh-external/dsh-pty-windows',
-    dir: `${base()}/dsh-pty-windows`,
-    entry: 'index.mjs',
-    trust: 'reviewed',
-    reviewNote: '已审阅 index.mjs：legacy dsh.plugin.json + win32 门（POSIX no-op）；无 install 脚本',
   },
   {
     category: 'F6',

@@ -1,13 +1,3 @@
-/**
- * Sqlite-backed registry store (#17, §22.1): the {@link RegistryStore} seam
- * over the `plugin_registry_<profile>` domain, rows stored as opaque TEXT
- * (`v: 1` record versions, structure validation deferred to recovery).
- * Unparsable rows surface as {@link RegistryRowError} so boot recovery
- * quarantines them with `damaged-record`; damage-class medium failures
- * propagate loudly (the 0809 storage contract removed declared medium reset).
- * @module @r05en1cu/dsh-mygo/src/sqlite-store
- */
-
 import type { Domain, DomainFacility, DomainSpec, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { pluginRegistryDomainSpec } from './registry-domain.ts'
 import type { GenerationRecord, RegistryStore, StatusRecord } from './store.ts'

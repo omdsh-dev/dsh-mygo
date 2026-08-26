@@ -38,7 +38,6 @@ const MODE_CEILING: Readonly<Record<string, PermissionLevel>> = {
  * caller must surface (16.4), currently only the `development-mode`
  * provenance bypass (SEC:158).
  * @param definition - the plugin manifest to mount.
- * @param options - source, channel identity/ceiling, grants, and deployment policy inputs.
  * @returns non-fatal warnings for the caller to log.
  */
 export function validateMount(

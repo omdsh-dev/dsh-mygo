@@ -1,11 +1,3 @@
-/**
- * 插件包管理器（2026-08-13 范围重塑）：单插件版本选择（无跨插件约束求解）
- * → 下载并普通落盘还原；dsh.lock/v1 lockfile 已删除（pnpm 安装状态为唯一
- * 真相源），加载期不再有「对照 lockfile 校验磁盘」环节。mygo-pack 构建/安装
- * 委派给 pack.ts（确定性 tar 能力保留）。
- * @module @r05en1cu/dsh-mygo/src/package/package-manager
- */
-
 import { detectUndeclaredBundles, scanBundles } from './bundle-scan.ts'
 import { probePackageExports, verifyPluginSymbols } from './symbol-verify.ts'
 import { createRequire } from 'node:module'
@@ -107,11 +99,6 @@ export class PluginPackageManager {
     })
   }
 
-  /**
-   * Install one npm plugin package: registry metadata → deterministic
-   * version selection → plain restore into `<packagesRoot>/<id>/<version>/`
-   * → bundle/symbol checks. No lockfile write（pnpm 安装状态为唯一真相源）。
-   */
   async resolveInstall(
     source: { readonly package: string; readonly range?: string },
   ): Promise<PackageInstallOutcome> {
@@ -326,10 +313,6 @@ export class PluginPackageManager {
     }, options)
   }
 
-  /**
-   * 安装 mygo-pack：清单/成员/哈希预检 → 普通落盘还原（design-r4 B23）。
-   * 全部校验先于任何落盘写入；离线；无 lockfile 读写。
-   */
   async installPack(packPath: string, options: PackInstallOptions = {}): Promise<PackInstallOutcome> {
     return installPluginPack({
       installRoot: this.options.paths.packagesRoot,

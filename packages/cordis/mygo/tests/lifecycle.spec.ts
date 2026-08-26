@@ -582,12 +582,10 @@ describe('LifecycleEngine install', () => {
         published.set(name, value)
         return () => published.delete(name)
       },
-      config: resolvePluginManagerConfig({ grants: { provider: { hostPublish: true } } }),
     })
     const raw = { hello: 'world' }
     h.definitions.set('provider', fixture('provider', {
       provides: ['bash'],
-      hostPublishAccess: true,
       hooks: {
         activate(env) {
           env.provide('bash', raw)
@@ -736,9 +734,7 @@ describe('LifecycleEngine install', () => {
   })
 
   it('tags listener modes from declarations and disposes staging disposers', async () => {
-    const h = harness({
-      config: resolvePluginManagerConfig({ grants: { p: { intercept: true }, i: { intercept: true } } }),
-    })
+    const h = harness()
     h.definitions.set('p', fixture('p', {
       permissions: {
         ...fixture('p').permissions,
@@ -1726,10 +1722,7 @@ describe('LifecycleEngine provides/tools', () => {
   it('rejects tool collisions with raw registrations loudly: claims, shadow, and plain duplicate', async () => {
     const registry = new FakeToolRegistry()
     registry.seed('held_tool')
-    const h = harness({
-      toolRegistry: registry,
-      config: resolvePluginManagerConfig({ grants: { claimant: { claims: true } } }),
-    })
+    const h = harness({ toolRegistry: registry })
 
     h.definitions.set('claimant', fixture('claimant', {
       permissions: { observe: [], transform: [], intercept: [], position: 'derived', claims: ['tool:held_tool'] },
@@ -2772,17 +2765,11 @@ describe('LifecycleEngine PluginEnv capabilities (#16)', () => {
     await expect(h.engine.install(source('p'))).rejects.toMatchObject({ code: 'staging-failed' })
   })
 
-  it('forwards an allowed env.fetch to the host fetch implementation', async () => {
+  it('forwards env.fetch to the host fetch implementation', async () => {
     const fetchImpl = vi.fn(async () => new Response('ok'))
-    const h = harness({
-      fetchImpl,
-      config: resolvePluginManagerConfig({
-        grants: { p: { networkAccess: { allow: ['https://ok.dev'] } } },
-      }),
-    })
+    const h = harness({ fetchImpl })
     let seen = ''
     h.definitions.set('p', fixture('p', {
-      networkAccess: { allow: ['https://ok.dev'] },
       hooks: {
         async activate(env) {
           seen = await (await env.fetch('https://ok.dev/x')).text()
@@ -2798,13 +2785,8 @@ describe('LifecycleEngine PluginEnv capabilities (#16)', () => {
     const spy = vi.fn(async () => new Response('ok'))
     vi.stubGlobal('fetch', spy)
     try {
-      const h = harness({
-        config: resolvePluginManagerConfig({
-          grants: { p: { networkAccess: { allow: ['https://ok.dev'] } } },
-        }),
-      })
+      const h = harness()
       h.definitions.set('p', fixture('p', {
-        networkAccess: { allow: ['https://ok.dev'] },
         hooks: {
           async activate(env) {
             await env.fetch('https://ok.dev/x')
@@ -3042,7 +3024,7 @@ describe('LifecycleEngine crash semantics (T3)', () => {
     expect(registrations.has('side')).toBe(false)
   })
 
-  it('publishes granted provides into the host context and disposes them', async () => {
+  it('publishes provides into the host context and disposes them', async () => {
     const published = new Map<string, { value: unknown; disposer(): void }>()
     const hostProvide = (name: string, value: unknown): (() => void) => {
       const record = { value, disposer: () => { published.delete(name) } }
@@ -3056,7 +3038,6 @@ describe('LifecycleEngine crash semantics (T3)', () => {
     const definitions = new Map<string, PluginDefinition>()
     definitions.set('provider', fixture('provider', {
       provides: ['bash'],
-      hostPublishAccess: true,
       hooks: {
         activate(env) {
           env.provide('bash', { run: () => 'managed-bash' })
@@ -3067,9 +3048,7 @@ describe('LifecycleEngine crash semantics (T3)', () => {
       ctx,
       dispatch: machine,
       store,
-      config: resolvePluginManagerConfig({
-        grants: { provider: { hostPublish: true } },
-      }),
+      config: resolvePluginManagerConfig(),
       hostProvide,
       resolveSource: async (source: PluginSource) => {
         const definition = definitions.get(source.type === 'inline' ? source.code : source.package)

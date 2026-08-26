@@ -1,19 +1,3 @@
-/**
- * §23.1 Cordis bridge: `fromCordisPlugin` bridges a raw Cordis plugin into a
- * managed definition whose hooks run against a restricted facade
- * (`on`/`get`/`provide`/`logger`), rejecting direct EventOptions with
- * `unsupported-event-option`.
- *
- * P2 裁决（2026-08-13）：`toCordisPlugin` 已删除——它对 manifest 的包装与
- * `definePlugin` 的直接产出语义重复（恒等桥接），挂载面并入 define.ts
- * （非枚举属性形态）。`fromCordisPlugin` 保留且不可替代：它承载零侵入桥接
- * 的全部真实语义——注册面拦截（tools/systemPrompt/httpServer/skills/
- * commands/settings/timers/inject/effect 逐世代跟踪）、宿主副作用热撤销
- * （hostEffect 记账）、node:http 风格 route handler 桥接（SSE 流式响应）、
- * Service 风格类插件挂载。这些不是恒等包装，删除即丢失 adoptRaw 路径。
- * @module @r05en1cu/dsh-mygo-api/src/adapter
- */
-
 import z from '@deepseek-ai/schemastery'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { PluginError, formatPluginError } from './error.ts'

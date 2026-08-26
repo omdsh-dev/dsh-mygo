@@ -1,13 +1,4 @@
 #!/usr/bin/env node
-/**
- * verify:self-contained —— 官方 plugin-template 脚本的 dsh-mygo 框架适配版。
- * 官方脚本要求仓库完全自包含；dsh-mygo 处于安装形态过渡态，按 AGENTS.md
- * 框架例外 #2/#5 显式豁免以下事实（其余检查保留模板精神）：
- *   - workspace:^ 依赖：仅允许 @deepseek-ai/* 与 @r05en1cu/*（发布前过渡态，AGENTS.md #2）
- *   - tsconfig references：不检查越界（安装形态变体，AGENTS.md #5）
- *   - tests/ 目录：不检查绝对路径（证据语料与实测环境路径）
- *   - assets/plugin-template：vendored 官方模板资产，整体跳过
- */
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -92,7 +83,7 @@ for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 
       failures.push(`package.json: ${field}.${name} uses non-registry spec ${spec}`)
     }
     if (/^workspace:/i.test(spec) && !name.startsWith('@deepseek-ai/') && !name.startsWith('@r05en1cu/')) {
-      failures.push(`package.json: ${field}.${name} uses workspace spec outside the documented @deepseek-ai/@r05en1cu transition exemption`)
+      failures.push(`package.json: ${field}.${name} uses an unsupported workspace spec`)
     }
   }
 }

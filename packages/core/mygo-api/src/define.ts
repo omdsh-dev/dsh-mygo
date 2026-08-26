@@ -1,11 +1,3 @@
-/**
- * Type-carrying entry point for plugin authors. `definePlugin` 的产出同时是
- * 受管 manifest 与 Cordis 可挂载模块：`ctx.plugin()` 可直接消费（P2 合并
- * 裁决——原 `toCordisPlugin` 包装与本函数语义重复，已并入；挂载面以
- * 非枚举属性承载，严格校验器（strict zod）只见 manifest 字段）。
- * @module @r05en1cu/dsh-mygo-api/src/define
- */
-
 import type { PluginDefinition, Schemastery } from './types.ts'
 
 /** `definePlugin` 产出上的 Cordis 挂载面（非枚举属性；manager 缺席时 inject 失败即挂载失败）。 */

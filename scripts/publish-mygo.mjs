@@ -1,14 +1,4 @@
 #!/usr/bin/env node
-/**
- * mygo 发布流水线骨架（P3 自包含 workspace 形态）：在仓库内构建全部产物、
- * 做发布前自检，然后逐个 `pnpm publish`（不自动执行发布，避免无授权发布；
- * 发布留作 handoff，见工作区守则）。
- *
- * 用法（仓库根）：
- *   node scripts/publish-mygo.mjs --dry-run
- *   node scripts/publish-mygo.mjs
- */
-
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'

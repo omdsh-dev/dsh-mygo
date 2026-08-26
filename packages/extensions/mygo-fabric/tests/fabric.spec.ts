@@ -83,7 +83,7 @@ describe('fabric 受管块（启用/停用/幂等）', () => {
     expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual(['cordis-fabric', 'cordis-fabric-dsh'])
   }, 60_000)
 
-  it('真实 fabric 仓本地路径 spec（守则过渡形态）：安装 + 受管块 + 停用', async () => {
+  it('真实 fabric 仓本地路径 spec：安装 + 受管块 + 停用', async () => {
     const target = { home, profile: 'web' }
     const specs = [
       join(FABRIC_REPO, 'packages', 'cordis-fabric'),

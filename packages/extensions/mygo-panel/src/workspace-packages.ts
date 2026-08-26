@@ -1,13 +1,3 @@
-/**
- * mygo 工作区包枚举与安装树原子提交（HMR 体验迭代 R1/R2）：mygo 自更新把
- * 「整个仓库」作为最小更新单元——克隆后按 packages/<group>/<name> 枚举
- * 全部 @r05en1cu/* 包目录并逐一同步/构建，取代早期 install.sh 时代的
- * 固定三目录清单（vendor/dsh-mygo-panel 布局已在 P1/P3 退役）；插件更新
- * 的磁盘树换入走 staging + rename 原子提交（R2，失败回滚，杜绝 live 代
- * 与磁盘树不一致）。纯函数面，供面板 index.ts 调用、包级测试直测。
- * @module @r05en1cu/dsh-mygo-ext-panel/workspace-packages
- */
-
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'

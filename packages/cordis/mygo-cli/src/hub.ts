@@ -8,7 +8,6 @@
 
 import {
   assessHubEntry,
-  createRepositoryBundleProbe,
   installHubCollection,
   loadHubRegistry,
   pickHubRelease,
@@ -198,13 +197,9 @@ async function runInstall(
   if (release === undefined) return fail(io, command, 'entry-not-installable', `release 不存在：${ref.release ?? entry.latestRelease}`)
   const translated = await translateHubInstall(release.install, {
     ...(allowFileSpec ? { allowFileSpec: true } : {}),
-    probeRepositoryBundle: createRepositoryBundleProbe(),
   })
   if (translated.kind === 'display') {
     return fail(io, command, 'install-intent-unavailable', translated.reason)
-  }
-  if (translated.experimental && !command.json) {
-    io.stdout('  [warn] repository-plugin 启发式放行（目标含 dsh.bundle 声明；实验性）\n')
   }
   const receipt = await adapter.install({ kind: 'pnpm', spec: translated.spec }, target)
   if (!receipt.ok) {
@@ -219,7 +214,6 @@ async function runInstall(
       release: release.id,
       profile: receipt.profile,
       bundles: receipt.bundles,
-      ...(translated.experimental ? { experimental: true } : {}),
       advisories: assessment.advisories,
     }) + '\n')
   } else {

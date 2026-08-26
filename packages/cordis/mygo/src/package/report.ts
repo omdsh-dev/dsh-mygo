@@ -1,14 +1,3 @@
-/**
- * Structured verification/governance failure reports（CD-1 统一后）：
- * `code` 直接取自 `@r05en1cu/dsh-mygo-api` 的 PluginErrorCode 闭表
- * （组 7 报告码 + 组 1 manifest-invalid 等），不再有独立的报告码表。
- * 求解体系退役（2026-08-13）：lockfile-mismatch / dependency-cycle /
- * dispose-timeout 随 dsh.lock/v1 与求解器删除；`generation` 字段零调用方
- * 一并删除；报告侧原 `manifest-invalid`（安装期 bundles 声明问题）改名
- * `bundle-invalid`，与 mount 期 `manifest-invalid` 消歧。
- * @module @r05en1cu/dsh-mygo/src/package/report
- */
-
 import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
 
 /** One unsatisfied constraint edge. */

@@ -1,19 +1,3 @@
-/**
- * mygo plugin pack 分发体系（design-r4；2026-08-13 范围重塑）：
- * - 自建最小格式 `mygo-pack/v1`（tar.gz 容器 + 单一清单）；
- * - 确定性打包（固定成员序 / mtime/owner 归一 / gzip 无时间戳）；
- * - 安装 = 清单自校验 → 成员预检（自实现 tar 头部解析）→ vendored 哈希校验
- *   → 普通落盘还原；无跨插件求解、无 lockfile 读写（pnpm 安装状态为唯一
- *   真相源，pack 只搬运 `(id, version)` 粒度的 vendored tarball）。
- * - files[].sha512 + fileSize 成员级校验为 pack 自身完整性服务（保留）。
- * - P8：成员二态——内嵌（files[]，现状默认）与 npm 引用式（references[]：
- *   打包时从 registry 元数据固化 spec/integrity/tarball；restore 时在线
- *   拉取 + integrity 硬校验，离线点名 fail-loud；两者可混合；清单无
- *   references 键的旧 pack 照常还原）。
- * 零新增第三方依赖；tar 头部遍历为最小自实现（design-r4 §3/§6）。
- * @module @r05en1cu/dsh-mygo/src/package/pack
- */
-
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -28,10 +12,6 @@ import type { ConflictEntry, ResolutionReport } from './report.ts'
 import { isValidRange, matchesVersionRange } from '../semver-range.ts'
 
 const execFileAsync = promisify(execFile)
-
-// ---------------------------------------------------------------------------
-// Pack manifest schema（design-r4 §2；D-A1/D-A2；2026-08-13 去 lockfile 载荷）
-// ---------------------------------------------------------------------------
 
 export interface PackGenerated {
   readonly by: string
@@ -780,10 +760,6 @@ export async function buildPluginPack(
     await rm(work, { recursive: true, force: true })
   }
 }
-
-// ---------------------------------------------------------------------------
-// 安装（design-r4 §3/§6/§7；B22/B23/B24/B25；2026-08-13 去求解/lockfile）
-// ---------------------------------------------------------------------------
 
 export interface PackInstallOptions {
   /** 安装侧 core 版本覆盖（缺省用 PackContext.coreVersion）。 */

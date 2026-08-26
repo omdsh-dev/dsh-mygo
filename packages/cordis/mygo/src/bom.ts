@@ -1,15 +1,3 @@
-/**
- * P4 BOM：生态依赖参考物（Plan B——导出 + 只读对账，无生命周期）。
- *
- * BOM 把统一依赖图序列化成 `dsh.bom/v1`：`intent` 段保存成员声明
- * （版本区间 + provides + compatibility，等价于把每个成员的 `dsh.mygo`
- * 汇总），`lock` 段保存解析后的精确版本（含 mygo 自身 commit）。`bom check`
- * 只读：把 lock 与当前 profile 集合对账（missing / extra / drift /
- * 约束违例链），零修改。生命周期（install/upgrade/apply/reconcile）明确不做，
- * 但格式按可被未来求解器消费的方式设计。
- * @module @r05en1cu/dsh-mygo/src/bom
- */
-
 import type { PluginCompatibility, PluginHandleInfo } from '@r05en1cu/dsh-mygo-api'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -26,7 +14,7 @@ import { MYGO_SELF } from './self.ts'
 import { parseVersion } from './semver-range.ts'
 
 /** BOM 成员来源轨。 */
-export type BomRail = 'self' | 'bridge' | 'bundle' | 'app'
+export type BomRail = 'self' | 'bridge' | 'bundle'
 
 /** `intent` 段的一个成员声明（版本区间 + 能力 + 自带约束）。 */
 export interface BomMemberIntent {
@@ -61,10 +49,6 @@ export interface BomDocument {
   }
   readonly intent: {
     readonly members: readonly BomMemberIntent[]
-    readonly suite?: {
-      readonly breaks?: Readonly<Record<string, string>>
-      readonly excludes?: readonly string[]
-    }
   }
   readonly lock: {
     readonly members: readonly BomMemberLock[]
@@ -84,8 +68,6 @@ export interface BomExportInput {
     readonly provides?: readonly string[]
     readonly compatibility?: PluginCompatibility
   }[]
-  /** v1 可选：外部应用只声明属于套件，不参与约束求解。 */
-  readonly apps?: readonly { readonly id: string; readonly version?: string }[]
   readonly hostPackages?: Readonly<Record<string, string>>
   readonly now?: Date
 }
@@ -228,14 +210,6 @@ export function buildBom(input: BomExportInput): BomDocument {
       ...(bundle.compatibility === undefined ? {} : { compatibility: bundle.compatibility }),
     })
     locks.push({ id: bundle.id, rail: 'bundle', version: bundle.version ?? '*' })
-  }
-  for (const app of input.apps ?? []) {
-    intents.push({
-      id: app.id,
-      rail: 'app',
-      version: app.version === undefined ? '*' : caretBand(app.version),
-    })
-    locks.push({ id: app.id, rail: 'app', version: app.version ?? '*' })
   }
   return {
     format: 'dsh.bom/v1',

@@ -145,7 +145,6 @@ export type HubInstallTarget =
     readonly assessment: HubAssessment
     readonly spec: string
     readonly packageName: string
-    readonly experimental: boolean
   }
   | {
     readonly ok: false
@@ -219,6 +218,5 @@ export async function resolveHubInstallTarget(
     assessment,
     spec: translated.spec,
     packageName: translated.packageName,
-    experimental: translated.experimental,
   }
 }

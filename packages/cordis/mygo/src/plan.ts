@@ -1,13 +1,3 @@
-/**
- * Pure operation plan (#13, §15.3/PO:242；2026-08-13 范围重塑)：对当前受管
- * 集求值 install/uninstall/replace/enable/disable，不改状态。激活求解器
- * （depends 闭包连带启用 / breaks 最小停用消解）已随求解体系删除——plan
- * 只剩求值：兼容预检（evaluateCompatibility）、关系冲突（evaluateConflicts）、
- * requires 级 dependent 检查、displaced bystander 推导。被拒绝的 plan 预览
- * 操作将抛出的确切错误码。
- * @module @r05en1cu/dsh-mygo/src/plan
- */
-
 import { formatPluginError } from '@r05en1cu/dsh-mygo-api'
 import type { PluginErrorCode } from '@r05en1cu/dsh-mygo-api'
 import {
@@ -131,11 +121,6 @@ function planReplace(id: string, candidate: PluginDeclarationInput, force: boole
   }
 }
 
-/**
- * Enable/disable: flip the participation flag and reorder; no-op when already
- * in that state.disable 无 force 且存在 requires 级下游 → dependent-exists
- * （求解器级联停用已删除：下游只能由调用方显式处理）。
- */
 function planStatusChange(
   op: 'enable' | 'disable',
   id: string,

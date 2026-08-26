@@ -87,7 +87,6 @@ function serviceReport(): ServiceResolutionReport {
   }
 }
 
-/** restore 成功输出（含告警）的固定字节序列（守则禁 emoji：警告前缀为 [warn]）。 */
 function restoreSuccessWithWarnings(): string {
   return renderRestoreSuccess('web', 3, ['社区依赖声明 2 条（未钉版）', 'peerDependencies 区间告警（dsh >=0.0.1-rc.1）'])
 }

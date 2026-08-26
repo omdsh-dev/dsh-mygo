@@ -13,11 +13,6 @@ export type MountOrderResult =
   | { readonly ok: true; readonly order: readonly string[] }
   | { readonly ok: false; readonly cycle: readonly string[] }
 
-/**
- * Deterministic Kahn topological order (same as resolver's, exported for
- * load). Edge `from → to` means `from depends on to`; dependencies are
- * emitted before dependents (internally reversed to `to → from`).
- */
 export function computeMountOrder(
   ids: readonly string[],
   edges: readonly MountEdge[],

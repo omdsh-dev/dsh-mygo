@@ -118,11 +118,10 @@ describe('filterResolvableRows + isBridgeRowResolvable（失效桥接跳过）',
     expect(skipped).toEqual(['ghost-mygo'])
   })
 
-  it('陈旧 scope 错位（包名与目录名不符）判不可解析', async () => {
-    // 目录名是新 scope，package.json 里还是旧 scope 名 → 行名与包名不符
+  it('包名与目录名不符时判不可解析', async () => {
     const dir = join(profileDir, 'node_modules', '@r05en1cu', 'alpha-mygo')
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: '@dsh-external/alpha-mygo', main: 'src/index.ts' }))
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: '@example/alpha-mygo', main: 'src/index.ts' }))
     await mkdir(join(dir, 'src'), { recursive: true })
     await writeFile(join(dir, 'src', 'index.ts'), 'export {}\n')
     expect(isBridgeRowResolvable(profileDir, home, '@r05en1cu/alpha-mygo')).toBe(false)

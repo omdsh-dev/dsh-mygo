@@ -1,7 +1,3 @@
-/* mygo 面板样式（r7 重做）：现代卡片风，全部基于 dsw alias 设计变量，
-   深浅主题自动适配。既有类名（item/btn/status/helper* 等）保留给
-   ConfigFields / ConfigCards 共享组件使用。 */
-
 .panel {
   overflow-wrap: break-word;
   word-break: keep-all;

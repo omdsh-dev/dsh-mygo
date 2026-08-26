@@ -1,15 +1,9 @@
-/**
- * 批次 9 测试（B14/B15/B16/T16/T18）：bundle patch 展开 → entry 行；
- * legacy dsh.plugin.json 只读映射；官方模板对齐校验。
- */
-
 import { describe, expect, it } from 'vitest'
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expandBundlePatch } from '../../src/package/bundle-expand.ts'
-import { mapLegacyPluginFile } from '../../src/package/legacy-mapping.ts'
 import { checkTemplateAlignment } from '../../src/package/template-align.ts'
 
 /** vendored 官方模板资产（mygo-cli 包内，plugin-template@87acac8）。 */
@@ -42,36 +36,6 @@ describe('bundle patch expansion (B14/T16)', () => {
       name: '@dsh-external/dsh-101'
 `)
     expect(rows[0]).toMatchObject({ id: 'dsh-101-app', kind: 'insert' })
-  })
-})
-
-describe('legacy dsh.plugin.json mapping (B15/T16)', () => {
-  it('maps id/version/main/engines/contributes/client and warns without blocking', () => {
-    const result = mapLegacyPluginFile({
-      id: 'dsh-external/chat-width',
-      version: '0.1.0',
-      main: './index.mjs',
-      engines: { dsh: '>=0.0.1' },
-      contributes: { tools: [], skills: [] },
-      client: { main: './client.js', inject: ['@deepseek-ai/dsh-client-runtime'] },
-    })
-    expect(result.value).toMatchObject({
-      id: 'chat-width',
-      version: '0.1.0',
-      entry: 'index.mjs',
-      core: '>=0.0.1',
-      environment: {
-        contributes: { tools: [], skills: [] },
-        client: { main: './client.js', inject: ['@deepseek-ai/dsh-client-runtime'] },
-      },
-    })
-    expect(result.warnings.some(line => line.includes('legacy dsh.plugin.json'))).toBe(true)
-  })
-
-  it('is read-only: invalid legacy files map to warnings, never exceptions', () => {
-    const result = mapLegacyPluginFile({ id: '', main: '../escape.mjs' })
-    expect(result.value).toBeUndefined()
-    expect(result.unmapped).toContain('id')
   })
 })
 

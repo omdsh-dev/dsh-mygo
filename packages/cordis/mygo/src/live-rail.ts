@@ -1,21 +1,3 @@
-/**
- * r7 live rail（运行期装卸）：live rail = profile cordis.patch.yml 内 mygo
- * 受管块（`# >>> mygo live block: <pkg>` 包裹），块内容是 bundle 自带
- * patch 行原文（字节级内嵌，`!!js` 等形态不失真）。host watchUserPatches
- * 对 patch 文件事务性 live 重放——写块即活装、剥块即活卸（2026-08-15
- * spike 实测证实）；行持久化在 patch 文件里，重启后 boot 照常物化。
- *
- * 单轨规则：一个包同一时刻只能在一轨——live rail 包必须退出
- * `dsh.profile.bundles`（同 id 双 insert 在 boot 是 exit=1 致命错误）。
- * 单轨切换由调用方保证（lifecycle 写块前把包移出 bundles；face 的
- * reconcile 经 liveBlockPackages 排除）；本模块只管 patch 层块读写。
- *
- * 顺序约束（spike 硬证据）：装 = 先 pnpm 落盘后写块；卸 = 先剥块后 pnpm。
- * live 重放失败是静默的（watcher 吞错），写后必须 verifyEntryState 主动
- * 验证，不能假设写文件即生效。
- * @module @r05en1cu/dsh-mygo/src/live-rail
- */
-
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -293,12 +275,6 @@ function rowState(snapshot: ReadonlyMap<string, boolean>, rowId: string): 'activ
   return 'absent'
 }
 
-/**
- * 写后验证：轮询 host loader 条目直到目标行达到期望态（spike 实测重放
- * 延迟 1-2 秒量级）。mode 'active' = 全部行有条目且 fiber 存活（live
- * 安装验证）；'inactive' = 全部行无条目或 fiber 已 dispose（剥块删条目
- * 与 disable 摘 fiber 同口径）。loader 不可达立即 false。
- */
 export async function verifyEntryState(
   get: (name: string) => unknown,
   rowIds: readonly string[],
